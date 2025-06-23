@@ -126,6 +126,7 @@ PUBACKs
 pubber
 PubSub
 pubsub
+pyudmi
 QoS
 Readme
 repo
