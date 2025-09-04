@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>UDMI Presentation Layer Demo</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    body {
+      font-family: 'Inter', sans-serif;
+      background-color: #f3f4f6;
+    }
+    .code-editor {
+      font-family: 'Courier New', Courier, monospace;
+      background-color: #1e1e1e;
+      color: #d4d4d4;
+      border: 1px solid #333;
+      border-radius: 8px;
+      padding: 1rem;
+      height: 100%;
+      outline: none;
+      resize: none;
+    }
+    .rendered-ui, .hierarchy-view {
+      background-color: #ffffff;
+      border-radius: 8px;
+      padding: 2rem;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+      height: 100%;
+      overflow-y: auto;
+    }
+    .form-group {
+      margin-bottom: 1.5rem;
+    }
+    .form-label {
+      display: block;
+      font-weight: 500;
+      color: #4b5563;
+      margin-bottom: 0.5rem;
+      text-transform: capitalize;
+    }
+    .form-input {
+      width: 100%;
+      padding: 0.75rem;
+      border: 1px solid #d1d5db;
+      border-radius: 6px;
+      background-color: #f9fafb;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+    .form-input:focus {
+      outline: none;
+      border-color: #3b82f6;
+      box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.4);
+    }
+    .error-message {
+      color: #ef4444;
+      background-color: #fee2e2;
+      border: 1px solid #fca5a5;
+      padding: 0.75rem;
+      border-radius: 6px;
+      margin-top: 1rem;
+      font-family: 'Courier New', Courier, monospace;
+    }
+    h2 {
+      border-bottom: 2px solid #e5e7eb;
+      padding-bottom: 0.5rem;
+      margin-bottom: 1.5rem;
+    }
+    .rendered-ui fieldset {
+      border: 1px solid #e5e7eb;
+      padding: 1.5rem;
+      border-radius: 8px;
+      margin-top: 1rem;
+    }
+    .rendered-ui legend {
+      font-weight: 600;
+      padding: 0 0.5rem;
+      color: #1f2937;
+    }
+    .tree ul {
+      margin-left: 1rem;
+      padding-left: 1rem;
+      border-left: 1px solid #d1d5db;
+    }
+    .tree li {
+      list-style: none;
+      margin: 0.25rem 0;
+    }
+    .tree span {
+      cursor: pointer;
+      padding: 2px 5px;
+      border-radius: 4px;
+    }
+    .tree-file::before {
+      content: '📄';
+      margin-right: 0.5rem;
+    }
+    .tree-folder::before {
+      content: '📁';
+      margin-right: 0.5rem;
+    }
+    .tree span:hover {
+      background-color: #eef2ff;
+    }
+    .tree span.active {
+      background-color: #3b82f6;
+      color: white;
+    }
+  </style>
+</head>
+<body class="p-4 md:p-8">
+<div class="max-w-screen-2xl mx-auto">
+  <header class="text-center mb-8">
+    <h1 class="text-4xl font-bold text-gray-800">UDMI Presentation Layer</h1>
+    <p class="text-lg text-gray-600 mt-2">Explore the schema hierarchy, edit schemas, and see the UI update in real-time.</p>
+  </header>
+
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-8" style="height: 75vh;">
+    <div>
+      <h2 class="text-2xl font-semibold text-gray-700">Schema Hierarchy</h2>
+      <div id="schemaHierarchy" class="hierarchy-view tree"></div>
+    </div>
+    <div>
+      <h2 id="editorTitle" class="text-2xl font-semibold text-gray-700">Editable Schema</h2>
+      <textarea id="schemaEditor" class="code-editor w-full"></textarea>
+      <div id="errorContainer"></div>
+    </div>
+    <div>
+      <h2 class="text-2xl font-semibold text-gray-700">Dynamically Rendered UI</h2>
+      <div id="renderedUI" class="rendered-ui">
+        <!-- The UI will be rendered here -->
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  const schemaEditor = document.getElementById('schemaEditor');
+  const renderedUI = document.getElementById('renderedUI');
+  const errorContainer = document.getElementById('errorContainer');
+  const schemaHierarchy = document.getElementById('schemaHierarchy');
+  const editorTitle = document.getElementById('editorTitle');
+
+  let currentSchema = 'metadata.json';
+
+  const allSchemas = {
+    "metadata.json": {
+      "title": "Device Metadata",
+      "type": "object",
+      "properties": {
+        "system": {
+          "$ref": "model_system.json",
+          "$presentation": {
+            "section": "system"
+          }
+        },
+        "pointset": {
+          "$ref": "model_pointset.json",
+          "$presentation": {
+            "section": "pointset"
+          }
+        }
+      }
+    },
+    "model_system.json": {
+      "title": "System Model",
+      "type": "object",
+      "properties": {
+        "serial_no": {
+          "description": "The unique serial number of the device.",
+          "type": "string",
+          "$presentation": { "display": "show" }
+        },
+        "hardware": {
+          "$ref": "model_system_hardware.json",
+          "$presentation": { "section": "hardware" }
+        },
+        "software": {
+          "type": "object",
+          "$presentation": { "section": "software" },
+          "properties": {
+            "firmware": {
+              "type": "string",
+              "$presentation": { "display": "show" }
+            },
+            "operating_system": {
+              "type": "string",
+              "$presentation": { "display": "show" }
+            }
+          }
+        }
+      }
+    },
+    "model_system_hardware.json": {
+      "title": "Hardware Model",
+      "type": "object",
+      "properties": {
+        "make": { "type": "string", "$presentation": { "display": "show" } },
+        "model": { "type": "string", "$presentation": { "display": "show" } }
+      }
+    },
+    "model_pointset.json": {
+      "title": "Device Pointset",
+      "type": "object",
+      "properties": {
+        "points": {
+          "type": "object",
+          "properties": {
+            "filter_differential_pressure_setpoint": {
+              "$ref": "model_pointset_point.json",
+              "$presentation": { "display": "show" }
+            },
+            "filter_alarm_pressure_status": {
+              "$ref": "model_pointset_point.json",
+              "$presentation": { "display": "show" }
+            }
+          }
+        }
+      }
+    },
+    "model_pointset_point.json": {
+      "title": "Point",
+      "type": "object",
+      "properties": {
+        "units": { "type": "string", "$presentation": { "display": "show" } },
+        "ref": { "type": "string", "$presentation": { "display": "show" } }
+      }
+    }
+  };
+
+  function loadSchemaInEditor(schemaName) {
+    currentSchema = schemaName;
+    schemaEditor.value = JSON.stringify(allSchemas[schemaName], null, 2);
+    editorTitle.textContent = `Editable Schema`;
+    updateActiveFileInHierarchy();
+  }
+
+  function buildSchemaTree(schema, parentElement, processedRefs = new Set()) {
+    if (schema.properties) {
+      for (const key in schema.properties) {
+        const prop = schema.properties[key];
+        if (prop.$ref && !processedRefs.has(prop.$ref)) {
+          processedRefs.add(prop.$ref);
+          const li = document.createElement('li');
+
+          const fileNameSpan = document.createElement('span');
+          fileNameSpan.textContent = prop.$ref;
+          fileNameSpan.onclick = (e) => {
+            e.stopPropagation();
+            loadSchemaInEditor(prop.$ref);
+          };
+
+          const ul = document.createElement('ul');
+          const resolvedSchema = resolveRef(prop.$ref);
+          buildSchemaTree(resolvedSchema, ul, processedRefs);
+
+          fileNameSpan.className = ul.hasChildNodes() ? 'tree-folder' : 'tree-file';
+
+          li.appendChild(fileNameSpan);
+          li.appendChild(ul);
+          parentElement.appendChild(li);
+        }
+      }
+    }
+  }
+
+
+  function resolveRef(ref) {
+    if (allSchemas[ref]) {
+      return JSON.parse(JSON.stringify(allSchemas[ref]));
+    }
+    throw new Error(`Schema reference "${ref}" not found.`);
+  }
+
+  function renderUI(schema, parentElement) {
+    if (schema.$ref) {
+      const resolvedSchema = resolveRef(schema.$ref);
+      const mergedSchema = { ...resolvedSchema, ...schema };
+      delete mergedSchema.$ref;
+      renderUI(mergedSchema, parentElement);
+      return;
+    }
+
+    if (schema.properties) {
+      for (const key in schema.properties) {
+        let prop = schema.properties[key];
+
+        if (prop.$ref) {
+          const resolved = resolveRef(prop.$ref);
+          prop = { ...resolved, ...prop };
+          delete prop.$ref;
+        }
+
+        if (prop.$presentation && prop.$presentation.display === 'hide') {
+          continue;
+        }
+
+        if (prop.type === 'object' && prop.properties) {
+          const fieldset = document.createElement('fieldset');
+          fieldset.className = 'form-group';
+          const legend = document.createElement('legend');
+          legend.className = 'form-label font-bold text-lg capitalize';
+
+          let legendText = key;
+          if (prop.$presentation && prop.$presentation.section) {
+            legendText = prop.$presentation.section;
+          }
+          legend.textContent = legendText.replace(/_/g, ' ');
+
+          fieldset.appendChild(legend);
+
+          const tempContainer = document.createElement('div');
+          renderUI(prop, tempContainer);
+
+          if (tempContainer.hasChildNodes()) {
+            fieldset.appendChild(tempContainer);
+            parentElement.appendChild(fieldset);
+          }
+
+        } else if (prop.$presentation && prop.$presentation.display === 'show') {
+          const div = document.createElement('div');
+          div.className = 'form-group';
+
+          const label = document.createElement('label');
+          label.className = 'form-label';
+          label.textContent = (prop.title && prop.title !== 'Point' ? prop.title : key).replace(/_/g, ' ');
+
+          const input = document.createElement('input');
+          input.type = prop.type === 'number' ? 'number' : 'text';
+          input.className = 'form-input';
+          input.placeholder = `Enter ${key.replace(/_/g, ' ')}`;
+
+          div.appendChild(label);
+          div.appendChild(input);
+          parentElement.appendChild(div);
+        }
+      }
+    }
+  }
+
+  function updateActiveFileInHierarchy() {
+    document.querySelectorAll('#schemaHierarchy span').forEach(span => {
+      if (span.textContent === currentSchema) {
+        span.classList.add('active');
+      } else {
+        span.classList.remove('active');
+      }
+    });
+  }
+
+  function parseAndRender() {
+    renderedUI.innerHTML = '';
+    errorContainer.innerHTML = '';
+    try {
+      // Always render from the root schema
+      renderUI(allSchemas['metadata.json'], renderedUI);
+
+      schemaHierarchy.innerHTML = '';
+      const rootUl = document.createElement('ul');
+      const rootLi = document.createElement('li');
+
+      const rootSpan = document.createElement('span');
+      rootSpan.textContent = 'metadata.json';
+      rootSpan.onclick = (e) => {
+        e.stopPropagation();
+        loadSchemaInEditor('metadata.json');
+      };
+      rootLi.appendChild(rootSpan);
+
+      const childUl = document.createElement('ul');
+      buildSchemaTree(allSchemas['metadata.json'], childUl);
+
+      rootSpan.className = childUl.hasChildNodes() ? 'tree-folder' : 'tree-file';
+
+      rootLi.appendChild(childUl);
+      rootUl.appendChild(rootLi);
+      schemaHierarchy.appendChild(rootUl);
+      updateActiveFileInHierarchy();
+
+    } catch (error) {
+      const errorDiv = document.createElement('div');
+      errorDiv.className = 'error-message';
+      errorDiv.textContent = `Rendering Error: ${error.message}`;
+      errorContainer.appendChild(errorDiv);
+    }
+  }
+
+  function saveCurrentSchema() {
+    try {
+      allSchemas[currentSchema] = JSON.parse(schemaEditor.value);
+      errorContainer.innerHTML = '';
+    } catch(e) {
+      // Don't save if JSON is invalid, the error will be shown on next render anyway.
+    }
+  }
+
+  let debounceTimer;
+  schemaEditor.addEventListener('input', () => {
+    clearTimeout(debounceTimer);
+    saveCurrentSchema();
+    debounceTimer = setTimeout(parseAndRender, 500);
+  });
+
+  // Initial load
+  loadSchemaInEditor('metadata.json');
+  parseAndRender();
+
+</script>
+</body>
+</html>
+
