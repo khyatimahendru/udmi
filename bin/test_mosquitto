@@ -129,8 +129,18 @@ echo Checking received end message
 fgrep Rudolph out/mosquitto.sub || fail did not find expected message
 
 echo Checking messages for matching serial no $serial_no
+echo --------
+echo "$operational_line"
+a=${echo "$operational_line" | sed -E 's/^[^{]+//'}
+echo $a
 received_no=$(echo "$operational_line" | sed -E 's/^[^{]+//' | jq -r .system.serial_no)
+echo $received_no
+echo ----
+fgrep operational out/mosquitto.sub
+fgrep operational out/mosquitto.sub | head -n 1
 received_topic=$(fgrep operational out/mosquitto.sub | head -n 1 | awk '{ print $1 }')
+echo $received_topic
+echo ----
 [[ -z $received_topic ]] && fail No matching receive message found.
 
 expected_topic=/r/$registry_id/d/$device_id/state
