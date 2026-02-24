@@ -88,7 +88,8 @@ def write_output(entries):
 
     f.write("  _values: ClassVar[Set[str]] = {\n")
     for entry in entries:
-      f.write(f"    {entry['const']},\n")
+      entry_const = entry["const"]
+      f.write(f"    {entry_const},\n")
     f.write("    UNKNOWN_DEFAULT\n")
     f.write("  }\n\n")
 
