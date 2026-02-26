@@ -174,7 +174,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [00, 01, 02, 03, 04, 05, 06, 07, 08, 09, 10, 11, 12, 13, 14]
+        shard: ["00", "01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12", "13", "14"]
     if: vars.TARGET_PROJECT != ''
     env:
       TARGET_PROJECT: //gbos/bos-platform-dev/heykhyati
