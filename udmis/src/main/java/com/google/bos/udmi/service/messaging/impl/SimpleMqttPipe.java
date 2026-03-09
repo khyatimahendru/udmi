@@ -345,6 +345,8 @@ public class SimpleMqttPipe extends MessageBase {
         receiveMessage(envelopeMap, new String(message.getPayload()));
       } catch (Exception e) {
         error("Exception receiving message on %s: %s", clientId, friendlyStackTrace(e));
+        // Rethrow to prevent the client from ACKing the message
+        throw e;
       }
     }
   }

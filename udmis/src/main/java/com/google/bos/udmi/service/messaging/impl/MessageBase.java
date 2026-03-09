@@ -73,7 +73,7 @@ public abstract class MessageBase extends ContainerBase implements MessagePipe {
   private static final Set<Object> HANDLED_QUEUES = new HashSet<>();
   private static final long DEFAULT_POLL_TIME_SEC = 1;
   private static final long AWAIT_TERMINATION_SEC = 10;
-  private static final int DEFAULT_CAPACITY = 1000;
+  private static final int DEFAULT_CAPACITY = 100;
   protected final int queueCapacity;
   protected final long publishDelaySec;
   private final ExecutorService executor = Executors.newFixedThreadPool(EXECUTION_THREADS);
@@ -155,7 +155,14 @@ public abstract class MessageBase extends ContainerBase implements MessagePipe {
       requireNonNull(stringBundle, "missing queue bundle");
       throttleQueue();
       randomlyFail();
-      queue.add(new QueueEntry(grabExecutionContext(), stringBundle));
+      boolean accepted = queue.offer(
+          new QueueEntry(grabExecutionContext(), stringBundle),
+          100,
+          TimeUnit.MILLISECONDS
+      );
+      if (!accepted) {
+        throw new IllegalStateException("Queue full after waiting");
+      }
     } catch (Exception e) {
       throw new RuntimeException("While adding queue entry", e);
     }
