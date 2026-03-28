@@ -9,7 +9,7 @@ In UDMI, the `state_etag` is used to prevent writeback race conditions, where a 
 The `state_etag` is a SHA-256 hash derived from the JSON representation of the `pointset.points` states.
 When generating the `state_etag`:
 1. The device collects the current `get_state()` of all active points (which includes properties like `value_state`, `status`, and `units`).
-2. This state map is serialized to JSON. To ensure determinism, the JSON serialization must use strictly sorted keys and remove any superfluous whitespace (e.g., using `separators=(',', ':')` in Python's `json.dumps`).
+2. This state map is serialized to JSON. To ensure determinism, the JSON serialization must use strictly sorted keys and remove any extra space (e.g., using `separators=(',', ':')` in Python's `json.dumps`).
 3. A SHA-256 digest of the resulting string is computed.
 4. The first 32 characters of the hex digest are used as the `state_etag`.
 
