@@ -72,6 +72,7 @@ The [state](state.md) message from a device contains a `pointset` block with the
 structure:
 
 * `pointset`: Top level block designator.
+  * (`state_etag`): Optional `state_etag` [value uniquely representing the state](../specs/sequences/writeback.md#state_etag).
   * `points`: Collection of point names.
     * _{`point_name`}_: Point name.
       * (`status`): Optional [status](status.md) information about this point.
@@ -90,6 +91,8 @@ The [config](config.md) message for a device contains a `pointset`
 block with the following structure:e
 
 * `pointset`: Top level block designator.
+  * (`state_etag`): Optional `state_etag` [value uniquely representing the state](../specs/sequences/writeback.md#state_etag).
+  * (`set_value_expiry`): Optional setting to specify the RFC 3339 timestamp at which all `set_value` values expire.
   * `sample_rate_sec`: Maximum time between samples for the device to send out a _complete_
   update. It can send out updates more frequently than this.
   * `sample_limit_sec`: Minimum time between sample updates for the device (including complete

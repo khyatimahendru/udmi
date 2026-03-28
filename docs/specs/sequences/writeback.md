@@ -54,10 +54,9 @@ In the case of any of the error states (failure, invalid, overridden), the [stat
 ### `state_etag`
 
 The `state_etag` field is meant to prevent a race condition where the device could apply a config
-change based off an obsolete device state. The `state_etag` is a hash value of point units, config
-set values echo and value_states in the points block. The `state_etag` must be updated to reflect
+change based off an obsolete device state. The `state_etag` is a hash value of point units, `value_state`, and `status` in the points block (the point's state representation). The `state_etag` must be updated to reflect
 any updates in the pointset block. The specific calculation of `state_etag` is left up to
-implementation, but the value should be a unique hash of the state's pointset. The `state_etag`
+implementation, but the value should be a unique hash of the state's pointset. For more details on the logic, see [State Etag Logic](state_etag.md). The `state_etag`
 should be included by state and config. When the device receives a new config with a valid
 `state_etag`, regardless of update success or failure. 
 
