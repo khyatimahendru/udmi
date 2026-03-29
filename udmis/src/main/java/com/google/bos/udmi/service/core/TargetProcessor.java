@@ -14,13 +14,13 @@ import java.time.Instant;
 import java.util.Date;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import udmi.schema.CloudModel;
+import udmi.schema.CloudModel.ModelOperation;
 import udmi.schema.EndpointConfiguration;
 import udmi.schema.Envelope;
 import udmi.schema.Envelope.SubFolder;
 import udmi.schema.Envelope.SubType;
 import udmi.schema.SystemEvents;
-import udmi.schema.CloudModel;
-import udmi.schema.CloudModel.ModelOperation;
 
 /**
  * Handle and process messages from the "target" message channel (e.g. PubSub topic). Currently,
@@ -63,7 +63,8 @@ public class TargetProcessor extends ProcessorBase {
       return;
     }
 
-    if (defaultedMessage instanceof SystemEvents systemEvents && systemEvents.credentials != null && !systemEvents.credentials.isEmpty()) {
+    if (defaultedMessage instanceof SystemEvents systemEvents && systemEvents.credentials != null
+        && !systemEvents.credentials.isEmpty()) {
       processKeyRotation(envelope, systemEvents);
     }
 
