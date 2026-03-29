@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 from typing import List, Optional
 
 from ._base import DataModel
@@ -19,6 +20,24 @@ class Metrics(DataModel):
     system_load: Optional[float] = None
 
 
+class KeyFormat(Enum):
+    """
+    The key type used for cloud communication.
+    """
+
+    PASSWORD = 'PASSWORD'
+    ES256 = 'ES256'
+    ES256_X509 = 'ES256_X509'
+    RS256 = 'RS256'
+    RS256_X509 = 'RS256_X509'
+
+
+@dataclass
+class Credential(DataModel):
+    key_format: Optional[KeyFormat] = None
+    key_data: Optional[str] = None
+
+
 @dataclass
 class SystemEvents(DataModel):
     """
@@ -32,3 +51,4 @@ class SystemEvents(DataModel):
     logentries: Optional[List[Entry]] = None
     event_no: Optional[int] = None
     metrics: Optional[Metrics] = None
+    credentials: Optional[List[Credential]] = None

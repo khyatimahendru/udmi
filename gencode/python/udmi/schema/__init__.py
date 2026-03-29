@@ -8,6 +8,7 @@ from .category import *
 from .commands_discovery import *
 from .commands_mapping import *
 from .common import *
+from .common_json import *
 from .config import *
 from .config_blobset import *
 from .config_blobset_blob import *

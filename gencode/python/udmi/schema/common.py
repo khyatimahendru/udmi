@@ -89,6 +89,7 @@ class Blobsets(Enum):
     """
 
     field_iot_endpoint_config = '_iot_endpoint_config'
+    field_iot_endpoint_secret = '_iot_endpoint_secret'
 
 
 @dataclass

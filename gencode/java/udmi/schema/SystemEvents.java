@@ -23,7 +23,8 @@ import com.fasterxml.jackson.annotation.JsonPropertyOrder;
     "last_config",
     "logentries",
     "event_no",
-    "metrics"
+    "metrics",
+    "credentials"
 })
 public class SystemEvents {
 
@@ -68,11 +69,14 @@ public class SystemEvents {
     public Integer event_no;
     @JsonProperty("metrics")
     public Metrics metrics;
+    @JsonProperty("credentials")
+    public List<Credential> credentials;
 
     @Override
     public int hashCode() {
         int result = 1;
         result = ((result* 31)+((this.event_no == null)? 0 :this.event_no.hashCode()));
+        result = ((result* 31)+((this.credentials == null)? 0 :this.credentials.hashCode()));
         result = ((result* 31)+((this.upgraded_from == null)? 0 :this.upgraded_from.hashCode()));
         result = ((result* 31)+((this.metrics == null)? 0 :this.metrics.hashCode()));
         result = ((result* 31)+((this.version == null)? 0 :this.version.hashCode()));
@@ -91,7 +95,7 @@ public class SystemEvents {
             return false;
         }
         SystemEvents rhs = ((SystemEvents) other);
-        return ((((((((this.event_no == rhs.event_no)||((this.event_no!= null)&&this.event_no.equals(rhs.event_no)))&&((this.upgraded_from == rhs.upgraded_from)||((this.upgraded_from!= null)&&this.upgraded_from.equals(rhs.upgraded_from))))&&((this.metrics == rhs.metrics)||((this.metrics!= null)&&this.metrics.equals(rhs.metrics))))&&((this.version == rhs.version)||((this.version!= null)&&this.version.equals(rhs.version))))&&((this.timestamp == rhs.timestamp)||((this.timestamp!= null)&&this.timestamp.equals(rhs.timestamp))))&&((this.last_config == rhs.last_config)||((this.last_config!= null)&&this.last_config.equals(rhs.last_config))))&&((this.logentries == rhs.logentries)||((this.logentries!= null)&&this.logentries.equals(rhs.logentries))));
+        return (((((((((this.event_no == rhs.event_no)||((this.event_no!= null)&&this.event_no.equals(rhs.event_no)))&&((this.credentials == rhs.credentials)||((this.credentials!= null)&&this.credentials.equals(rhs.credentials))))&&((this.upgraded_from == rhs.upgraded_from)||((this.upgraded_from!= null)&&this.upgraded_from.equals(rhs.upgraded_from))))&&((this.metrics == rhs.metrics)||((this.metrics!= null)&&this.metrics.equals(rhs.metrics))))&&((this.version == rhs.version)||((this.version!= null)&&this.version.equals(rhs.version))))&&((this.timestamp == rhs.timestamp)||((this.timestamp!= null)&&this.timestamp.equals(rhs.timestamp))))&&((this.last_config == rhs.last_config)||((this.last_config!= null)&&this.last_config.equals(rhs.last_config))))&&((this.logentries == rhs.logentries)||((this.logentries!= null)&&this.logentries.equals(rhs.logentries))));
     }
 
 }

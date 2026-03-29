@@ -20,7 +20,7 @@ import udmi.schema.Envelope.SubFolder;
 import udmi.schema.Envelope.SubType;
 import udmi.schema.SystemEvents;
 import udmi.schema.CloudModel;
-import udmi.schema.CloudModel.ModelOperation;
+import udmi.schema.Operation;
 
 /**
  * Handle and process messages from the "target" message channel (e.g. PubSub topic). Currently,
@@ -80,7 +80,7 @@ public class TargetProcessor extends ProcessorBase {
     String deviceId = envelope.deviceId;
     info("Processing key rotation for %s/%s", registryId, deviceId);
     CloudModel modelUpdate = new CloudModel();
-    modelUpdate.operation = ModelOperation.UPDATE;
+    modelUpdate.operation = Operation.UPDATE;
     modelUpdate.credentials = systemEvents.credentials;
     iotAccess.modelDevice(registryId, deviceId, modelUpdate, null);
   }

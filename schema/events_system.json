@@ -57,6 +57,26 @@
           "type": "number"
         }
       }
+    },
+    "credentials": {
+      "type": "array",
+      "items": {
+        "properties": {
+          "key_format": {
+            "description": "The key type used for cloud communication.",
+            "enum": [
+              "PASSWORD",
+              "ES256",
+              "ES256_X509",
+              "RS256",
+              "RS256_X509"
+            ]
+          },
+          "key_data": {
+            "type": "string"
+          }
+        }
+      }
     }
   },
   "required": [
