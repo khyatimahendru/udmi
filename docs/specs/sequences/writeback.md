@@ -56,10 +56,13 @@ In the case of any of the error states (failure, invalid, overridden), the [stat
 The `state_etag` field is meant to prevent a race condition where the device could apply a config
 change based off an obsolete device state. The `state_etag` is a hash value of point units, config
 set values echo and value_states in the points block. The `state_etag` must be updated to reflect
-any updates in the pointset block. The specific calculation of `state_etag` is left up to
-implementation, but the value should be a unique hash of the state's pointset. The `state_etag`
-should be included by state and config. When the device receives a new config with a valid
-`state_etag`, regardless of update success or failure. 
+any updates in the pointset block. The `state_etag` should be included by state and config. When
+the device receives a new config with a valid `state_etag`, the device must respond with a new
+state containing a new valid `state_etag`, regardless of update success or failure.
+
+A complete explanation of how `state_etag` works, including its exact calculation algorithm
+using a deterministic JSON representation and SHA-256 hash, can be found in the
+[`state_etag` documentation](state_etag.md).
 
 ![Basic writeback sequence diagram](images/writeback-etag-example.png)
 
