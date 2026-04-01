@@ -86,6 +86,7 @@ import udmi.util.SchemaVersion;
 public interface PublisherHost extends ManagerHost {
 
   String LOG_FILE = "device.log";
+  String OTA_BLOB_KEY = "test_module";
   Logger LOG = LoggerFactory.getLogger(PublisherHost.class);
   String UDMI_VERSION = SchemaVersion.CURRENT.key();
   String BROKEN_VERSION = "1.4.";
@@ -517,6 +518,7 @@ public interface PublisherHost extends ManagerHost {
         info(format("%s received config %s", getTimestamp(), isoConvert(configMsg.timestamp)));
         getDeviceManager().updateConfig(configMsg);
         extractEndpointBlobConfig();
+        extractOtaBlobConfig();
       } else {
         info(format("%s defaulting empty config", getTimestamp()));
       }
@@ -649,6 +651,71 @@ public interface PublisherHost extends ManagerHost {
     return getExtractedEndpoint();
   }
 
+  default void extractOtaBlobConfig() {
+    if (getDeviceConfig().blobset == null || getDeviceConfig().blobset.blobs == null) {
+      return;
+    }
+    String blobKey = OTA_BLOB_KEY;
+    BlobBlobsetConfig blobConfig = getDeviceConfig().blobset.blobs.get(blobKey);
+    if (blobConfig == null) {
+      return;
+    }
+
+    BlobBlobsetState blobState = ensureBlobsetState(blobKey);
+
+    if (blobConfig.generation == null) {
+       return;
+    }
+
+    if (!Objects.equals(blobState.generation, blobConfig.generation)) {
+        notice("Starting new OTA generation");
+        blobState.generation = blobConfig.generation;
+        blobState.phase = null;
+        blobState.status = null;
+    }
+
+    if (blobConfig.phase == BlobBlobsetConfig.BlobPhase.APPLY) {
+        if (blobState.phase != BlobBlobsetConfig.BlobPhase.APPLY) {
+            info("Config phase APPLY detected for " + blobKey);
+            blobState.phase = BlobBlobsetConfig.BlobPhase.APPLY;
+            publishSynchronousState();
+            
+            // Simulate restart as requested by tests
+            info("Simulating restart for OTA update...");
+            Integer currentCount = ofNullable(getDeviceState().system.operation.restart_count).orElse(0);
+            getDeviceState().system.operation.restart_count = currentCount + 1;
+            publishSynchronousState();
+        }
+    } else if (blobConfig.phase == BlobBlobsetConfig.BlobPhase.FINAL) {
+        if (blobState.phase != BlobBlobsetConfig.BlobPhase.FINAL) {
+             info("Config phase FINAL detected for " + blobKey);
+             
+             // Try to parse payload
+             try {
+                 String data = extractConfigBlob(blobKey);
+                 if (data != null) {
+                     // Parse as JSON to get version
+                     Map<String, Object> payload = fromJsonString(data, Map.class);
+                     String version = (String) payload.get("version");
+                     if (version != null) {
+                         if (getDeviceState().system.software == null) {
+                             getDeviceState().system.software = new HashMap<>();
+                         }
+                         getDeviceState().system.software.put(blobKey, version);
+                     }
+                 }
+                 blobState.phase = BlobBlobsetConfig.BlobPhase.FINAL;
+                 markStateDirty();
+             } catch (Exception e) {
+                 error("Failed to apply OTA update", e);
+                 blobState.phase = BlobBlobsetConfig.BlobPhase.FINAL;
+                 blobState.status = exceptionStatus(e, Category.BLOBSET_BLOB_APPLY);
+                 publishSynchronousState();
+             }
+        }
+    }
+  }
+
   EndpointConfiguration getExtractedEndpoint();
 
   void setExtractedEndpoint(EndpointConfiguration endpointConfiguration);
@@ -774,6 +841,14 @@ public interface PublisherHost extends ManagerHost {
     getDeviceState().blobset.blobs = ofNullable(getDeviceState().blobset.blobs)
             .orElseGet(HashMap::new);
     return getDeviceState().blobset.blobs.computeIfAbsent(iotEndpointConfig.value(),
+            key -> new BlobBlobsetState());
+  }
+
+  default BlobBlobsetState ensureBlobsetState(String blobKey) {
+    getDeviceState().blobset = ofNullable(getDeviceState().blobset).orElseGet(BlobsetState::new);
+    getDeviceState().blobset.blobs = ofNullable(getDeviceState().blobset.blobs)
+            .orElseGet(HashMap::new);
+    return getDeviceState().blobset.blobs.computeIfAbsent(blobKey,
             key -> new BlobBlobsetState());
   }
 
