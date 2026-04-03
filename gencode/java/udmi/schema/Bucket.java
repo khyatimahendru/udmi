@@ -35,6 +35,12 @@ public enum Bucket {
   // UDMI gateway capabilities
   GATEWAY("gateway"),
 
+  // Over the air updates
+  OTA("ota"),
+
+  // OTA updates
+  OTA_UPDATES("ota.updates"),
+
   // Pointset and telemetry capabilities
   POINTSET("pointset"),
 

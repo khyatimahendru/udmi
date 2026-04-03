@@ -92,6 +92,30 @@ class Category(Enum):
     # Applying a blob update
     BLOBSET_BLOB_APPLY = ("blobset.blob.apply", Level.NOTICE)
 
+    # Started downloading a blob
+    BLOBSET_DOWNLOAD_START = ("blobset.download.start", Level.NOTICE)
+
+    # Successfully downloaded a blob
+    BLOBSET_DOWNLOAD_SUCCESS = ("blobset.download.success", Level.NOTICE)
+
+    # Download timed out
+    BLOBSET_DOWNLOAD_TIMEOUT = ("blobset.download.timeout", Level.ERROR)
+
+    # Download was forbidden
+    BLOBSET_DOWNLOAD_FORBIDDEN = ("blobset.download.forbidden", Level.ERROR)
+
+    # Blob hash is being verified
+    BLOBSET_HASH_VERIFY = ("blobset.hash.verify", Level.NOTICE)
+
+    # Successfully applied a blob
+    BLOBSET_APPLY_SUCCESS = ("blobset.apply.success", Level.NOTICE)
+
+    # Blob apply was aborted
+    BLOBSET_APPLY_ABORT = ("blobset.apply.abort", Level.NOTICE)
+
+    # Error parsing blob
+    BLOBSET_PARSE_ERROR = ("blobset.parse.error", Level.ERROR)
+
     # Receiving/processing a message for validation.
     VALIDATION_DEVICE_RECEIVE = ("validation.device.receive", Level.DEBUG)
 

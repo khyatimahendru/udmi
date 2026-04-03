@@ -69,6 +69,12 @@ public class Category {
     public static final int SYSTEM_AUTH_FAIL_VALUE = WARNING.value();
     static { LEVEL.put(SYSTEM_AUTH_FAIL, WARNING); }
 
+    // Software dependency conflict
+    public static final String SYSTEM_SOFTWARE_DEPENDENCY_CONFLICT = "system.software.dependency_conflict";
+    public static final Level SYSTEM_SOFTWARE_DEPENDENCY_CONFLICT_LEVEL = ERROR;
+    public static final int SYSTEM_SOFTWARE_DEPENDENCY_CONFLICT_VALUE = ERROR.value();
+    static { LEVEL.put(SYSTEM_SOFTWARE_DEPENDENCY_CONFLICT, ERROR); }
+
     // Category for normal operating state (also default).
     public static final String POINTSET_POINT_NOMINAL = "pointset.point.nominal";
     public static final Level POINTSET_POINT_NOMINAL_LEVEL = INFO;
@@ -176,6 +182,66 @@ public class Category {
     public static final Level BLOBSET_BLOB_APPLY_LEVEL = NOTICE;
     public static final int BLOBSET_BLOB_APPLY_VALUE = NOTICE.value();
     static { LEVEL.put(BLOBSET_BLOB_APPLY, NOTICE); }
+
+    // Started downloading a blob
+    public static final String BLOBSET_DOWNLOAD_START = "blobset.download.start";
+    public static final Level BLOBSET_DOWNLOAD_START_LEVEL = NOTICE;
+    public static final int BLOBSET_DOWNLOAD_START_VALUE = NOTICE.value();
+    static { LEVEL.put(BLOBSET_DOWNLOAD_START, NOTICE); }
+
+    // Successfully downloaded a blob
+    public static final String BLOBSET_DOWNLOAD_SUCCESS = "blobset.download.success";
+    public static final Level BLOBSET_DOWNLOAD_SUCCESS_LEVEL = NOTICE;
+    public static final int BLOBSET_DOWNLOAD_SUCCESS_VALUE = NOTICE.value();
+    static { LEVEL.put(BLOBSET_DOWNLOAD_SUCCESS, NOTICE); }
+
+    // Download timed out
+    public static final String BLOBSET_DOWNLOAD_TIMEOUT = "blobset.download.timeout";
+    public static final Level BLOBSET_DOWNLOAD_TIMEOUT_LEVEL = ERROR;
+    public static final int BLOBSET_DOWNLOAD_TIMEOUT_VALUE = ERROR.value();
+    static { LEVEL.put(BLOBSET_DOWNLOAD_TIMEOUT, ERROR); }
+
+    // Download was forbidden
+    public static final String BLOBSET_DOWNLOAD_FORBIDDEN = "blobset.download.forbidden";
+    public static final Level BLOBSET_DOWNLOAD_FORBIDDEN_LEVEL = ERROR;
+    public static final int BLOBSET_DOWNLOAD_FORBIDDEN_VALUE = ERROR.value();
+    static { LEVEL.put(BLOBSET_DOWNLOAD_FORBIDDEN, ERROR); }
+
+    // Blob hash is being verified
+    public static final String BLOBSET_HASH_VERIFY = "blobset.hash.verify";
+    public static final Level BLOBSET_HASH_VERIFY_LEVEL = NOTICE;
+    public static final int BLOBSET_HASH_VERIFY_VALUE = NOTICE.value();
+    static { LEVEL.put(BLOBSET_HASH_VERIFY, NOTICE); }
+
+    // Successfully applied a blob
+    public static final String BLOBSET_APPLY_SUCCESS = "blobset.apply.success";
+    public static final Level BLOBSET_APPLY_SUCCESS_LEVEL = NOTICE;
+    public static final int BLOBSET_APPLY_SUCCESS_VALUE = NOTICE.value();
+    static { LEVEL.put(BLOBSET_APPLY_SUCCESS, NOTICE); }
+
+    // Blob apply was aborted
+    public static final String BLOBSET_APPLY_ABORT = "blobset.apply.abort";
+    public static final Level BLOBSET_APPLY_ABORT_LEVEL = NOTICE;
+    public static final int BLOBSET_APPLY_ABORT_VALUE = NOTICE.value();
+    static { LEVEL.put(BLOBSET_APPLY_ABORT, NOTICE); }
+
+    // Blob hash mismatch
+    public static final String BLOBSET_VERIFY_HASH_MISMATCH = "blobset.verify.hash_mismatch";
+    public static final Level BLOBSET_VERIFY_HASH_MISMATCH_LEVEL = ERROR;
+    public static final int BLOBSET_VERIFY_HASH_MISMATCH_VALUE = ERROR.value();
+    static { LEVEL.put(BLOBSET_VERIFY_HASH_MISMATCH, ERROR); }
+
+    // Blob hardware mismatch
+    public static final String BLOBSET_VERIFY_HARDWARE_MISMATCH = "blobset.verify.hardware_mismatch";
+    public static final Level BLOBSET_VERIFY_HARDWARE_MISMATCH_LEVEL = ERROR;
+    public static final int BLOBSET_VERIFY_HARDWARE_MISMATCH_VALUE = ERROR.value();
+    static { LEVEL.put(BLOBSET_VERIFY_HARDWARE_MISMATCH, ERROR); }
+
+    // Error parsing blob
+    public static final String BLOBSET_PARSE_ERROR = "blobset.parse.error";
+    public static final Level BLOBSET_PARSE_ERROR_LEVEL = ERROR;
+    public static final int BLOBSET_PARSE_ERROR_VALUE = ERROR.value();
+    static { LEVEL.put(BLOBSET_PARSE_ERROR, ERROR); }
 
     // Receiving/processing a message for validation.
     public static final String VALIDATION_DEVICE_RECEIVE = "validation.device.receive";
