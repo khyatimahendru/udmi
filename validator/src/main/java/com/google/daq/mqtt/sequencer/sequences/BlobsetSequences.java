@@ -297,7 +297,7 @@ public class BlobsetSequences extends SequenceBase {
 
     untilTrue("blobset phase is apply", () -> {
       BlobBlobsetState blobBlobsetState = deviceState.blobset.blobs.get("_system_software_update");
-      return BlobPhase.APPLY.equals(blobBlobsetState.phase);
+      return blobBlobsetState != null && BlobPhase.APPLY.equals(blobBlobsetState.phase);
     });
 
     untilLogged(BLOBSET_DOWNLOAD_START, Level.NOTICE);
@@ -332,9 +332,10 @@ public class BlobsetSequences extends SequenceBase {
     untilLogged(BLOBSET_DOWNLOAD_START, Level.NOTICE);
 
     untilTrue("download failure logged", () -> {
-      boolean hasTimeout = getSystemLogs().stream()
+      List<Entry> logs = getLogs();
+      boolean hasTimeout = logs.stream()
           .anyMatch(log -> BLOBSET_DOWNLOAD_TIMEOUT.equals(log.category) && log.level == Level.ERROR.value());
-      boolean hasForbidden = getSystemLogs().stream()
+      boolean hasForbidden = logs.stream()
           .anyMatch(log -> BLOBSET_DOWNLOAD_FORBIDDEN.equals(log.category) && log.level == Level.ERROR.value());
       return hasTimeout || hasForbidden;
     });
@@ -345,8 +346,11 @@ public class BlobsetSequences extends SequenceBase {
     });
   }
 
-  private List<Entry> getSystemLogs() {
-    return ifNotNullGet(deviceState.system.status, status -> List.of(status), List.of());
+  private List<Entry> getLogs() {
+    return popReceivedEvents(udmi.schema.SystemEvents.class).stream()
+        .filter(events -> events.logentries != null)
+        .flatMap(events -> events.logentries.stream())
+        .toList();
   }
 
   @Test(timeout = TWO_MINUTES_MS)
@@ -395,9 +399,10 @@ public class BlobsetSequences extends SequenceBase {
     untilLogged(BLOBSET_HASH_VERIFY, Level.NOTICE);
 
     untilTrue("hardware mismatch or dependency conflict logged", () -> {
-      boolean hasHardwareMismatch = getSystemLogs().stream()
+      List<Entry> logs = getLogs();
+      boolean hasHardwareMismatch = logs.stream()
           .anyMatch(log -> BLOBSET_VERIFY_HARDWARE_MISMATCH.equals(log.category) && log.level == Level.ERROR.value());
-      boolean hasSoftwareConflict = getSystemLogs().stream()
+      boolean hasSoftwareConflict = logs.stream()
           .anyMatch(log -> SYSTEM_SOFTWARE_DEPENDENCY_CONFLICT.equals(log.category) && log.level == Level.ERROR.value());
       return hasHardwareMismatch || hasSoftwareConflict;
     });
@@ -420,7 +425,7 @@ public class BlobsetSequences extends SequenceBase {
 
     untilTrue("blobset phase is apply", () -> {
       BlobBlobsetState blobBlobsetState = deviceState.blobset.blobs.get("_system_software_update");
-      return BlobPhase.APPLY.equals(blobBlobsetState.phase);
+      return blobBlobsetState != null && BlobPhase.APPLY.equals(blobBlobsetState.phase);
     });
 
     untilLogged(BLOBSET_HASH_VERIFY, Level.NOTICE);
@@ -448,7 +453,7 @@ public class BlobsetSequences extends SequenceBase {
 
     untilTrue("blobset phase is apply", () -> {
       BlobBlobsetState blobBlobsetState = deviceState.blobset.blobs.get("_system_software_update");
-      return BlobPhase.APPLY.equals(blobBlobsetState.phase);
+      return blobBlobsetState != null && BlobPhase.APPLY.equals(blobBlobsetState.phase);
     });
 
     untilLogged(BLOBSET_HASH_VERIFY, Level.NOTICE);
@@ -472,7 +477,7 @@ public class BlobsetSequences extends SequenceBase {
 
     untilTrue("blobset phase is apply", () -> {
       BlobBlobsetState blobBlobsetState = deviceState.blobset.blobs.get("_system_software_update");
-      return BlobPhase.APPLY.equals(blobBlobsetState.phase);
+      return blobBlobsetState != null && BlobPhase.APPLY.equals(blobBlobsetState.phase);
     });
 
     untilLogged(udmi.schema.Category.BLOBSET_PARSE_ERROR, Level.ERROR);
@@ -520,11 +525,11 @@ public class BlobsetSequences extends SequenceBase {
 
     untilTrue("blobset phase is apply", () -> {
       BlobBlobsetState blobBlobsetState = deviceState.blobset.blobs.get("_system_software_update");
-      return BlobPhase.APPLY.equals(blobBlobsetState.phase);
+      return blobBlobsetState != null && BlobPhase.APPLY.equals(blobBlobsetState.phase);
     });
 
     // Abort the update
-    deviceConfig.blobset.blobs.remove("_system_software_update");
+    deviceConfig.blobset = null;
 
     untilLogged(udmi.schema.Category.BLOBSET_APPLY_ABORT, Level.NOTICE);
 
