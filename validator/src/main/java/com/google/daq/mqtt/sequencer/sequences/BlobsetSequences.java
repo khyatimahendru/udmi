@@ -16,6 +16,7 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertTrue;
 import static udmi.schema.Bucket.ENDPOINT_CONFIG;
+import static udmi.schema.Bucket.SYSTEM;
 import static udmi.schema.Bucket.SYSTEM_MODE;
 import static udmi.schema.Category.BLOBSET_BLOB_APPLY;
 import static udmi.schema.FeatureDiscovery.FeatureStage.PREVIEW;
@@ -26,6 +27,7 @@ import com.google.daq.mqtt.sequencer.Summary;
 import com.google.daq.mqtt.sequencer.ValidateSchema;
 import com.google.daq.mqtt.sequencer.semantic.SemanticDate;
 import com.google.daq.mqtt.sequencer.semantic.SemanticValue;
+import udmi.schema.TargetTestingModel;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Date;
@@ -65,6 +67,18 @@ public class BlobsetSequences extends SequenceBase {
   private static final String LOCAL_CLIENT_ID_FMT = "/r/%s/d/%s";
   private static final String BOGUS_ENDPOINT_HOSTNAME = "twiddily.fiddily.fog";
   public static final String BOGUS_REGISTRY = "BOGUS_REGISTRY";
+  public static final String DEFAULT_OTA_BLOB_KEY = "test_module";
+
+  private String getOtaBlobKey() {
+    TargetTestingModel target = catchToNull(() -> deviceMetadata.testing.targets.get("test_ota_blob_key"));
+    if (target != null && target.target_point != null) {
+      return target.target_point;
+    }
+    if (getDeviceId().startsWith("pubber")) {
+      return DEFAULT_OTA_BLOB_KEY;
+    }
+    return ifNullSkipTest(null, "No test_ota_blob_key defined in metadata for " + getDeviceId());
+  }
 
   private static boolean isMqttProvider() {
     return exeConfig.iot_provider == IotProvider.MQTT;
@@ -136,10 +150,10 @@ public class BlobsetSequences extends SequenceBase {
     }
   }
 
-  private void untilErrorReported() {
+  private void untilErrorReported(String blobKey) {
     untilTrue("blobset entry config status is error", () -> {
-      BlobBlobsetState blobBlobsetState = deviceState.blobset.blobs.get(IOT_BLOB_KEY);
-      BlobBlobsetConfig blobBlobsetConfig = deviceConfig.blobset.blobs.get(IOT_BLOB_KEY);
+      BlobBlobsetState blobBlobsetState = deviceState.blobset.blobs.get(blobKey);
+      BlobBlobsetConfig blobBlobsetConfig = deviceConfig.blobset.blobs.get(blobKey);
       return blobBlobsetConfig.generation.equals(blobBlobsetState.generation)
           && blobBlobsetState.phase.equals(BlobPhase.FINAL)
           && blobBlobsetState.status.category.equals(BLOBSET_BLOB_APPLY)
@@ -186,7 +200,7 @@ public class BlobsetSequences extends SequenceBase {
   @Test(timeout = TWO_MINUTES_MS) // TODO Is this enough? Does a client try X times?
   public void endpoint_connection_error() {
     setDeviceConfigEndpointBlob(BOGUS_ENDPOINT_HOSTNAME, registryId, false);
-    untilErrorReported();
+    untilErrorReported(IOT_BLOB_KEY);
     untilClearedRedirect();
   }
 
@@ -196,14 +210,14 @@ public class BlobsetSequences extends SequenceBase {
   public void endpoint_connection_retry() {
     setDeviceConfigEndpointBlob(BOGUS_ENDPOINT_HOSTNAME, registryId, false);
     final Date savedGeneration = deviceConfig.blobset.blobs.get(IOT_BLOB_KEY).generation;
-    untilErrorReported();
+    untilErrorReported(IOT_BLOB_KEY);
     setDeviceConfigEndpointBlob(BOGUS_ENDPOINT_HOSTNAME, registryId, false);
     // Semantically this is a different date; manually update for change-detection purposes.
     deviceConfig.blobset.blobs.get(IOT_BLOB_KEY).generation = SemanticDate.describe(
         "new generation", new Date());
     assertNotEquals("config generation", savedGeneration,
         deviceConfig.blobset.blobs.get(IOT_BLOB_KEY).generation);
-    untilErrorReported();
+    untilErrorReported(IOT_BLOB_KEY);
     untilClearedRedirect();
   }
 
@@ -268,7 +282,7 @@ public class BlobsetSequences extends SequenceBase {
   @Feature(stage = PREVIEW, bucket = ENDPOINT_CONFIG)
   public void endpoint_failure_and_restart() {
     setDeviceConfigEndpointBlob(BOGUS_ENDPOINT_HOSTNAME, registryId, false);
-    untilErrorReported();
+    untilErrorReported(IOT_BLOB_KEY);
     check_system_restart();
     untilClearedRedirect();
   }
@@ -386,5 +400,136 @@ public class BlobsetSequences extends SequenceBase {
 
     untilTrue("last_start is newer than previous last_start",
         () -> deviceConfig.system.operation.last_start.after(last_start));
+  }
+
+  private void untilOtaBlobPhase(BlobPhase blobPhase, boolean expectFailure) {
+    String prefix = expectFailure ? "not " : "";
+    untilTrue(format("blobset phase is %s and stateStatus is %snull", blobPhase, prefix), () -> {
+      if (deviceState.blobset == null || deviceState.blobset.blobs == null) {
+        return false;
+      }
+      BlobBlobsetState blobBlobsetState = deviceState.blobset.blobs.get(getOtaBlobKey());
+      BlobBlobsetConfig blobBlobsetConfig = deviceConfig.blobset.blobs.get(getOtaBlobKey());
+      if (blobBlobsetState == null || blobBlobsetConfig == null) {
+        return false;
+      }
+      boolean statusError = blobBlobsetState.status != null;
+      return blobPhase.equals(blobBlobsetState.phase)
+          && blobBlobsetConfig.generation.equals(blobBlobsetState.generation)
+          && statusError == expectFailure;
+    });
+  }
+
+  private void setOtaUpdateBlob(String url, String hash, BlobPhase phase) {
+    BlobBlobsetConfig config = new BlobBlobsetConfig();
+    config.url = SemanticValue.describe("bundle url", url);
+    config.phase = phase;
+    config.sha256 = SemanticValue.describe("bundle hash", hash);
+    config.generation = SemanticDate.describe("blob generation", new Date());
+
+    if (deviceConfig.blobset == null) {
+      deviceConfig.blobset = new BlobsetConfig();
+      deviceConfig.blobset.blobs = new HashMap<>();
+    }
+    deviceConfig.blobset.blobs.put(getOtaBlobKey(), config);
+  }
+
+  private String generateOtaDataUrl(String payload) {
+    return format("data:%s;base64,%s", "application/octet-stream", encodeBase64(payload));
+  }
+
+  @Test(timeout = THREE_MINUTES_MS)
+  @Feature(stage = PREVIEW, bucket = SYSTEM)
+  @Summary("The Happy Path (Protocol Complete): Inject a valid URL and correct SHA256 hash.")
+  public void ota_update_success() {
+    String payload = "{\"version\":\"1.2.3\",\"bundle\":\"valid\"}";
+    String dummyUrl = generateOtaDataUrl(payload);
+    String dummyHash = sha256(payload);
+
+    final Integer initialCount = catchToNull(() -> deviceState.system.operation.restart_count);
+    checkThat("initial count is defined", () -> initialCount != null);
+
+    setOtaUpdateBlob(dummyUrl, dummyHash, BlobPhase.APPLY);
+    
+    untilOtaBlobPhase(BlobPhase.APPLY, false);
+    
+    untilTrue("restart count increased by one",
+        () -> deviceState.system.operation.restart_count > initialCount);
+
+    setOtaUpdateBlob(dummyUrl, dummyHash, BlobPhase.FINAL);
+
+    untilOtaBlobPhase(BlobPhase.FINAL, false);
+
+    untilTrue("target version reflected in system.software", () -> {
+      return deviceState.system.software != null
+          && deviceState.system.software.containsKey(getOtaBlobKey());
+    });
+  }
+
+  @Test(timeout = TWO_MINUTES_MS)
+  @Feature(stage = PREVIEW, bucket = SYSTEM)
+  @Summary("Cryptographic Integrity Failure (Hash Mismatch): valid URL but corrupted SHA256.")
+  public void ota_update_hash_mismatch() {
+    String payload = "{\"version\":\"1.2.3\",\"bundle\":\"valid\"}";
+    String dummyUrl = generateOtaDataUrl(payload);
+    String dummyHash = sha256(payload + "corrupted");
+
+    setOtaUpdateBlob(dummyUrl, dummyHash, BlobPhase.FINAL);
+    untilErrorReported(getOtaBlobKey());
+  }
+
+  @Test(timeout = TWO_MINUTES_MS)
+  @Feature(stage = PREVIEW, bucket = SYSTEM)
+  @Summary("Network/Auth Failure (Invalid URL): URL that has expired, unreachable, or lacks signature.")
+  public void ota_update_invalid_url() {
+    String dummyUrl = "https://expired.invalid.url/module.bin";
+    String dummyHash = sha256("dummy payload");
+
+    setOtaUpdateBlob(dummyUrl, dummyHash, BlobPhase.FINAL);
+    untilErrorReported(getOtaBlobKey());
+  }
+
+  @Test(timeout = TWO_MINUTES_MS)
+  @Feature(stage = PREVIEW, bucket = SYSTEM)
+  @Summary("Guaranteed Failure (Corrupted/Oversized Payload): perfect SHA match but corrupted internally.")
+  public void ota_update_payload_corrupted() {
+    String payload = "DEADBEEF_corrupted_binary_data";
+    String dummyUrl = generateOtaDataUrl(payload) + "?trigger=payload_corrupted";
+    String dummyHash = sha256(payload);
+
+    setOtaUpdateBlob(dummyUrl, dummyHash, BlobPhase.FINAL);
+    untilErrorReported(getOtaBlobKey());
+  }
+
+  @Test(timeout = TWO_MINUTES_MS)
+  @Feature(stage = PREVIEW, bucket = SYSTEM)
+  @Summary("Malformed Data Encoding: invalid base64 characters in data URL.")
+  public void ota_update_malformed_encoding() {
+    String dummyUrl = "data:application/octet-stream;base64,!!!NotBase64!!!";
+    String dummyHash = sha256("dummy payload");
+
+    setOtaUpdateBlob(dummyUrl, dummyHash, BlobPhase.FINAL);
+    untilErrorReported(getOtaBlobKey());
+  }
+
+  @Test(timeout = TWO_MINUTES_MS)
+  @Feature(stage = PREVIEW, bucket = SYSTEM)
+  @Summary("Graceful Rollback Recognition: remove blobset config while in APPLY phase.")
+  public void ota_update_rollback() {
+    String payload = "{\"version\":\"1.2.3\",\"bundle\":\"valid\"}";
+    String dummyUrl = generateOtaDataUrl(payload);
+    String dummyHash = sha256(payload);
+
+    setOtaUpdateBlob(dummyUrl, dummyHash, BlobPhase.APPLY);
+    untilOtaBlobPhase(BlobPhase.APPLY, false);
+
+    deviceConfig.blobset.blobs.remove(getOtaBlobKey());
+    
+    untilTrue("blobset state for module is cleared or null", () -> {
+      if (deviceState.blobset == null || deviceState.blobset.blobs == null) {
+        return true;
+      }
+      return !deviceState.blobset.blobs.containsKey(getOtaBlobKey());
+    });
   }
 }
