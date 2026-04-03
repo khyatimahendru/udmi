@@ -37,6 +37,12 @@ class Bucket(DataModel):
   # UDMI gateway capabilities
   GATEWAY: ClassVar[str] = "gateway"
 
+  # Over the air updates
+  OTA: ClassVar[str] = "ota"
+
+  # OTA updates
+  OTA_UPDATES: ClassVar[str] = "ota.updates"
+
   # Pointset and telemetry capabilities
   POINTSET: ClassVar[str] = "pointset"
 
@@ -62,6 +68,8 @@ class Bucket(DataModel):
     DISCOVERY,
     DISCOVERY_SCAN,
     GATEWAY,
+    OTA,
+    OTA_UPDATES,
     POINTSET,
     SYSTEM,
     SYSTEM_MODE,

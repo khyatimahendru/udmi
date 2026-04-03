@@ -27,6 +27,8 @@ could be used with a **WARNING** level for a warning case during normal operatio
     * _login_: (**NOTICE**) Successful login. The entry message should include the username and application
     * _logout_: (**NOTICE**) Successful logout 
     * _fail_: (**WARNING**) Failed authentication attempt. The entry message should include the application
+  * _software_: Software related events
+    * _dependency_conflict_: (**ERROR**) Software dependency conflict
 * _pointset_: Handling managing data point conditions
   * _point_: Conditions relating to a specific point, the entry `message` should start with "Point _pointname_"
     * _nominal_: (**INFO**) Category for normal operating state (also default).
@@ -59,6 +61,21 @@ could be used with a **WARNING** level for a warning case during normal operatio
     * _receive_: (**DEBUG**) About receiving a blob update
     * _fetch_: (**DEBUG**) Fetching a blob update
     * _apply_: (**NOTICE**) Applying a blob update
+  * _download_: Downloading a blob
+    * _start_: (**NOTICE**) Started downloading a blob
+    * _success_: (**NOTICE**) Successfully downloaded a blob
+    * _timeout_: (**ERROR**) Download timed out
+    * _forbidden_: (**ERROR**) Download was forbidden
+  * _hash_: Hashing a blob
+    * _verify_: (**NOTICE**) Blob hash is being verified
+  * _apply_: Applying a blob
+    * _success_: (**NOTICE**) Successfully applied a blob
+    * _abort_: (**NOTICE**) Blob apply was aborted
+  * _verify_: Verifying a blob
+    * _hash_mismatch_: (**ERROR**) Blob hash mismatch
+    * _hardware_mismatch_: (**ERROR**) Blob hardware mismatch
+  * _parse_: Parsing a blob
+    * _error_: (**ERROR**) Error parsing blob
 * _validation_: Handling validation pipeline messages
   * _device_: Conditions specific to processing a given device message.
     * _receive_: (**DEBUG**) Receiving/processing a message for validation.

@@ -18,7 +18,17 @@ import static org.junit.Assert.assertTrue;
 import static udmi.schema.Bucket.ENDPOINT_CONFIG;
 import static udmi.schema.Bucket.SYSTEM_MODE;
 import static udmi.schema.Category.BLOBSET_BLOB_APPLY;
+import static udmi.schema.Category.BLOBSET_DOWNLOAD_START;
+import static udmi.schema.Category.BLOBSET_DOWNLOAD_SUCCESS;
+import static udmi.schema.Category.BLOBSET_DOWNLOAD_TIMEOUT;
+import static udmi.schema.Category.BLOBSET_DOWNLOAD_FORBIDDEN;
+import static udmi.schema.Category.BLOBSET_HASH_VERIFY;
+import static udmi.schema.Category.BLOBSET_APPLY_SUCCESS;
+import static udmi.schema.Category.BLOBSET_VERIFY_HASH_MISMATCH;
+import static udmi.schema.Category.BLOBSET_VERIFY_HARDWARE_MISMATCH;
+import static udmi.schema.Category.SYSTEM_SOFTWARE_DEPENDENCY_CONFLICT;
 import static udmi.schema.FeatureDiscovery.FeatureStage.PREVIEW;
+import static udmi.schema.FeatureDiscovery.FeatureStage.ALPHA;
 
 import com.google.daq.mqtt.sequencer.Feature;
 import com.google.daq.mqtt.sequencer.SequenceBase;
@@ -256,6 +266,271 @@ public class BlobsetSequences extends SequenceBase {
   public void endpoint_connection_success_alternate() {
     HashMap<String, CaptureMap> capture = check_endpoint_connection_success(false, false);
     assertFalse("found backup state update", hasBackupStateUpdate(capture));
+  }
+
+  private String generateSoftwareConfigDataUrl(String payload) {
+    return format(DATA_URL_FORMAT, JSON_MIME_TYPE, encodeBase64(payload));
+  }
+
+  private void setDeviceConfigSoftwareBlob(String url, String sha256) {
+    BlobBlobsetConfig config = new BlobBlobsetConfig();
+    config.url = SemanticValue.describe("software data", url);
+    config.phase = BlobPhase.FINAL;
+    config.generation = SemanticDate.describe("blob generation", new Date());
+    config.sha256 = SemanticValue.describe("blob data hash", sha256);
+
+    BlobsetConfig blobset = new BlobsetConfig();
+    blobset.blobs = new HashMap<>();
+    blobset.blobs.put("_system_software_update", config);
+    deviceConfig.blobset = blobset;
+  }
+
+  @Test(timeout = TWO_MINUTES_MS)
+  @Feature(stage = ALPHA, bucket = udmi.schema.Bucket.OTA_UPDATES)
+  @Summary("Standard URL Delivery (Happy Path)")
+  public void software_update_url_success() {
+    String payload = "{\"version\":\"2.0\"}";
+    String url = generateSoftwareConfigDataUrl(payload);
+    String sha = sha256(payload);
+
+    setDeviceConfigSoftwareBlob(url, sha);
+
+    untilTrue("blobset phase is apply", () -> {
+      BlobBlobsetState blobBlobsetState = deviceState.blobset.blobs.get("_system_software_update");
+      return BlobPhase.APPLY.equals(blobBlobsetState.phase);
+    });
+
+    untilLogged(BLOBSET_DOWNLOAD_START, Level.NOTICE);
+    untilLogged(BLOBSET_DOWNLOAD_SUCCESS, Level.NOTICE);
+    untilLogged(BLOBSET_HASH_VERIFY, Level.NOTICE);
+    untilLogged(BLOBSET_APPLY_SUCCESS, Level.NOTICE);
+
+    untilTrue("blobset phase is final and status is null", () -> {
+      BlobBlobsetState blobBlobsetState = deviceState.blobset.blobs.get("_system_software_update");
+      return BlobPhase.FINAL.equals(blobBlobsetState.phase) && blobBlobsetState.status == null;
+    });
+
+    untilTrue("system.software reflects the new version", () -> {
+      return "2.0".equals(deviceState.system.software.get("version"));
+    });
+  }
+
+  @Test(timeout = TWO_MINUTES_MS)
+  @Feature(stage = ALPHA, bucket = udmi.schema.Bucket.OTA_UPDATES)
+  @Summary("URL Network / Reachability Failure")
+  public void software_update_url_network_failure() {
+    String url = "https://unreachable.example.com/update.bin";
+    String sha = sha256("bogus");
+
+    setDeviceConfigSoftwareBlob(url, sha);
+
+    untilTrue("blobset phase is apply", () -> {
+      BlobBlobsetState blobBlobsetState = deviceState.blobset.blobs.get("_system_software_update");
+      return blobBlobsetState != null && BlobPhase.APPLY.equals(blobBlobsetState.phase);
+    });
+
+    untilLogged(BLOBSET_DOWNLOAD_START, Level.NOTICE);
+
+    untilTrue("download failure logged", () -> {
+      boolean hasTimeout = getSystemLogs().stream()
+          .anyMatch(log -> BLOBSET_DOWNLOAD_TIMEOUT.equals(log.category) && log.level == Level.ERROR.value());
+      boolean hasForbidden = getSystemLogs().stream()
+          .anyMatch(log -> BLOBSET_DOWNLOAD_FORBIDDEN.equals(log.category) && log.level == Level.ERROR.value());
+      return hasTimeout || hasForbidden;
+    });
+
+    untilTrue("blobset phase is final and status is error", () -> {
+      BlobBlobsetState blobBlobsetState = deviceState.blobset.blobs.get("_system_software_update");
+      return blobBlobsetState != null && BlobPhase.FINAL.equals(blobBlobsetState.phase) && blobBlobsetState.status != null && blobBlobsetState.status.level == Level.ERROR.value();
+    });
+  }
+
+  private List<Entry> getSystemLogs() {
+    return ifNotNullGet(deviceState.system.status, status -> List.of(status), List.of());
+  }
+
+  @Test(timeout = TWO_MINUTES_MS)
+  @Feature(stage = ALPHA, bucket = udmi.schema.Bucket.OTA_UPDATES)
+  @Summary("URL Cryptographic Hash Mismatch")
+  public void software_update_url_hash_mismatch() {
+    String payload = "{\"version\":\"2.0\"}";
+    String url = generateSoftwareConfigDataUrl(payload);
+    String sha = sha256("wrong_hash");
+
+    setDeviceConfigSoftwareBlob(url, sha);
+
+    untilTrue("blobset phase is apply", () -> {
+      BlobBlobsetState blobBlobsetState = deviceState.blobset.blobs.get("_system_software_update");
+      return blobBlobsetState != null && BlobPhase.APPLY.equals(blobBlobsetState.phase);
+    });
+
+    untilLogged(BLOBSET_DOWNLOAD_START, Level.NOTICE);
+    untilLogged(BLOBSET_DOWNLOAD_SUCCESS, Level.NOTICE);
+    untilLogged(BLOBSET_HASH_VERIFY, Level.NOTICE);
+    untilLogged(BLOBSET_VERIFY_HASH_MISMATCH, Level.ERROR);
+
+    untilTrue("blobset phase is final and status is error", () -> {
+      BlobBlobsetState blobBlobsetState = deviceState.blobset.blobs.get("_system_software_update");
+      return blobBlobsetState != null && BlobPhase.FINAL.equals(blobBlobsetState.phase) && blobBlobsetState.status != null && blobBlobsetState.status.level == Level.ERROR.value();
+    });
+  }
+
+  @Test(timeout = TWO_MINUTES_MS)
+  @Feature(stage = ALPHA, bucket = udmi.schema.Bucket.OTA_UPDATES)
+  @Summary("Hardware / Dependency Mismatch")
+  public void software_update_hardware_mismatch() {
+    String payload = "{\"incompatible\":\"true\"}";
+    String url = generateSoftwareConfigDataUrl(payload);
+    String sha = sha256(payload);
+
+    setDeviceConfigSoftwareBlob(url, sha);
+
+    untilTrue("blobset phase is apply", () -> {
+      BlobBlobsetState blobBlobsetState = deviceState.blobset.blobs.get("_system_software_update");
+      return blobBlobsetState != null && BlobPhase.APPLY.equals(blobBlobsetState.phase);
+    });
+
+    untilLogged(BLOBSET_DOWNLOAD_START, Level.NOTICE);
+    untilLogged(BLOBSET_DOWNLOAD_SUCCESS, Level.NOTICE);
+    untilLogged(BLOBSET_HASH_VERIFY, Level.NOTICE);
+
+    untilTrue("hardware mismatch or dependency conflict logged", () -> {
+      boolean hasHardwareMismatch = getSystemLogs().stream()
+          .anyMatch(log -> BLOBSET_VERIFY_HARDWARE_MISMATCH.equals(log.category) && log.level == Level.ERROR.value());
+      boolean hasSoftwareConflict = getSystemLogs().stream()
+          .anyMatch(log -> SYSTEM_SOFTWARE_DEPENDENCY_CONFLICT.equals(log.category) && log.level == Level.ERROR.value());
+      return hasHardwareMismatch || hasSoftwareConflict;
+    });
+
+    untilTrue("blobset phase is final and status is error", () -> {
+      BlobBlobsetState blobBlobsetState = deviceState.blobset.blobs.get("_system_software_update");
+      return blobBlobsetState != null && BlobPhase.FINAL.equals(blobBlobsetState.phase) && blobBlobsetState.status != null && blobBlobsetState.status.level == Level.ERROR.value();
+    });
+  }
+
+  @Test(timeout = TWO_MINUTES_MS)
+  @Feature(stage = ALPHA, bucket = udmi.schema.Bucket.OTA_UPDATES)
+  @Summary("Inline Data Delivery (Happy Path)")
+  public void software_update_data_success() {
+    String payload = "{\"version\":\"3.0\"}";
+    String url = generateSoftwareConfigDataUrl(payload);
+    String sha = sha256(payload);
+
+    setDeviceConfigSoftwareBlob(url, sha);
+
+    untilTrue("blobset phase is apply", () -> {
+      BlobBlobsetState blobBlobsetState = deviceState.blobset.blobs.get("_system_software_update");
+      return BlobPhase.APPLY.equals(blobBlobsetState.phase);
+    });
+
+    untilLogged(BLOBSET_HASH_VERIFY, Level.NOTICE);
+    untilLogged(BLOBSET_APPLY_SUCCESS, Level.NOTICE);
+
+    untilTrue("blobset phase is final and status is null", () -> {
+      BlobBlobsetState blobBlobsetState = deviceState.blobset.blobs.get("_system_software_update");
+      return BlobPhase.FINAL.equals(blobBlobsetState.phase) && blobBlobsetState.status == null;
+    });
+
+    untilTrue("system.software reflects the new version", () -> {
+      return "3.0".equals(deviceState.system.software.get("version"));
+    });
+  }
+
+  @Test(timeout = TWO_MINUTES_MS)
+  @Feature(stage = ALPHA, bucket = udmi.schema.Bucket.OTA_UPDATES)
+  @Summary("Inline Data Cryptographic Mismatch")
+  public void software_update_data_hash_mismatch() {
+    String payload = "{\"version\":\"3.0\"}";
+    String url = generateSoftwareConfigDataUrl(payload);
+    String sha = sha256("wrong_hash");
+
+    setDeviceConfigSoftwareBlob(url, sha);
+
+    untilTrue("blobset phase is apply", () -> {
+      BlobBlobsetState blobBlobsetState = deviceState.blobset.blobs.get("_system_software_update");
+      return BlobPhase.APPLY.equals(blobBlobsetState.phase);
+    });
+
+    untilLogged(BLOBSET_HASH_VERIFY, Level.NOTICE);
+    untilLogged(BLOBSET_VERIFY_HASH_MISMATCH, Level.ERROR);
+
+    untilTrue("blobset phase is final and status is error", () -> {
+      BlobBlobsetState blobBlobsetState = deviceState.blobset.blobs.get("_system_software_update");
+      return BlobPhase.FINAL.equals(blobBlobsetState.phase) && blobBlobsetState.status != null && blobBlobsetState.status.level == Level.ERROR.value();
+    });
+  }
+
+  @Test(timeout = TWO_MINUTES_MS)
+  @Feature(stage = ALPHA, bucket = udmi.schema.Bucket.OTA_UPDATES)
+  @Summary("Malformed Data Encoding")
+  public void software_update_data_malformed_encoding() {
+    String payload = "{\"version\":\"3.0\"}";
+    String url = format(DATA_URL_FORMAT, JSON_MIME_TYPE, "invalid_base64!");
+    String sha = sha256(payload);
+
+    setDeviceConfigSoftwareBlob(url, sha);
+
+    untilTrue("blobset phase is apply", () -> {
+      BlobBlobsetState blobBlobsetState = deviceState.blobset.blobs.get("_system_software_update");
+      return BlobPhase.APPLY.equals(blobBlobsetState.phase);
+    });
+
+    untilLogged(udmi.schema.Category.BLOBSET_PARSE_ERROR, Level.ERROR);
+
+    untilTrue("blobset phase is final and status is error", () -> {
+      BlobBlobsetState blobBlobsetState = deviceState.blobset.blobs.get("_system_software_update");
+      return BlobPhase.FINAL.equals(blobBlobsetState.phase) && blobBlobsetState.status != null && blobBlobsetState.status.level == Level.ERROR.value();
+    });
+  }
+
+  @Test(timeout = TWO_MINUTES_MS)
+  @Feature(stage = ALPHA, bucket = udmi.schema.Bucket.OTA_UPDATES)
+  @Summary("Strict Phase State Transitions")
+  public void software_update_strict_transitions() {
+    String payload = "{\"version\":\"4.0\"}";
+    String url = generateSoftwareConfigDataUrl(payload);
+    String sha = sha256(payload);
+
+    setDeviceConfigSoftwareBlob(url, sha);
+
+    // We must see an apply phase before we see a final phase.
+    untilTrue("blobset phase is apply", () -> {
+      BlobBlobsetState blobBlobsetState = deviceState.blobset.blobs.get("_system_software_update");
+      if (blobBlobsetState != null && BlobPhase.FINAL.equals(blobBlobsetState.phase)) {
+        org.junit.Assert.fail("Saw FINAL phase before APPLY phase");
+      }
+      return blobBlobsetState != null && BlobPhase.APPLY.equals(blobBlobsetState.phase);
+    });
+
+    untilTrue("blobset phase is final", () -> {
+      BlobBlobsetState blobBlobsetState = deviceState.blobset.blobs.get("_system_software_update");
+      return blobBlobsetState != null && BlobPhase.FINAL.equals(blobBlobsetState.phase);
+    });
+  }
+
+  @Test(timeout = TWO_MINUTES_MS)
+  @Feature(stage = ALPHA, bucket = udmi.schema.Bucket.OTA_UPDATES)
+  @Summary("Graceful Rollback Recognition")
+  public void software_update_graceful_rollback() {
+    String payload = "{\"version\":\"5.0\"}";
+    String url = generateSoftwareConfigDataUrl(payload);
+    String sha = sha256(payload);
+
+    setDeviceConfigSoftwareBlob(url, sha);
+
+    untilTrue("blobset phase is apply", () -> {
+      BlobBlobsetState blobBlobsetState = deviceState.blobset.blobs.get("_system_software_update");
+      return BlobPhase.APPLY.equals(blobBlobsetState.phase);
+    });
+
+    // Abort the update
+    deviceConfig.blobset.blobs.remove("_system_software_update");
+
+    untilLogged(udmi.schema.Category.BLOBSET_APPLY_ABORT, Level.NOTICE);
+
+    untilTrue("blobset block is omitted", () -> {
+      return deviceState.blobset == null || deviceState.blobset.blobs == null || deviceState.blobset.blobs.get("_system_software_update") == null;
+    });
   }
 
   @Test(timeout = THREE_MINUTES_MS)
