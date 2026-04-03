@@ -85,6 +85,7 @@ comms
 config
 coreutils
 cron
+cryptographic
 datapoint
 designator
 deterministically
@@ -124,6 +125,7 @@ json
 keygen
 kube
 kubectl
+lifecycle
 localhost
 localnet
 logentry
@@ -138,8 +140,10 @@ niversal
 nmap
 npm
 nterface
+observability
 onboarding
 orchestrator
+ota
 pagent
 parameterization
 parsers
@@ -155,6 +159,7 @@ proxied
 proxying
 pubber
 pubsub
+reachability
 reconciler
 repo
 runDev
