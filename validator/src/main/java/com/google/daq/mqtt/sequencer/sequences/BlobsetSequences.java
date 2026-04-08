@@ -60,6 +60,7 @@ public class BlobsetSequences extends SequenceBase {
   public static final String JSON_MIME_TYPE = "application/json";
   public static final String DATA_URL_FORMAT = "data:%s;base64,%s";
   public static final String IOT_BLOB_KEY = SystemBlobsets.IOT_ENDPOINT_CONFIG.value();
+  public static final String SOFTWARE_UPDATE_KEY = "_firmware_update";
   private static final String IOT_CORE_CLIENT_ID_FMT =
       "projects/%s/locations/%s/registries/%s/devices/%s";
   private static final String LOCAL_CLIENT_ID_FMT = "/r/%s/d/%s";
@@ -140,6 +141,32 @@ public class BlobsetSequences extends SequenceBase {
     untilTrue("blobset entry config status is error", () -> {
       BlobBlobsetState blobBlobsetState = deviceState.blobset.blobs.get(IOT_BLOB_KEY);
       BlobBlobsetConfig blobBlobsetConfig = deviceConfig.blobset.blobs.get(IOT_BLOB_KEY);
+      return blobBlobsetConfig.generation.equals(blobBlobsetState.generation)
+          && blobBlobsetState.phase.equals(BlobPhase.FINAL)
+          && blobBlobsetState.status.category.equals(BLOBSET_BLOB_APPLY)
+          && blobBlobsetState.status.level == Level.ERROR.value();
+    });
+  }
+
+  private void setDeviceConfigSoftwareUpdateBlob(String payload, boolean badHash) {
+    BlobBlobsetConfig config = new BlobBlobsetConfig();
+    config.url = SemanticValue.describe("endpoint data", generateEndpointConfigDataUrl(payload));
+    config.phase = BlobPhase.APPLY;
+    config.generation = SemanticDate.describe("blob generation", new Date());
+    String description = badHash ? "invalid blob data hash" : "blob data hash";
+    config.sha256 = SemanticValue.describe(description,
+        badHash ? sha256(payload + "X") : sha256(payload));
+    BlobsetConfig blobset = new BlobsetConfig();
+    blobset.blobs = new HashMap<>();
+    blobset.blobs.put(SOFTWARE_UPDATE_KEY, config);
+    deviceConfig.blobset = blobset;
+    debug("software update blobset config", stringify(deviceConfig.blobset));
+  }
+
+  private void untilSoftwareUpdateErrorReported() {
+    untilTrue("blobset entry config status is error", () -> {
+      BlobBlobsetState blobBlobsetState = deviceState.blobset.blobs.get(SOFTWARE_UPDATE_KEY);
+      BlobBlobsetConfig blobBlobsetConfig = deviceConfig.blobset.blobs.get(SOFTWARE_UPDATE_KEY);
       return blobBlobsetConfig.generation.equals(blobBlobsetState.generation)
           && blobBlobsetState.phase.equals(BlobPhase.FINAL)
           && blobBlobsetState.status.category.equals(BLOBSET_BLOB_APPLY)
@@ -386,5 +413,74 @@ public class BlobsetSequences extends SequenceBase {
 
     untilTrue("last_start is newer than previous last_start",
         () -> deviceConfig.system.operation.last_start.after(last_start));
+  }
+
+  @Test(timeout = TWO_MINUTES_MS)
+  @Feature(stage = PREVIEW, bucket = ENDPOINT_CONFIG)
+  public void software_update_protocol_complete() {
+    setDeviceConfigSoftwareUpdateBlob("{\"firmware\":\"v1.2\"}", false);
+    updateConfig("software update complete");
+    untilTrue("blobset phase is apply", () -> {
+      BlobBlobsetState blobBlobsetState = deviceState.blobset.blobs.get(SOFTWARE_UPDATE_KEY);
+      return BlobPhase.APPLY.equals(blobBlobsetState.phase);
+    });
+
+    // Simulate checking a restart using state updating mechanics (avoiding check_system_restart directly as it requires setup)
+    Date last_config = deviceState.system.last_config;
+    try {
+      untilTrue("last_config is newer than previous last_config before abort",
+          () -> deviceState.system.last_config.after(last_config));
+    } catch (AbortMessageLoop e) {
+      info("Squelching aborted message loop: " + e.getMessage());
+    }
+
+    untilTrue("blobset phase is final", () -> {
+      BlobBlobsetState blobBlobsetState = deviceState.blobset.blobs.get(SOFTWARE_UPDATE_KEY);
+      return BlobPhase.FINAL.equals(blobBlobsetState.phase) && blobBlobsetState.status == null;
+    });
+    checkThat("software matches new version", () ->
+        "v1.2".equals(deviceState.system.software.get("firmware")));
+  }
+
+  @Test(timeout = TWO_MINUTES_MS)
+  @Feature(stage = PREVIEW, bucket = ENDPOINT_CONFIG)
+  public void software_update_hash_mismatch() {
+    setDeviceConfigSoftwareUpdateBlob("{\"firmware\":\"v1.2\"}", true);
+    updateConfig("software update hash mismatch");
+    untilSoftwareUpdateErrorReported();
+  }
+
+  @Test(timeout = TWO_MINUTES_MS)
+  @Feature(stage = PREVIEW, bucket = ENDPOINT_CONFIG)
+  public void software_update_invalid_url() {
+    setDeviceConfigSoftwareUpdateBlob("{\"firmware\":\"v1.2\"}", false);
+    deviceConfig.blobset.blobs.get(SOFTWARE_UPDATE_KEY).url = SemanticValue.describe(
+        "endpoint data", "https://unreachable.invalid.url/");
+    updateConfig("software update invalid url");
+    untilSoftwareUpdateErrorReported();
+  }
+
+  @Test(timeout = TWO_MINUTES_MS)
+  @Feature(stage = PREVIEW, bucket = ENDPOINT_CONFIG)
+  public void software_update_hardware_mismatch() {
+    setDeviceConfigSoftwareUpdateBlob("{\"hardware\":\"delta\"}", false);
+    updateConfig("software update hardware mismatch");
+    untilSoftwareUpdateErrorReported();
+  }
+
+  @Test(timeout = TWO_MINUTES_MS)
+  @Feature(stage = PREVIEW, bucket = ENDPOINT_CONFIG)
+  public void software_update_corrupted_payload() {
+    setDeviceConfigSoftwareUpdateBlob("{\"corrupted\":true", false);
+    updateConfig("software update corrupted payload");
+    untilSoftwareUpdateErrorReported();
+  }
+
+  @Test(timeout = TWO_MINUTES_MS)
+  @Feature(stage = PREVIEW, bucket = ENDPOINT_CONFIG)
+  public void software_update_dependency_mismatch() {
+    setDeviceConfigSoftwareUpdateBlob("{\"dependency\":\"missing\"}", false);
+    updateConfig("software update dependency mismatch");
+    untilSoftwareUpdateErrorReported();
   }
 }
