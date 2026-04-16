@@ -55,5 +55,3 @@ class PubberOptions(DataModel):
     fastWrite: Optional[bool] = None
     delayWrite: Optional[bool] = None
     softwareFirmwareValue: Optional[str] = None
-    hardwareIncompatible: Optional[bool] = None
-    softwareDependencyMismatch: Optional[bool] = None

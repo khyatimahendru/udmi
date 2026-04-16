@@ -118,7 +118,7 @@ public class PubberPublisherHost extends PubberManager implements PublisherHost 
         config.deviceId, config.serialNo, config.macAddr,
         config.gatewayId, optionsString(config.options)));
 
-    initModuleForOtaUpdates();
+    initModuleForBlobUpdates();
     markStateDirty();
   }
 
@@ -132,10 +132,9 @@ public class PubberPublisherHost extends PubberManager implements PublisherHost 
     }
   }
 
-  private void initModuleForOtaUpdates() {
+  private void initModuleForBlobUpdates() {
     String dynamicDir = "out/pubber_module_repo_" + config.serialNo;
-    moduleEmulator = new MockGitModuleEmulator(dynamicDir, config.options,
-        this::info, this::notice, this::error);
+    moduleEmulator = new MockGitModuleEmulator(dynamicDir, this::info, this::notice, this::error);
     moduleEmulator.initialize();
     updateModuleVersionInState();
   }

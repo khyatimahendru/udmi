@@ -1,10 +1,10 @@
 package daq.pubber.impl.host;
 
-import static com.google.udmi.util.GeneralUtils.isTrue;
 import static com.google.udmi.util.JsonUtil.safeSleep;
 import static java.lang.String.format;
 
 import java.io.File;
+import java.util.Map;
 import java.util.function.Consumer;
 import org.apache.commons.io.FileUtils;
 import org.eclipse.jgit.api.Git;
@@ -12,33 +12,33 @@ import org.eclipse.jgit.lib.ObjectId;
 import org.eclipse.jgit.lib.Repository;
 import udmi.lib.base.UdmiException.BlobDependencyMismatchException;
 import udmi.lib.base.UdmiException.BlobIncompatibleException;
-import udmi.schema.PubberOptions;
 
 /**
  * Mock emulator for Git modules used in OTA updates.
  */
 public class MockGitModuleEmulator {
 
+  private static final String VERSION = "version";
+  private static final String SIMULATE_BEHAVIOR = "simulate";
+  private static final String HARDWARE_INCOMPATIBLE = "hardwareIncompatible";
+  private static final String DEPENDENCY_MISMATCH = "softwareDependencyMismatch";
+
   private final File repoDir;
   private final Consumer<String> infoLogger;
   private final Consumer<String> noticeLogger;
   private final Consumer<String> errorLogger;
-  private final PubberOptions options;
   private boolean inMemoryFallback = false;
 
   /**
    * Creates a new instance of MockGitModuleEmulator.
    *
    * @param softwareModuleDir The directory for the software module.
-   * @param options           The pubber options.
    * @param infoLogger        Logger for info messages.
    * @param noticeLogger      Logger for notice messages.
    * @param errorLogger       Logger for error messages.
    */
-  public MockGitModuleEmulator(String softwareModuleDir, PubberOptions options,
-      Consumer<String> infoLogger, Consumer<String> noticeLogger, Consumer<String> errorLogger) {
+  public MockGitModuleEmulator(String softwareModuleDir, Consumer<String> infoLogger, Consumer<String> noticeLogger, Consumer<String> errorLogger) {
     this.repoDir = new File(softwareModuleDir);
-    this.options = options;
     this.infoLogger = infoLogger;
     this.noticeLogger = noticeLogger;
     this.errorLogger = errorLogger;
@@ -88,16 +88,25 @@ public class MockGitModuleEmulator {
    * @param payload The update payload (e.g., commit hash).
    */
   public void updateTo(String payload) {
-    if (isTrue(options.hardwareIncompatible)) {
+    infoLogger.accept(format("Decoded payload: %s", payload));
+
+    Map<String, Object> payloadMap = com.google.udmi.util.JsonUtil.asMap(payload);
+    String version = (String) payloadMap.get(VERSION);
+    String simulateBehavior = (String) payloadMap.get(SIMULATE_BEHAVIOR);
+
+    if (HARDWARE_INCOMPATIBLE.equals(simulateBehavior)) {
       safeSleep(2000);
       throw new BlobIncompatibleException("Hardware incompatible");
     }
-    if (isTrue(options.softwareDependencyMismatch)) {
+    if (DEPENDENCY_MISMATCH.equals(simulateBehavior)) {
       safeSleep(2000);
       throw new BlobDependencyMismatchException("Software dependencies mismatch");
     }
 
-    String commitHash = payload.trim();
+    if (version == null) {
+      throw new RuntimeException("Missing version in JSON payload");
+    }
+    String commitHash = version.trim();
     infoLogger.accept(format("Triggering mock OTA update to commit %s", commitHash));
 
     if (inMemoryFallback) {
