@@ -95,6 +95,12 @@ class Category(Enum):
     # Blob fetch failed
     BLOBSET_BLOB_FETCH_FAILURE = ("blobset.blob.fetch.failure", Level.ERROR)
 
+    # Verifying a blob
+    BLOBSET_BLOB_VERIFY = ("blobset.blob.verify", Level.DEBUG)
+
+    # Blob verification successful
+    BLOBSET_BLOB_VERIFY_SUCCESS = ("blobset.blob.verify.success", Level.INFO)
+
     # Error parsing blob
     BLOBSET_BLOB_VERIFY_PARSE = ("blobset.blob.verify.parse", Level.ERROR)
 

@@ -183,6 +183,18 @@ public class Category {
     public static final int BLOBSET_BLOB_FETCH_FAILURE_VALUE = ERROR.value();
     static { LEVEL.put(BLOBSET_BLOB_FETCH_FAILURE, ERROR); }
 
+    // Verifying a blob
+    public static final String BLOBSET_BLOB_VERIFY = "blobset.blob.verify";
+    public static final Level BLOBSET_BLOB_VERIFY_LEVEL = DEBUG;
+    public static final int BLOBSET_BLOB_VERIFY_VALUE = DEBUG.value();
+    static { LEVEL.put(BLOBSET_BLOB_VERIFY, DEBUG); }
+
+    // Blob verification successful
+    public static final String BLOBSET_BLOB_VERIFY_SUCCESS = "blobset.blob.verify.success";
+    public static final Level BLOBSET_BLOB_VERIFY_SUCCESS_LEVEL = INFO;
+    public static final int BLOBSET_BLOB_VERIFY_SUCCESS_VALUE = INFO.value();
+    static { LEVEL.put(BLOBSET_BLOB_VERIFY_SUCCESS, INFO); }
+
     // Error parsing blob
     public static final String BLOBSET_BLOB_VERIFY_PARSE = "blobset.blob.verify.parse";
     public static final Level BLOBSET_BLOB_VERIFY_PARSE_LEVEL = ERROR;

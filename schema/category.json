@@ -32,6 +32,8 @@
     { "pattern": "^blobset\\.blob\\.fetch$" },
     { "pattern": "^blobset\\.blob\\.fetch\\.success$" },
     { "pattern": "^blobset\\.blob\\.fetch\\.failure$" },
+    { "pattern": "^blobset\\.blob\\.verify$" },
+    { "pattern": "^blobset\\.blob\\.verify\\.success$" },
     { "pattern": "^blobset\\.blob\\.verify\\.parse$" },
     { "pattern": "^blobset\\.blob\\.verify\\.hash$" },
     { "pattern": "^blobset\\.blob\\.verify\\.incompatible$" },

@@ -60,7 +60,8 @@ could be used with a **WARNING** level for a warning case during normal operatio
     * _fetch_: (**DEBUG**) Fetching a blob update
       * _success_: (**INFO**) Successfully fetched a blob
       * _failure_: (**ERROR**) Blob fetch failed
-    * _verify_: Verifying a blob
+    * _verify_: (**DEBUG**) Verifying a blob
+      * _success_: (**INFO**) Blob verification successful
       * _parse_: (**ERROR**) Error parsing blob
       * _hash_: (**ERROR**) Blob hash mismatch
       * _incompatible_: (**ERROR**) Blob is incompatible with the device
