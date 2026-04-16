@@ -12,20 +12,25 @@ def cli():
 
 @cli.command()
 @click.option('--local-logs', type=click.Path(exists=True, file_okay=False, dir_okay=True), help='Path to local log directory.')
+@click.option('--archive', type=click.Path(exists=True, file_okay=True, dir_okay=False), help='Path to UDMI support bundle archive (.tgz).')
 @click.option('--ci', is_flag=True, help='Run in CI mode (fetches logs from CI environment variables).')
 @click.option('--api-key', envvar='GEMINI_API_KEY', required=True, help='Gemini API key for analysis.')
-def analyze(local_logs, ci, api_key):
+def analyze(local_logs, archive, ci, api_key):
     """Analyze test failures and report root cause."""
-    if not local_logs and not ci:
-        click.echo("Error: Must provide either --local-logs or --ci")
+    if not local_logs and not archive and not ci:
+        click.echo("Error: Must provide either --local-logs, --archive, or --ci")
         return
 
     click.echo("Starting UDMI Sentinel...")
 
     # Step 1: Ingestion
     click.echo("Ingesting logs...")
-    # Prefer local_logs if provided, otherwise CI
-    raw_logs = ingest_logs(local_dir=local_logs if local_logs else None, is_ci=ci if not local_logs else False)
+    # Prefer archive over local_logs over CI
+    raw_logs = ingest_logs(
+        local_dir=local_logs if local_logs else None,
+        archive_path=archive if archive else None,
+        is_ci=ci if (not local_logs and not archive) else False
+    )
 
     # Step 2: Historical Lookup
     # A generic test suite run for now
