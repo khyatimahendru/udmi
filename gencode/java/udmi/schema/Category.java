@@ -173,9 +173,9 @@ public class Category {
 
     // Successfully fetched a blob
     public static final String BLOBSET_BLOB_FETCH_SUCCESS = "blobset.blob.fetch.success";
-    public static final Level BLOBSET_BLOB_FETCH_SUCCESS_LEVEL = DEBUG;
-    public static final int BLOBSET_BLOB_FETCH_SUCCESS_VALUE = DEBUG.value();
-    static { LEVEL.put(BLOBSET_BLOB_FETCH_SUCCESS, DEBUG); }
+    public static final Level BLOBSET_BLOB_FETCH_SUCCESS_LEVEL = INFO;
+    public static final int BLOBSET_BLOB_FETCH_SUCCESS_VALUE = INFO.value();
+    static { LEVEL.put(BLOBSET_BLOB_FETCH_SUCCESS, INFO); }
 
     // Blob fetch failed
     public static final String BLOBSET_BLOB_FETCH_FAILURE = "blobset.blob.fetch.failure";

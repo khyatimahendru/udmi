@@ -90,7 +90,7 @@ class Category(Enum):
     BLOBSET_BLOB_FETCH = ("blobset.blob.fetch", Level.DEBUG)
 
     # Successfully fetched a blob
-    BLOBSET_BLOB_FETCH_SUCCESS = ("blobset.blob.fetch.success", Level.DEBUG)
+    BLOBSET_BLOB_FETCH_SUCCESS = ("blobset.blob.fetch.success", Level.INFO)
 
     # Blob fetch failed
     BLOBSET_BLOB_FETCH_FAILURE = ("blobset.blob.fetch.failure", Level.ERROR)
