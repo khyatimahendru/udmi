@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "udmi-sentinel"
+version = "0.1.0"
+description = "AI-powered triage and diagnostic tool for UDMI"
+authors = [
+    { name="UDMI Team" }
+]
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "click>=8.0.0",
+    "google-genai>=0.2.0",
+]
+
+[project.scripts]
+sentinel = "sentinel.main:cli"
+
+[tool.setuptools.packages.find]
+where = ["src"]
