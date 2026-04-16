@@ -185,7 +185,11 @@ public interface PublisherHost extends ManagerHost {
     // TODO: Refactor to get any blob meta parameters.
     BlobBlobsetConfig blobBlobsetConfig = getConfigBlob(blobName);
     if (blobBlobsetConfig != null && FINAL.equals(blobBlobsetConfig.phase)) {
-      return acquireBlobData(blobBlobsetConfig.url, blobBlobsetConfig.sha256);
+      logEvent(Category.BLOBSET_BLOB_VERIFY, "Verifying blob data for " + blobName);
+      String payload = acquireBlobData(blobBlobsetConfig.url, blobBlobsetConfig.sha256);
+      logEvent(Category.BLOBSET_BLOB_VERIFY_SUCCESS,
+          "Successfully verified blob data for " + blobName);
+      return payload;
     }
     return null;
   }

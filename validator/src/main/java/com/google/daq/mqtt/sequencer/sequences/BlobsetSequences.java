@@ -20,10 +20,12 @@ import static udmi.schema.Bucket.SYSTEM_MODE;
 import static udmi.schema.Bucket.SYSTEM_SOFTWARE_UPDATES;
 import static udmi.schema.Category.BLOBSET_BLOB_APPLY;
 import static udmi.schema.Category.BLOBSET_BLOB_FETCH_FAILURE;
+import static udmi.schema.Category.BLOBSET_BLOB_VERIFY;
 import static udmi.schema.Category.BLOBSET_BLOB_VERIFY_DEPENDENCY;
 import static udmi.schema.Category.BLOBSET_BLOB_VERIFY_HASH;
 import static udmi.schema.Category.BLOBSET_BLOB_VERIFY_INCOMPATIBLE;
 import static udmi.schema.Category.BLOBSET_BLOB_VERIFY_PARSE;
+import static udmi.schema.Category.BLOBSET_BLOB_VERIFY_SUCCESS;
 import static udmi.schema.FeatureDiscovery.FeatureStage.PREVIEW;
 
 import com.google.daq.mqtt.sequencer.Feature;
@@ -424,6 +426,12 @@ public class BlobsetSequences extends SequenceBase {
 
     String blobName = triggerBlobUpdate(target);
 
+    waitForLog(BLOBSET_BLOB_VERIFY, Level.DEBUG);
+
+    if (expectSuccessfulUpdate) {
+      waitForLog(BLOBSET_BLOB_VERIFY_SUCCESS, Level.INFO);
+    }
+
     if (expectedCategory != null) {
       waitForLog(expectedCategory, expectedLevel);
     }
@@ -448,8 +456,10 @@ public class BlobsetSequences extends SequenceBase {
 
     String blobName = triggerBlobUpdate(target);
 
+    waitForLog(BLOBSET_BLOB_VERIFY, Level.DEBUG);
     BlobBlobsetState finalState = deviceState.blobset.blobs.get(blobName);
     if (finalState.status == null) {
+      waitForLog(BLOBSET_BLOB_VERIFY_SUCCESS, Level.INFO);
       waitForLog(BLOBSET_BLOB_APPLY, Level.NOTICE);
       checkThat(blobName + " software version reflects update", () -> {
         String softwareVersion = deviceState.system.software.get(blobName);
