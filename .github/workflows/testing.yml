@@ -363,6 +363,14 @@ jobs:
       - name: Itemized validation
         if: ${{ !cancelled() }}
         run: bin/test_itemcheck
+      - name: Run UDMI Sentinel Analysis on Failure
+        if: failure()
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          python3 -m pip install ./sentinel
+          # Try to cache/restore DB if possible in CI, for now local persistence
+          python3 -m sentinel.main analyze --ci
 
   discovery:
     name: Discovery Tests
