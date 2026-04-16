@@ -1,17 +1,18 @@
 import os
 import json
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 
 def analyze_failure(timeline, history, api_key):
     """
     Sends the chronologically synchronized timeline and test history to Gemini for analysis.
     Returns a dictionary with the analysis results.
     """
-    genai.configure(api_key=api_key)
+    client = genai.Client(api_key=api_key)
 
     # We use a relatively stable model, gemini-1.5-pro, suitable for large contexts.
     # If not available or needed, we can fall back to gemini-1.5-flash.
-    model = genai.GenerativeModel('gemini-1.5-pro')
+    model_name = 'gemini-1.5-pro'
 
     # Truncate timeline if it's too massive, just to be safe.
     # Take the last 5000 lines, as failures usually happen near the end.
@@ -51,7 +52,10 @@ def analyze_failure(timeline, history, api_key):
     """
 
     try:
-        response = model.generate_content(prompt)
+        response = client.models.generate_content(
+            model=model_name,
+            contents=prompt,
+        )
         text = response.text.strip()
         # Clean up in case Gemini added markdown despite instructions
         if text.startswith("```json"):

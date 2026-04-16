@@ -74,3 +74,5 @@ wordlist.dic
 
 # Test output directories
 tests/dbo/basic/test_site_model/
+sentinel/build/
+sentinel/src/*.egg-info/
