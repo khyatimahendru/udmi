@@ -159,71 +159,95 @@ public class Category {
     public static final int MAPPING_DEVICE_APPLY_VALUE = INFO.value();
     static { LEVEL.put(MAPPING_DEVICE_APPLY, INFO); }
 
+    // Conditions specific to an individual blob
+    public static final String BLOBSET_BLOB = "blobset.blob";
+    public static final Level BLOBSET_BLOB_LEVEL = INFO;
+    public static final int BLOBSET_BLOB_VALUE = INFO.value();
+    static { LEVEL.put(BLOBSET_BLOB, INFO); }
+
     // About receiving a blob update
     public static final String BLOBSET_BLOB_RECEIVE = "blobset.blob.receive";
     public static final Level BLOBSET_BLOB_RECEIVE_LEVEL = DEBUG;
     public static final int BLOBSET_BLOB_RECEIVE_VALUE = DEBUG.value();
     static { LEVEL.put(BLOBSET_BLOB_RECEIVE, DEBUG); }
 
-    // Fetching a blob update
-    public static final String BLOBSET_BLOB_FETCH = "blobset.blob.fetch";
-    public static final Level BLOBSET_BLOB_FETCH_LEVEL = DEBUG;
-    public static final int BLOBSET_BLOB_FETCH_VALUE = DEBUG.value();
-    static { LEVEL.put(BLOBSET_BLOB_FETCH, DEBUG); }
+    // Extracting a blob payload
+    public static final String BLOBSET_BLOB_EXTRACT = "blobset.blob.extract";
+    public static final Level BLOBSET_BLOB_EXTRACT_LEVEL = DEBUG;
+    public static final int BLOBSET_BLOB_EXTRACT_VALUE = DEBUG.value();
+    static { LEVEL.put(BLOBSET_BLOB_EXTRACT, DEBUG); }
 
-    // Successfully fetched a blob
-    public static final String BLOBSET_BLOB_FETCH_SUCCESS = "blobset.blob.fetch.success";
-    public static final Level BLOBSET_BLOB_FETCH_SUCCESS_LEVEL = INFO;
-    public static final int BLOBSET_BLOB_FETCH_SUCCESS_VALUE = INFO.value();
-    static { LEVEL.put(BLOBSET_BLOB_FETCH_SUCCESS, INFO); }
+    // Insufficient storage to download or unpack blob
+    public static final String BLOBSET_BLOB_EXTRACT_OVERSIZE = "blobset.blob.extract.oversize";
+    public static final Level BLOBSET_BLOB_EXTRACT_OVERSIZE_LEVEL = ERROR;
+    public static final int BLOBSET_BLOB_EXTRACT_OVERSIZE_VALUE = ERROR.value();
+    static { LEVEL.put(BLOBSET_BLOB_EXTRACT_OVERSIZE, ERROR); }
 
-    // Blob fetch failed
-    public static final String BLOBSET_BLOB_FETCH_FAILURE = "blobset.blob.fetch.failure";
-    public static final Level BLOBSET_BLOB_FETCH_FAILURE_LEVEL = ERROR;
-    public static final int BLOBSET_BLOB_FETCH_FAILURE_VALUE = ERROR.value();
-    static { LEVEL.put(BLOBSET_BLOB_FETCH_FAILURE, ERROR); }
+    // Blob extraction failed
+    public static final String BLOBSET_BLOB_EXTRACT_FAILURE = "blobset.blob.extract.failure";
+    public static final Level BLOBSET_BLOB_EXTRACT_FAILURE_LEVEL = ERROR;
+    public static final int BLOBSET_BLOB_EXTRACT_FAILURE_VALUE = ERROR.value();
+    static { LEVEL.put(BLOBSET_BLOB_EXTRACT_FAILURE, ERROR); }
 
-    // Verifying a blob
-    public static final String BLOBSET_BLOB_VERIFY = "blobset.blob.verify";
-    public static final Level BLOBSET_BLOB_VERIFY_LEVEL = DEBUG;
-    public static final int BLOBSET_BLOB_VERIFY_VALUE = DEBUG.value();
-    static { LEVEL.put(BLOBSET_BLOB_VERIFY, DEBUG); }
+    // Parsing and verifying a blob
+    public static final String BLOBSET_BLOB_PARSE = "blobset.blob.parse";
+    public static final Level BLOBSET_BLOB_PARSE_LEVEL = DEBUG;
+    public static final int BLOBSET_BLOB_PARSE_VALUE = DEBUG.value();
+    static { LEVEL.put(BLOBSET_BLOB_PARSE, DEBUG); }
 
-    // Blob verification successful
-    public static final String BLOBSET_BLOB_VERIFY_SUCCESS = "blobset.blob.verify.success";
-    public static final Level BLOBSET_BLOB_VERIFY_SUCCESS_LEVEL = INFO;
-    public static final int BLOBSET_BLOB_VERIFY_SUCCESS_VALUE = INFO.value();
-    static { LEVEL.put(BLOBSET_BLOB_VERIFY_SUCCESS, INFO); }
+    // Data integrity check failed
+    public static final String BLOBSET_BLOB_PARSE_CORRUPT = "blobset.blob.parse.corrupt";
+    public static final Level BLOBSET_BLOB_PARSE_CORRUPT_LEVEL = ERROR;
+    public static final int BLOBSET_BLOB_PARSE_CORRUPT_VALUE = ERROR.value();
+    static { LEVEL.put(BLOBSET_BLOB_PARSE_CORRUPT, ERROR); }
 
-    // Error parsing blob
-    public static final String BLOBSET_BLOB_VERIFY_PARSE = "blobset.blob.verify.parse";
-    public static final Level BLOBSET_BLOB_VERIFY_PARSE_LEVEL = ERROR;
-    public static final int BLOBSET_BLOB_VERIFY_PARSE_VALUE = ERROR.value();
-    static { LEVEL.put(BLOBSET_BLOB_VERIFY_PARSE, ERROR); }
+    // The data is invalid in some way
+    public static final String BLOBSET_BLOB_PARSE_INVALID = "blobset.blob.parse.invalid";
+    public static final Level BLOBSET_BLOB_PARSE_INVALID_LEVEL = ERROR;
+    public static final int BLOBSET_BLOB_PARSE_INVALID_VALUE = ERROR.value();
+    static { LEVEL.put(BLOBSET_BLOB_PARSE_INVALID, ERROR); }
 
-    // Blob hash mismatch
-    public static final String BLOBSET_BLOB_VERIFY_HASH = "blobset.blob.verify.hash";
-    public static final Level BLOBSET_BLOB_VERIFY_HASH_LEVEL = ERROR;
-    public static final int BLOBSET_BLOB_VERIFY_HASH_VALUE = ERROR.value();
-    static { LEVEL.put(BLOBSET_BLOB_VERIFY_HASH, ERROR); }
-
-    // Blob is incompatible with the device
-    public static final String BLOBSET_BLOB_VERIFY_INCOMPATIBLE = "blobset.blob.verify.incompatible";
-    public static final Level BLOBSET_BLOB_VERIFY_INCOMPATIBLE_LEVEL = ERROR;
-    public static final int BLOBSET_BLOB_VERIFY_INCOMPATIBLE_VALUE = ERROR.value();
-    static { LEVEL.put(BLOBSET_BLOB_VERIFY_INCOMPATIBLE, ERROR); }
-
-    // Expected software dependencies not found
-    public static final String BLOBSET_BLOB_VERIFY_DEPENDENCY = "blobset.blob.verify.dependency";
-    public static final Level BLOBSET_BLOB_VERIFY_DEPENDENCY_LEVEL = ERROR;
-    public static final int BLOBSET_BLOB_VERIFY_DEPENDENCY_VALUE = ERROR.value();
-    static { LEVEL.put(BLOBSET_BLOB_VERIFY_DEPENDENCY, ERROR); }
+    // Blob is incompatible with the device for some reason
+    public static final String BLOBSET_BLOB_PARSE_INCOMPATIBLE = "blobset.blob.parse.incompatible";
+    public static final Level BLOBSET_BLOB_PARSE_INCOMPATIBLE_LEVEL = ERROR;
+    public static final int BLOBSET_BLOB_PARSE_INCOMPATIBLE_VALUE = ERROR.value();
+    static { LEVEL.put(BLOBSET_BLOB_PARSE_INCOMPATIBLE, ERROR); }
 
     // Applying a blob update
     public static final String BLOBSET_BLOB_APPLY = "blobset.blob.apply";
     public static final Level BLOBSET_BLOB_APPLY_LEVEL = NOTICE;
     public static final int BLOBSET_BLOB_APPLY_VALUE = NOTICE.value();
     static { LEVEL.put(BLOBSET_BLOB_APPLY, NOTICE); }
+
+    // Failed to install or execute
+    public static final String BLOBSET_BLOB_APPLY_FAILURE = "blobset.blob.apply.failure";
+    public static final Level BLOBSET_BLOB_APPLY_FAILURE_LEVEL = ERROR;
+    public static final int BLOBSET_BLOB_APPLY_FAILURE_VALUE = ERROR.value();
+    static { LEVEL.put(BLOBSET_BLOB_APPLY_FAILURE, ERROR); }
+
+    // Dependencies required to apply are missing
+    public static final String BLOBSET_BLOB_APPLY_DEPENDENCY = "blobset.blob.apply.dependency";
+    public static final Level BLOBSET_BLOB_APPLY_DEPENDENCY_LEVEL = ERROR;
+    public static final int BLOBSET_BLOB_APPLY_DEPENDENCY_VALUE = ERROR.value();
+    static { LEVEL.put(BLOBSET_BLOB_APPLY_DEPENDENCY, ERROR); }
+
+    // Restart required to take effect
+    public static final String BLOBSET_BLOB_APPLY_RESTART = "blobset.blob.apply.restart";
+    public static final Level BLOBSET_BLOB_APPLY_RESTART_LEVEL = NOTICE;
+    public static final int BLOBSET_BLOB_APPLY_RESTART_VALUE = NOTICE.value();
+    static { LEVEL.put(BLOBSET_BLOB_APPLY_RESTART, NOTICE); }
+
+    // Blob update process was cancelled or aborted
+    public static final String BLOBSET_BLOB_ABORT = "blobset.blob.abort";
+    public static final Level BLOBSET_BLOB_ABORT_LEVEL = NOTICE;
+    public static final int BLOBSET_BLOB_ABORT_VALUE = NOTICE.value();
+    static { LEVEL.put(BLOBSET_BLOB_ABORT, NOTICE); }
+
+    // Reverting to previous blob version
+    public static final String BLOBSET_BLOB_ROLLBACK = "blobset.blob.rollback";
+    public static final Level BLOBSET_BLOB_ROLLBACK_LEVEL = NOTICE;
+    public static final int BLOBSET_BLOB_ROLLBACK_VALUE = NOTICE.value();
+    static { LEVEL.put(BLOBSET_BLOB_ROLLBACK, NOTICE); }
 
     // Receiving/processing a message for validation.
     public static final String VALIDATION_DEVICE_RECEIVE = "validation.device.receive";
