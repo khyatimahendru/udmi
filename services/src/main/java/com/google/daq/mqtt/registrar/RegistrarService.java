@@ -11,6 +11,7 @@ import static com.google.udmi.util.SourceRepository.SPREADSHEET_ID_KEY;
 
 import com.google.pubsub.v1.PubsubMessage;
 import com.google.udmi.util.AbstractPollingService;
+import com.google.udmi.util.RedisDistributedLock;
 import com.google.udmi.util.SheetsOutputStream;
 import com.google.udmi.util.SourceRepository;
 import java.io.File;
@@ -20,12 +21,8 @@ import java.util.Date;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import redis.clients.jedis.Jedis;
-import redis.clients.jedis.JedisPool;
-import redis.clients.jedis.params.SetParams;
 
 /**
  * Service to run registrar triggered by source repository updates.
@@ -34,10 +31,6 @@ public class RegistrarService extends AbstractPollingService {
 
   private static final Logger LOGGER = LoggerFactory.getLogger(RegistrarService.class);
   private static final String SERVICE_NAME = "RegistrarService";
-  private static final String REDIS_HOST = System.getenv().getOrDefault("REDIS_HOST", "localhost");
-  private static final int REDIS_PORT = 6379;
-  private static final int LOCK_EXPIRE_SECONDS = 3600; // 1 hour max lock
-  private static final JedisPool jedisPool = new JedisPool(REDIS_HOST, REDIS_PORT);
   private static final String SUBSCRIPTION_SUFFIX = "udmi_registrar_source_repo_updates";
   private static final String TRIGGER_BRANCH = "main";
   private static final String REF_NAME_KEY = String.format(REF_UPDATE_EVENT_FORMAT, TRIGGER_BRANCH,
@@ -113,50 +106,7 @@ public class RegistrarService extends AbstractPollingService {
 
     String repoId = extractRepoId(messageData);
 
-    String lockKey = "lock_" + repoId;
-    String pendingKey = "pending_request_" + repoId;
-    String requestId = UUID.randomUUID().toString();
-
-    try (Jedis jedis = jedisPool.getResource()) {
-      jedis.setex(pendingKey, 24 * 3600, requestId);
-
-      String acquired = jedis.set(lockKey, "locked",
-          SetParams.setParams().nx().ex(LOCK_EXPIRE_SECONDS));
-      if (acquired == null) {
-        LOGGER.info("Another process is handling repository {}. Skipping.", repoId);
-        return; // Lock not acquired, another pod will pick up the latest request
-      }
-
-      try {
-        while (true) {
-          String processingId = jedis.get(pendingKey);
-          LOGGER.info("Processing repository {} for request {}", repoId, processingId);
-
-          try {
-            processRepository(repoId);
-          } catch (Exception e) {
-            LOGGER.error("Error processing repository {}", repoId, e);
-          }
-
-          // Atomically check if the pending request has changed. If not, delete lock and exit.
-          // If it has changed, keep the lock and loop again to process the new request.
-          String script = "if redis.call('get', KEYS[1]) == ARGV[1] then "
-              + "redis.call('del', KEYS[2]); return 1 else return 0 end";
-
-          Object result = jedis.eval(script, java.util.Arrays.asList(pendingKey, lockKey),
-              java.util.Arrays.asList(processingId));
-
-          if (Long.valueOf(1).equals(result)) {
-            break; // Lock successfully deleted, no new requests
-          }
-        }
-      } catch (Exception e) {
-        // In case of unexpected Redis or infrastructure error, forcibly release lock
-        LOGGER.error("Unexpected error in lock loop for {}", repoId, e);
-        jedis.del(lockKey);
-        throw e;
-      }
-    }
+    RedisDistributedLock.executeWithLock(repoId, () -> processRepository(repoId));
   }
 
   private void processRepository(String repoId) {
