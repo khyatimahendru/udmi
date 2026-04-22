@@ -76,7 +76,6 @@ public abstract class AbstractPollingService {
     AtomicInteger threadCount = new AtomicInteger(1);
     this.pollingExecutor = Executors.newFixedThreadPool(10, r -> {
       Thread t = new Thread(r, serviceName + "-poller-" + threadCount.getAndIncrement());
-      t.setDaemon(true);
       return t;
     });
 
