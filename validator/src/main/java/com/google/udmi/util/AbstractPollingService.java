@@ -14,6 +14,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -72,8 +73,12 @@ public abstract class AbstractPollingService {
       LOGGER.info("Running in local origin mode.");
     }
 
-    String threadName = serviceName + "-poller";
-    this.pollingExecutor = Executors.newSingleThreadExecutor(r -> new Thread(r, threadName));
+    AtomicInteger threadCount = new AtomicInteger(1);
+    this.pollingExecutor = Executors.newFixedThreadPool(10, r -> {
+      Thread t = new Thread(r, serviceName + "-poller-" + threadCount.getAndIncrement());
+      t.setDaemon(true);
+      return t;
+    });
 
     String udmiNamespacePrefix = ofNullable(spec.udmiNamespace).map(ns -> ns + "~").orElse("");
     String requestsSubscription = udmiNamespacePrefix + subscriptionSuffix;
