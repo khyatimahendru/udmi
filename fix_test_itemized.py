@@ -1,4 +1,5 @@
-1 RESULT fail system device_config_acked STABLE 0/10 Timeout waiting for config acked
+with open("etc/test_itemized.out", "w") as f:
+    f.write("""1 RESULT fail system device_config_acked STABLE 0/10 Timeout waiting for config acked
 1 RESULT fail pointset pointset_request_extraneous STABLE 0/10 Failed waiting until pointset event contains correct points: config TIMESTAMP event TIMESTAMP differences: llama
 1 RESULT fail pointset pointset_remove_point STABLE 0/10 Failed waiting until pointset state matches config: config TIMESTAMP state TIMESTAMP differences: filter_alarm_pressure_status
 1 RESULT fail pointset pointset_remove_point STABLE 0/10 Timeout waiting for initial device state
@@ -66,3 +67,4 @@
 1 RESULT pass gateway bad_target_address PREVIEW 10/10 Sequence complete
 1 RESULT pass gateway bad_point_ref PREVIEW 10/10 Sequence complete
 4 RESULT skip gateway bad_point_ref PREVIEW 0/0 No testing target defined for 'tweaked_ref'
+""")

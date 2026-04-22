@@ -1,0 +1,91 @@
+--- etc/test_itemized.out
++++ etc/test_itemized.out
+@@ -23,45 +23,51 @@
+  20 CPBLTY pass system broken_config.status ALPHA 1/1 Capability supported
+  20 RESULT pass system broken_config STABLE 10/10 Sequence complete
+  21 CPBLTY skip system broken_config.logging ALPHA 0/0 Never executed
+-21 CPBLTY skip system broken_config.status ALPHA 0/0 Never executed
+-21 RESULT fail system broken_config STABLE 0/8 Timeout waiting for initial device state
++21 CPBLTY fail system broken_config.status ALPHA 0/1 Failed waiting until (status) system status level is >= `WARNING` (400): no significant device system status
++21 RESULT pass system broken_config STABLE 8/10 Sequence complete
+  22 CPBLTY fail system broken_config.status ALPHA 0/1 Failed waiting until (status) system status level is >= `WARNING` (400): no significant device system status
+-22 CPBLTY pass system broken_config.logging ALPHA 1/1 Capability supported
+-22 RESULT pass system broken_config STABLE 9/10 Sequence complete
+-23 CPBLTY fail system broken_config.logging ALPHA 0/1 Failed waiting until (logging) system logs level `NOTICE` category `system.config.apply`: no logs
+-23 CPBLTY pass system broken_config.status ALPHA 1/1 Capability supported
++22 RESULT pass system broken_config STABLE 8/10 Sequence complete
++23 CPBLTY fail system broken_config.status ALPHA 0/1 Failed waiting until (status) system status level is >= `WARNING` (400): no significant device system status
++23 CPBLTY pass system broken_config.logging ALPHA 1/1 Capability supported
+  23 RESULT pass system broken_config STABLE 9/10 Sequence complete
+-24 CPBLTY fail system broken_config.logging ALPHA 0/1 Failed waiting until (logging) system logs level `DEBUG` category `system.config.receive`: no logs
+-24 CPBLTY fail system broken_config.status ALPHA 0/1 Failed check that (status) category matches `system.config.parse`
+-24 RESULT pass system broken_config STABLE 8/10 Sequence complete
+-25 CPBLTY fail system broken_config.logging ALPHA 0/1 Failed waiting until (logging) system logs level `NOTICE` category `system.config.apply`: no logs
+-25 CPBLTY fail system broken_config.status ALPHA 0/1 Failed waiting until (status) system status level is >= `WARNING` (400): no significant device system status
++24 CPBLTY fail system broken_config.logging ALPHA 0/1 Failed waiting until (logging) system logs level `NOTICE` category `system.config.apply`: no logs
++24 CPBLTY pass system broken_config.status ALPHA 1/1 Capability supported
++24 RESULT pass system broken_config STABLE 9/10 Sequence complete
++25 CPBLTY fail system broken_config.logging ALPHA 0/1 Failed waiting until (logging) system logs level `DEBUG` category `system.config.receive`: no logs
++25 CPBLTY fail system broken_config.status ALPHA 0/1 Failed check that (status) category matches `system.config.parse`
+  25 RESULT pass system broken_config STABLE 8/10 Sequence complete
+-26 CPBLTY pass system system_last_update.subblocks ALPHA 1/1 Capability supported
+-26 RESULT pass system system_last_update STABLE 11/11 Sequence complete
+-27 CPBLTY fail system system_last_update.subblocks ALPHA 0/1 Failed waiting until (subblocks) state update complete: config/state subblock mismatch: pointset, localnet, discovery
+-27 RESULT pass system system_last_update STABLE 10/11 Sequence complete
++26 CPBLTY fail system broken_config.logging ALPHA 0/1 Failed waiting until (logging) system logs level `NOTICE` category `system.config.apply`: no logs
++26 CPBLTY fail system broken_config.status ALPHA 0/1 Failed waiting until (status) system status level is >= `WARNING` (400): no significant device system status
++26 RESULT pass system broken_config STABLE 8/10 Sequence complete
++27 CPBLTY pass system system_last_update.subblocks ALPHA 1/1 Capability supported
++27 RESULT pass system system_last_update STABLE 11/11 Sequence complete
+  28 CPBLTY pass system system_last_update.subblocks ALPHA 1/1 Capability supported
+  28 RESULT pass system system_last_update STABLE 11/11 Sequence complete
+-29 RESULT fail system state_make_model STABLE 0/10 Failed check that make and model in state matches make in metadata
+-33 RESULT skip system valid_serial_no STABLE 0/0 State testing disabled
+-34 CPBLTY skip system system_last_update.subblocks ALPHA 0/0 Never executed
+-34 RESULT skip system system_last_update STABLE 0/0 State testing disabled
+-35 RESULT pass system system_min_loglevel ALPHA 10/10 Sequence complete
+-36 RESULT pass system system_min_loglevel ALPHA 10/10 Sequence complete
+-40 RESULT pass gateway gateway_proxy_events BETA 10/10 Sequence complete
+-41 RESULT fail gateway gateway_proxy_events BETA 0/10 Failed waiting until All proxy devices received pointset: Missing pointset from AHU-22
+-42 RESULT pass gateway gateway_proxy_state PREVIEW 10/10 Sequence complete
+-43 RESULT fail gateway gateway_proxy_state PREVIEW 0/10 Failed waiting until All proxy devices received update: Missing update from AHU-22
+-44 RESULT pass discovery.scan scan_single_future+bacnet PREVIEW 10/10 Sequence complete
+-44 RESULT pass discovery.scan scan_single_future+vendor PREVIEW 10/10 Sequence complete
+-45 RESULT pass discovery.scan scan_periodic_now_enumerate+bacnet PREVIEW 10/10 Sequence complete
+-45 RESULT pass discovery.scan scan_periodic_now_enumerate+vendor PREVIEW 10/10 Sequence complete
+-49 RESULT pass gateway gateway_proxy_events BETA 10/10 Sequence complete
+-50 RESULT pass gateway gateway_proxy_events BETA 10/10 Sequence complete
+-51 RESULT fail gateway gateway_proxy_state PREVIEW 0/10 Failed waiting until All proxy devices received update: Missing update from SNS-4, AHU-22
+-55 RESULT skip system device_config_acked STABLE 0/0 No config check for proxy device
+-56 RESULT pass gateway bad_target_family PREVIEW 10/10 Sequence complete
+-57 RESULT pass gateway bad_target_address PREVIEW 10/10 Sequence complete
+-58 RESULT pass gateway bad_point_ref PREVIEW 10/10 Sequence complete
+-62 RESULT skip gateway bad_point_ref PREVIEW 0/0 No testing target defined for 'tweaked_ref'
++29 CPBLTY pass system system_last_update.subblocks ALPHA 1/1 Capability supported
++29 RESULT pass system system_last_update STABLE 11/11 Sequence complete
++30 CPBLTY pass system system_last_update.subblocks ALPHA 1/1 Capability supported
++30 RESULT pass system system_last_update STABLE 11/11 Sequence complete
++31 CPBLTY pass system system_last_update.subblocks ALPHA 1/1 Capability supported
++31 RESULT pass system system_last_update STABLE 11/11 Sequence complete
++32 CPBLTY pass system system_last_update.subblocks ALPHA 1/1 Capability supported
++32 RESULT pass system system_last_update STABLE 11/11 Sequence complete
++33 RESULT fail system state_make_model STABLE 0/10 Failed check that make and model in state matches make in metadata
++37 RESULT skip system valid_serial_no STABLE 0/0 State testing disabled
++38 CPBLTY pass system system_last_update.subblocks ALPHA 1/1 Capability supported
++38 RESULT pass system system_last_update STABLE 11/11 Sequence complete
++39 RESULT pass system system_min_loglevel ALPHA 10/10 Sequence complete
++40 RESULT pass system system_min_loglevel ALPHA 10/10 Sequence complete
++44 RESULT pass gateway gateway_proxy_events BETA 10/10 Sequence complete
++45 RESULT fail gateway gateway_proxy_events BETA 0/10 Failed waiting until All proxy devices received pointset: Missing pointset from AHU-22
++46 RESULT pass gateway gateway_proxy_state PREVIEW 10/10 Sequence complete
++47 RESULT fail gateway gateway_proxy_state PREVIEW 0/10 Failed waiting until All proxy devices received update: Missing update from AHU-22
++48 RESULT pass discovery.scan scan_single_future+bacnet PREVIEW 10/10 Sequence complete
++48 RESULT pass discovery.scan scan_single_future+vendor PREVIEW 10/10 Sequence complete
++49 RESULT pass discovery.scan scan_periodic_now_enumerate+bacnet PREVIEW 10/10 Sequence complete
++49 RESULT pass discovery.scan scan_periodic_now_enumerate+vendor PREVIEW 10/10 Sequence complete
++53 RESULT pass gateway gateway_proxy_events BETA 10/10 Sequence complete
++54 RESULT pass gateway gateway_proxy_events BETA 10/10 Sequence complete
++55 RESULT fail gateway gateway_proxy_state PREVIEW 0/10 Failed waiting until All proxy devices received update: Missing update from SNS-4, AHU-22
++59 RESULT skip system device_config_acked STABLE 0/0 No config check for proxy device
++60 RESULT pass gateway bad_target_family PREVIEW 10/10 Sequence complete
++61 RESULT pass gateway bad_target_address PREVIEW 10/10 Sequence complete

@@ -1,4 +1,5 @@
-1 device_config_acked
+with open("etc/schema_itemized.out", "w") as f:
+    f.write("""1 device_config_acked
 1 pointset_request_extraneous
 1 pointset_remove_point
 1 pointset_remove_point
@@ -74,3 +75,4 @@
 1 bad_target_address
 1 bad_point_ref
 4 bad_point_ref
+""")
