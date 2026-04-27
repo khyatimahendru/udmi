@@ -1,13 +1,8 @@
 {
-  "gateway": {
-    "target": {
-      "addr": "2",
-      "family": "modbus",
-      "network_id": "modbus_rtu_1"
+  "localnet": {
+    "families": {
+      "ipv4": {}
     }
-  },
-  "pointset": {
-    "sample_rate_sec": 30
   },
   "system": {
     "metrics_rate_sec": 10,
