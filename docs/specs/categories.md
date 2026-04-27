@@ -59,6 +59,7 @@ could be used with a **WARNING** level for a warning case during normal operatio
     * _receive_: (**DEBUG**) About receiving a blob update
     * _fetch_: (**DEBUG**) Fetching a blob update
     * _apply_: (**NOTICE**) Applying a blob update
+    * _update_: (**NOTICE**) Done applying a blob update
 * _validation_: Handling validation pipeline messages
   * _device_: Conditions specific to processing a given device message.
     * _receive_: (**DEBUG**) Receiving/processing a message for validation.

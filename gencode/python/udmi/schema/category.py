@@ -92,6 +92,9 @@ class Category(Enum):
     # Applying a blob update
     BLOBSET_BLOB_APPLY = ("blobset.blob.apply", Level.NOTICE)
 
+    # Done applying a blob update
+    BLOBSET_BLOB_UPDATE = ("blobset.blob.update", Level.NOTICE)
+
     # Receiving/processing a message for validation.
     VALIDATION_DEVICE_RECEIVE = ("validation.device.receive", Level.DEBUG)
 

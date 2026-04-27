@@ -177,6 +177,12 @@ public class Category {
     public static final int BLOBSET_BLOB_APPLY_VALUE = NOTICE.value();
     static { LEVEL.put(BLOBSET_BLOB_APPLY, NOTICE); }
 
+    // Done applying a blob update
+    public static final String BLOBSET_BLOB_UPDATE = "blobset.blob.update";
+    public static final Level BLOBSET_BLOB_UPDATE_LEVEL = NOTICE;
+    public static final int BLOBSET_BLOB_UPDATE_VALUE = NOTICE.value();
+    static { LEVEL.put(BLOBSET_BLOB_UPDATE, NOTICE); }
+
     // Receiving/processing a message for validation.
     public static final String VALIDATION_DEVICE_RECEIVE = "validation.device.receive";
     public static final Level VALIDATION_DEVICE_RECEIVE_LEVEL = DEBUG;
