@@ -26,6 +26,7 @@ import static udmi.lib.base.MqttDevice.CONFIG_TOPIC;
 import static udmi.lib.base.MqttDevice.ERRORS_TOPIC;
 import static udmi.lib.base.MqttDevice.STATE_TOPIC;
 import static udmi.lib.base.MqttPublisher.DEFAULT_CONFIG_WAIT_SEC;
+import static udmi.lib.blob.BlobFetcherRegistry.getFetcher;
 import static udmi.lib.client.manager.SystemManager.UDMI_PUBLISHER_LOG_CATEGORY;
 import static udmi.schema.BlobBlobsetConfig.BlobPhase.FINAL;
 import static udmi.schema.BlobsetConfig.SystemBlobsets.IOT_ENDPOINT_CONFIG;
@@ -59,10 +60,13 @@ import org.slf4j.LoggerFactory;
 import udmi.lib.base.GatewayError;
 import udmi.lib.base.MqttDevice;
 import udmi.lib.base.MqttPublisher;
-import udmi.lib.base.UdmiException.BlobDependencyMismatchException;
+import udmi.lib.base.UdmiException.BlobAbortException;
+import udmi.lib.base.UdmiException.BlobApplyFailureException;
 import udmi.lib.base.UdmiException.BlobIncompatibleException;
 import udmi.lib.base.UdmiException.BlobParseException;
+import udmi.lib.base.UdmiException.BlobRollbackException;
 import udmi.lib.base.UdmiException.HashMismatchException;
+import udmi.lib.base.UdmiException.PayloadTooBigException;
 import udmi.lib.client.manager.DeviceManager;
 import udmi.lib.client.manager.PointsetManager;
 import udmi.lib.client.manager.SystemManager;
@@ -128,10 +132,13 @@ public interface PublisherHost extends ManagerHost {
       "events/mapping", "{ NOT VALID JSON!");
   List<String> INVALID_KEYS = new ArrayList<>(INVALID_REPLACEMENTS.keySet());
   Map<Class<? extends Exception>, String> BLOB_ERROR_CATEGORIES = ImmutableMap.of(
-      BlobParseException.class, Category.BLOBSET_BLOB_VERIFY_PARSE,
-      HashMismatchException.class, Category.BLOBSET_BLOB_VERIFY_HASH,
-      BlobIncompatibleException.class, Category.BLOBSET_BLOB_VERIFY_INCOMPATIBLE,
-      BlobDependencyMismatchException.class, Category.BLOBSET_BLOB_VERIFY_DEPENDENCY
+      PayloadTooBigException.class, Category.BLOBSET_BLOB_EXTRACT_OVERSIZE,
+      BlobParseException.class, Category.BLOBSET_BLOB_PARSE_INVALID,
+      HashMismatchException.class, Category.BLOBSET_BLOB_PARSE_CORRUPT,
+      BlobIncompatibleException.class, Category.BLOBSET_BLOB_PARSE_INCOMPATIBLE,
+      BlobApplyFailureException.class, Category.BLOBSET_BLOB_APPLY_FAILURE,
+      BlobAbortException.class, Category.BLOBSET_BLOB_ABORT,
+      BlobRollbackException.class, Category.BLOBSET_BLOB_ROLLBACK
   );
   String CORRUPT_STATE_MESSAGE = "!&*@(!*&@!";
 
@@ -139,29 +146,36 @@ public interface PublisherHost extends ManagerHost {
    * Acquires and validates blob data from a given URL encoded in Base64 format.
    */
   static String acquireBlobData(String url, String sha256) {
-    if (!url.startsWith(DATA_URL_JSON_BASE64)) {
-      throw new RuntimeException(format("URL encoding not supported: %s", url));
+    byte[] dataBytes = Base64.getDecoder().decode(url.substring(DATA_URL_JSON_BASE64.length()));
+    String dataSha256 = GeneralUtils.sha256(dataBytes);
+    if (!dataSha256.equals(sha256)) {
+      throw new RuntimeException("Blob data hash mismatch");
     }
-    byte[] dataBytes;
-    try {
-      dataBytes = Base64.getDecoder().decode(url.substring(DATA_URL_JSON_BASE64.length()));
-    } catch (IllegalArgumentException e) {
-      throw new BlobParseException("Failed to decode base64 payload");
-    }
-    
+    return new String(dataBytes);
+  }
+
+  /**
+   * Fetches blob data for a given blob name and URL using the registered fetcher for the URL
+   * scheme.
+   *
+   * @param url The URL of the blob.
+   * @return The fetched byte array.
+   */
+  default byte[] extractBlobData(String url) {
+    return getFetcher(url).fetch(url);
+  }
+
+  /**
+   * Verifies blob data against a given SHA-256 hash and validates it as JSON.
+   *
+   * @param dataBytes The data to verify.
+   * @param sha256    The expected SHA-256 hash.
+   */
+  static void verifyBlobIntegrity(byte[] dataBytes, String sha256) {
     String dataSha256 = GeneralUtils.sha256(dataBytes);
     if (!dataSha256.equals(sha256)) {
       throw new HashMismatchException("Blob data hash mismatch");
     }
-    
-    String decoded = new String(dataBytes);
-    try {
-      parseJson(decoded);
-    } catch (Exception e) {
-      throw new BlobParseException("Failed to parse blob payload as JSON");
-    }
-    
-    return decoded;
   }
 
   Config getDeviceConfig();
@@ -181,15 +195,38 @@ public interface PublisherHost extends ManagerHost {
    * Extracts the configuration blob with the specified name, if it exists and is in the final
    * phase.
    */
-  default String extractConfigBlob(String blobName) throws Exception {
+  default String extractConfigBlob(String blobName) {
     // TODO: Refactor to get any blob meta parameters.
+    try {
+      HashMap<String, BlobBlobsetConfig> blobs = catchToNull(() -> getDeviceConfig().blobset.blobs);
+      if (blobs == null) {
+        return null;
+      }
+      BlobBlobsetConfig blobBlobsetConfig = blobs.get(blobName);
+      if (blobBlobsetConfig != null && FINAL.equals(blobBlobsetConfig.phase)) {
+        return acquireBlobData(blobBlobsetConfig.url, blobBlobsetConfig.sha256);
+      }
+      return null;
+    } catch (Exception e) {
+      EndpointConfiguration endpointConfiguration = new EndpointConfiguration();
+      endpointConfiguration.error = e.toString();
+      return stringify(endpointConfiguration);
+    }
+  }
+
+  /**
+   * Fetches and verifies a blob by name, following the proper sequence.
+   *
+   * @param blobName The name of the blob to fetch and verify.
+   * @return The decoded payload as a String, or null if not available.
+   */
+  default String fetchVerifiedBlob(String blobName) {
     BlobBlobsetConfig blobBlobsetConfig = getConfigBlob(blobName);
     if (blobBlobsetConfig != null && FINAL.equals(blobBlobsetConfig.phase)) {
-      logEvent(Category.BLOBSET_BLOB_VERIFY, "Verifying blob data for " + blobName);
-      String payload = acquireBlobData(blobBlobsetConfig.url, blobBlobsetConfig.sha256);
-      logEvent(Category.BLOBSET_BLOB_VERIFY_SUCCESS,
-          "Successfully verified blob data for " + blobName);
-      return payload;
+      logEvent(Category.BLOBSET_BLOB_EXTRACT, "Extract blob data for " + blobName);
+      byte[] dataBytes = extractBlobData(blobBlobsetConfig.url);
+      verifyBlobIntegrity(dataBytes, blobBlobsetConfig.sha256);  
+      return new String(dataBytes);
     }
     return null;
   }
@@ -230,14 +267,11 @@ public interface PublisherHost extends ManagerHost {
       state.generation = config.generation;
       publishSynchronousState();
 
-      logEvent(Category.BLOBSET_BLOB_FETCH, "Fetching blob data for " + blobName);
-      String payload = extractConfigBlob(blobName);
+      String payload = fetchVerifiedBlob(blobName);
       if (payload == null) {
         warn(format("Blob %s not ready for extraction", blobName));
         return;
       }
-      logEvent(Category.BLOBSET_BLOB_FETCH_SUCCESS,
-          "Successfully fetched blob data for " + blobName);
 
       applyBlobPayload(blobName, config, state, payload);
     } catch (Exception e) {
@@ -246,7 +280,7 @@ public interface PublisherHost extends ManagerHost {
       error(format("Failed to apply blob %s", blobName), e);
 
       String category = BLOB_ERROR_CATEGORIES.getOrDefault(e.getClass(),
-          Category.BLOBSET_BLOB_FETCH_FAILURE);
+          Category.BLOBSET_BLOB_EXTRACT_FAILURE);
       logEvent(category, "For blob name " + blobName + ":\n", e);
     } finally {
       publishAsynchronousState();
@@ -768,21 +802,17 @@ public interface PublisherHost extends ManagerHost {
     try {
       String iotConfig = extractConfigBlob(IOT_ENDPOINT_CONFIG.value());
       setExtractedEndpoint(fromJsonString(iotConfig, EndpointConfiguration.class));
-    } catch (Exception e) {
-      EndpointConfiguration errorConfig = new EndpointConfiguration();
-      errorConfig.error = e.toString();
-      setExtractedEndpoint(errorConfig);
-    }
-
-    if (getExtractedEndpoint() != null) {
-      if (getDeviceConfig().blobset.blobs.containsKey(IOT_ENDPOINT_CONFIG.value())) {
-        BlobBlobsetConfig config = getDeviceConfig()
-                .blobset.blobs.get(IOT_ENDPOINT_CONFIG.value());
-        getExtractedEndpoint().generation = config.generation;
+      if (getExtractedEndpoint() != null) {
+        if (getDeviceConfig().blobset.blobs.containsKey(IOT_ENDPOINT_CONFIG.value())) {
+          BlobBlobsetConfig config = getDeviceConfig()
+              .blobset.blobs.get(IOT_ENDPOINT_CONFIG.value());
+          getExtractedEndpoint().generation = config.generation;
+        }
       }
+    } catch (Exception e) {
+      throw new RuntimeException("While extracting endpoint blob config", e);
     }
     return getExtractedEndpoint();
-
   }
 
   EndpointConfiguration getExtractedEndpoint();

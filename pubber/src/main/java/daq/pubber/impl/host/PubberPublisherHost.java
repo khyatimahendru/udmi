@@ -13,6 +13,7 @@ import static com.google.udmi.util.GeneralUtils.ifNullThen;
 import static com.google.udmi.util.GeneralUtils.isTrue;
 import static com.google.udmi.util.GeneralUtils.optionsString;
 import static com.google.udmi.util.GeneralUtils.toJsonFile;
+import static com.google.udmi.util.JsonUtil.parseJson;
 import static com.google.udmi.util.JsonUtil.safeSleep;
 import static com.google.udmi.util.JsonUtil.stringify;
 import static java.lang.String.format;
@@ -38,6 +39,9 @@ import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
 import udmi.lib.base.MqttDevice;
+import udmi.lib.base.UdmiException.BlobParseException;
+import udmi.lib.base.UdmiException.PayloadTooBigException;
+import udmi.schema.Category;
 import udmi.lib.client.host.PublisherHost;
 import udmi.lib.client.manager.DeviceManager;
 import udmi.schema.BlobBlobsetConfig.BlobPhase;
@@ -156,14 +160,28 @@ public class PubberPublisherHost extends PubberManager implements PublisherHost 
   }
 
   @Override
+  public byte[] extractBlobData(String url) {
+    if (url != null && url.contains("mock_oversize")) {
+      throw new PayloadTooBigException("Simulated payload too big");
+    }
+    return PublisherHost.super.extractBlobData(url);
+  }
+
+  @Override
   public void activateBlob(String blobName) {
     if (SOFTWARE_MODULE_KEY.equals(blobName)) {
+      logEvent(Category.BLOBSET_BLOB_APPLY_RESTART, "Restart required for " + blobName);
       notice("Post-processing Git OTA update. Restarting...");
       getDeviceManager().systemLifecycle(Operation.SystemMode.RESTART);
     }
   }
 
   private void updateModule(String payload) {
+    try {
+      parseJson(payload);
+    } catch (Exception e) {
+      throw new BlobParseException("Failed to parse blob payload as JSON");
+    }
     moduleEmulator.updateTo(payload);
     updateModuleVersionInState();
   }

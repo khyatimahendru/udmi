@@ -10,8 +10,10 @@ import org.apache.commons.io.FileUtils;
 import org.eclipse.jgit.api.Git;
 import org.eclipse.jgit.lib.ObjectId;
 import org.eclipse.jgit.lib.Repository;
-import udmi.lib.base.UdmiException.BlobDependencyMismatchException;
+import udmi.lib.base.UdmiException.BlobAbortException;
+import udmi.lib.base.UdmiException.BlobApplyFailureException;
 import udmi.lib.base.UdmiException.BlobIncompatibleException;
+import udmi.lib.base.UdmiException.BlobRollbackException;
 
 /**
  * Mock emulator for Git modules used in OTA updates.
@@ -20,8 +22,7 @@ public class MockGitModuleEmulator {
 
   private static final String VERSION = "version";
   private static final String SIMULATE_BEHAVIOR = "simulate";
-  private static final String HARDWARE_INCOMPATIBLE = "hardwareIncompatible";
-  private static final String DEPENDENCY_MISMATCH = "softwareDependencyMismatch";
+  private static final String PAYLOAD_INCOMPATIBLE = "incompatible";
 
   private final File repoDir;
   private final Consumer<String> infoLogger;
@@ -37,7 +38,8 @@ public class MockGitModuleEmulator {
    * @param noticeLogger      Logger for notice messages.
    * @param errorLogger       Logger for error messages.
    */
-  public MockGitModuleEmulator(String softwareModuleDir, Consumer<String> infoLogger, Consumer<String> noticeLogger, Consumer<String> errorLogger) {
+  public MockGitModuleEmulator(String softwareModuleDir, Consumer<String> infoLogger,
+      Consumer<String> noticeLogger, Consumer<String> errorLogger) {
     this.repoDir = new File(softwareModuleDir);
     this.infoLogger = infoLogger;
     this.noticeLogger = noticeLogger;
@@ -94,13 +96,24 @@ public class MockGitModuleEmulator {
     String version = (String) payloadMap.get(VERSION);
     String simulateBehavior = (String) payloadMap.get(SIMULATE_BEHAVIOR);
 
-    if (HARDWARE_INCOMPATIBLE.equals(simulateBehavior)) {
+    if (PAYLOAD_INCOMPATIBLE.equals(simulateBehavior)) {
       safeSleep(2000);
       throw new BlobIncompatibleException("Hardware incompatible");
     }
-    if (DEPENDENCY_MISMATCH.equals(simulateBehavior)) {
+
+    if ("apply_failure".equals(simulateBehavior)) {
       safeSleep(2000);
-      throw new BlobDependencyMismatchException("Software dependencies mismatch");
+      throw new BlobApplyFailureException("Simulated apply failure");
+    }
+
+    if ("abort".equals(simulateBehavior)) {
+      safeSleep(2000);
+      throw new BlobAbortException("Simulated abort");
+    }
+
+    if ("rollback".equals(simulateBehavior)) {
+      safeSleep(2000);
+      throw new BlobRollbackException("Simulated rollback");
     }
 
     if (version == null) {

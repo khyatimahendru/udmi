@@ -29,6 +29,7 @@
     { "pattern": "^discovery\\.point\\.describe$" },
     { "pattern": "^mapping\\.device\\.apply$" },
     { "pattern": "^blobset\\.blob$" },
+    { "pattern": "^blobset\\.blob\\.update$" },
     { "pattern": "^blobset\\.blob\\.receive$" },
     { "pattern": "^blobset\\.blob\\.extract$" },
     { "pattern": "^blobset\\.blob\\.extract\\.oversize$" },

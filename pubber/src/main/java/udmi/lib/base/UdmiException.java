@@ -33,13 +33,27 @@ public class UdmiException {
     }
   }
 
-  /**
-   * Exception thrown when there is a blob dependency mismatch.
-   */
-  public static class BlobDependencyMismatchException extends RuntimeException {
-    public BlobDependencyMismatchException(String message) {
+  public static class PayloadTooBigException extends RuntimeException {
+    public PayloadTooBigException(String message) {
       super(message);
     }
   }
 
+  public static class BlobApplyFailureException extends RuntimeException {
+    public BlobApplyFailureException(String message) {
+      super(message);
+    }
+  }
+
+  public static class BlobAbortException extends RuntimeException {
+    public BlobAbortException(String message) {
+      super(message);
+    }
+  }
+
+  public static class BlobRollbackException extends RuntimeException {
+    public BlobRollbackException(String message) {
+      super(message);
+    }
+  }
 }

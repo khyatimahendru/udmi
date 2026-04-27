@@ -165,6 +165,12 @@ public class Category {
     public static final int BLOBSET_BLOB_VALUE = INFO.value();
     static { LEVEL.put(BLOBSET_BLOB, INFO); }
 
+    // Processing a blob update
+    public static final String BLOBSET_BLOB_UPDATE = "blobset.blob.update";
+    public static final Level BLOBSET_BLOB_UPDATE_LEVEL = INFO;
+    public static final int BLOBSET_BLOB_UPDATE_VALUE = INFO.value();
+    static { LEVEL.put(BLOBSET_BLOB_UPDATE, INFO); }
+
     // About receiving a blob update
     public static final String BLOBSET_BLOB_RECEIVE = "blobset.blob.receive";
     public static final Level BLOBSET_BLOB_RECEIVE_LEVEL = DEBUG;

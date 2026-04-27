@@ -56,6 +56,7 @@ could be used with a **WARNING** level for a warning case during normal operatio
     * _apply_: (**INFO**) Stage of applying a device mapping
 * _blobset_: Handling update of device data blobs
   * _blob_: (**INFO**) Conditions specific to an individual blob
+    * _update_: (**INFO**) Processing a blob update
     * _receive_: (**DEBUG**) About receiving a blob update
     * _extract_: (**DEBUG**) Extracting a blob payload
       * _oversize_: (**ERROR**) Insufficient storage to download or unpack blob

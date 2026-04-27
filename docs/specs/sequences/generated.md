@@ -34,12 +34,6 @@ Some caveats:
 * [bad_point_ref](#bad_point_ref-preview): Error handling for badly formed gateway point ref Test skipped: Not a proxied device
 * [bad_target_address](#bad_target_address-preview): Error handling for badly formed gateway target address Test skipped: Not a proxied device
 * [bad_target_family](#bad_target_family-preview): Error handling for badly formed gateway target family Test skipped: Not a proxied device
-* [blob_dependency_mismatch](#blob_dependency_mismatch-preview)
-* [blob_fetch_failure](#blob_fetch_failure-preview)
-* [blob_hash_mismatch](#blob_hash_mismatch-preview)
-* [blob_incompatible](#blob_incompatible-preview)
-* [blob_parse_failure](#blob_parse_failure-preview)
-* [blob_update_success](#blob_update_success-preview)
 * [broken_config](#broken_config-stable): Check that the device correctly handles a broken (non-json) config message.
 * [config_logging](#config_logging-stable): Check that the device publishes minimum required log entries when receiving config
 * [device_config_acked](#device_config_acked-stable): Check that the device MQTT-acknowledges a sent config.
