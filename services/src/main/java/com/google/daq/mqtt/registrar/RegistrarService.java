@@ -53,7 +53,7 @@ public class RegistrarService extends AbstractPollingService {
    */
   public RegistrarService(String projectTarget, String registrarTarget, String siteModelBaseDir,
       String localOriginDir) {
-    super(SERVICE_NAME, SUBSCRIPTION_SUFFIX, projectTarget, siteModelBaseDir, localOriginDir);
+    super(SERVICE_NAME, SUBSCRIPTION_SUFFIX, projectTarget, siteModelBaseDir, localOriginDir, 10);
     this.registrarTarget = registrarTarget;
     LOGGER.info("Starting Registrar Service for project {}, cloning to {}", projectTarget,
         siteModelBaseDir);

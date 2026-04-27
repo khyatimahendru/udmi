@@ -36,7 +36,8 @@ public class RedisDistributedLock {
     try (Jedis jedis = jedisPool.getResource()) {
       jedis.setex(pendingKey, PENDING_EXPIRE_SECONDS, requestId);
 
-      String acquired = jedis.set(lockKey, "locked",
+      String podId = UUID.randomUUID().toString();
+      String acquired = jedis.set(lockKey, podId,
           SetParams.setParams().nx().ex(DEFAULT_LOCK_EXPIRE_SECONDS));
       if (acquired == null) {
         LOGGER.info("Another process is handling {}. Skipping.", key);
@@ -56,20 +57,21 @@ public class RedisDistributedLock {
 
           // Atomically check if the pending request has changed. If not, delete lock and exit.
           // If it has changed, keep the lock and loop again to process the new request.
-          String script = "if redis.call('get', KEYS[1]) == ARGV[1] then "
+          String releaseScript = "if redis.call('get', KEYS[1]) == ARGV[1] and redis.call('get', KEYS[2]) == ARGV[2] then "
               + "redis.call('del', KEYS[2]); return 1 else return 0 end";
 
-          Object result = jedis.eval(script, Arrays.asList(pendingKey, lockKey),
-              Arrays.asList(processingId));
+          Object result = jedis.eval(releaseScript, Arrays.asList(pendingKey, lockKey),
+              Arrays.asList(processingId, podId));
 
           if (Long.valueOf(1).equals(result)) {
             break; // Lock successfully deleted, no new requests
           }
         }
       } catch (Exception e) {
-        // In case of unexpected Redis or infrastructure error, forcibly release lock
+        // In case of unexpected Redis or infrastructure error, safely release lock
         LOGGER.error("Unexpected error in lock loop for {}", key, e);
-        jedis.del(lockKey);
+        String safeRelease = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end";
+        jedis.eval(safeRelease, Arrays.asList(lockKey), Arrays.asList(podId));
         throw e;
       }
     }
