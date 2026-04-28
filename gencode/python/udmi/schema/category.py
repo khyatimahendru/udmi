@@ -86,6 +86,9 @@ class Category(Enum):
     # Conditions specific to an individual blob
     BLOBSET_BLOB = ("blobset.blob", Level.INFO)
 
+    # Processing a blob update
+    BLOBSET_BLOB_UPDATE = ("blobset.blob.update", Level.INFO)
+
     # About receiving a blob update
     BLOBSET_BLOB_RECEIVE = ("blobset.blob.receive", Level.DEBUG)
 

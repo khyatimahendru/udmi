@@ -24,7 +24,6 @@ import com.google.udmi.util.CertManager;
 import com.google.udmi.util.SiteModel;
 import daq.pubber.impl.PubberFeatures;
 import daq.pubber.impl.PubberManager;
-import daq.pubber.impl.blob.MockGitModuleEmulator;
 import daq.pubber.impl.blob.PubberBlobLifecycleHandler;
 import daq.pubber.impl.manager.PubberDeviceManager;
 import java.io.File;
@@ -57,25 +56,10 @@ import udmi.util.SchemaVersion;
 public class PubberPublisherHost extends PubberManager implements PublisherHost {
 
   private static final int CONNECT_RETRIES = 10;
-  // <editor-fold desc="TODO move this part to the library">
-  private final Map<String, AtomicInteger> messageCounts = new ConcurrentHashMap<>();
-  private final AtomicInteger retriesCount = new AtomicInteger(0);
-  private final ReentrantLock stateLock = new ReentrantLock();
-  public DevicePersistent persistentData;
+
   private PubberDeviceManager deviceManager;
   private SiteModel siteModel;
-  private MockGitModuleEmulator moduleEmulator;
   private BlobLifecycleHandler blobLifecycleHandler;
-  private CountDownLatch configLatch;
-  private MqttDevice deviceTarget;
-  private long lastStateTimeMs;
-  private String workingEndpoint;
-  private String attemptedEndpoint;
-  private EndpointConfiguration extractedEndpoint;
-  private SchemaVersion targetSchema;
-  private int deviceUpdateCount = -1;
-  private boolean isGatewayDevice;
-  private PrintStream logPrintWriter;
 
   /**
    * Start an instance from a configuration file.
@@ -322,6 +306,24 @@ public class PubberPublisherHost extends PubberManager implements PublisherHost 
     return siteModel;
   }
 
+  // <editor-fold desc="TODO move this part to the library">
+  private final Map<String, AtomicInteger> messageCounts = new ConcurrentHashMap<>();
+  private final AtomicInteger retriesCount = new AtomicInteger(0);
+  private final ReentrantLock stateLock = new ReentrantLock();
+
+  private CountDownLatch configLatch;
+  private MqttDevice deviceTarget;
+  private long lastStateTimeMs;
+  private String workingEndpoint;
+  private String attemptedEndpoint;
+  private EndpointConfiguration extractedEndpoint;
+  private SchemaVersion targetSchema;
+  private int deviceUpdateCount = -1;
+  private boolean isGatewayDevice;
+  private PrintStream logPrintWriter;
+
+  public DevicePersistent persistentData;
+
   @Override
   public void periodicSchedule(int sec, Runnable runnable) {
     schedulePeriodic(sec, runnable);
@@ -383,23 +385,18 @@ public class PubberPublisherHost extends PubberManager implements PublisherHost 
   }
 
   @Override
-  public long getLastStateTimeMs() {
-    return lastStateTimeMs;
-  }
-
-  @Override
   public void setLastStateTimeMs(long lastStateTimeMs) {
     this.lastStateTimeMs = lastStateTimeMs;
   }
 
   @Override
-  public CountDownLatch getConfigLatch() {
-    return configLatch;
+  public long getLastStateTimeMs() {
+    return lastStateTimeMs;
   }
 
   @Override
-  public void setConfigLatch(CountDownLatch configLatch) {
-    this.configLatch = configLatch;
+  public CountDownLatch getConfigLatch() {
+    return configLatch;
   }
 
   @Override
@@ -428,18 +425,13 @@ public class PubberPublisherHost extends PubberManager implements PublisherHost 
   }
 
   @Override
-  public void setWorkingEndpoint(String workingEndpoint) {
-    this.workingEndpoint = workingEndpoint;
+  public void setAttemptedEndpoint(String attemptedEndpoint) {
+    this.attemptedEndpoint = attemptedEndpoint;
   }
 
   @Override
   public String getAttemptedEndpoint() {
     return attemptedEndpoint;
-  }
-
-  @Override
-  public void setAttemptedEndpoint(String attemptedEndpoint) {
-    this.attemptedEndpoint = attemptedEndpoint;
   }
 
   @Override
@@ -460,6 +452,16 @@ public class PubberPublisherHost extends PubberManager implements PublisherHost 
   @Override
   public boolean isGatewayDevice() {
     return isGatewayDevice;
+  }
+
+  @Override
+  public void setWorkingEndpoint(String workingEndpoint) {
+    this.workingEndpoint = workingEndpoint;
+  }
+
+  @Override
+  public void setConfigLatch(CountDownLatch configLatch) {
+    this.configLatch = configLatch;
   }
 
   @Override
