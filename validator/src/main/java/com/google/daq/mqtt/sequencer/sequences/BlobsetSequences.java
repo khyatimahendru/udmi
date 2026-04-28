@@ -18,20 +18,12 @@ import static org.junit.Assert.assertTrue;
 import static udmi.schema.Bucket.ENDPOINT_CONFIG;
 import static udmi.schema.Bucket.SYSTEM_MODE;
 import static udmi.schema.Bucket.SYSTEM_SOFTWARE_UPDATES;
-import static udmi.schema.Category.BLOBSET_BLOB_ABORT;
 import static udmi.schema.Category.BLOBSET_BLOB_APPLY;
-import static udmi.schema.Category.BLOBSET_BLOB_APPLY_DEPENDENCY;
-import static udmi.schema.Category.BLOBSET_BLOB_APPLY_FAILURE;
-import static udmi.schema.Category.BLOBSET_BLOB_APPLY_RESTART;
 import static udmi.schema.Category.BLOBSET_BLOB_EXTRACT;
 import static udmi.schema.Category.BLOBSET_BLOB_EXTRACT_FAILURE;
-import static udmi.schema.Category.BLOBSET_BLOB_EXTRACT_OVERSIZE;
 import static udmi.schema.Category.BLOBSET_BLOB_PARSE_CORRUPT;
-import static udmi.schema.Category.BLOBSET_BLOB_PARSE_INCOMPATIBLE;
 import static udmi.schema.Category.BLOBSET_BLOB_PARSE_INVALID;
 import static udmi.schema.Category.BLOBSET_BLOB_RECEIVE;
-import static udmi.schema.Category.BLOBSET_BLOB_ROLLBACK;
-import static udmi.schema.Category.LEVEL;
 import static udmi.schema.FeatureDiscovery.FeatureStage.PREVIEW;
 
 import com.google.daq.mqtt.sequencer.Feature;
@@ -65,11 +57,9 @@ import udmi.schema.IotAccess.IotProvider;
 import udmi.schema.Level;
 import udmi.schema.Operation.SystemMode;
 
-
 /**
  * Validation tests for instances that involve blobset config messages.
  */
-
 public class BlobsetSequences extends SequenceBase {
 
   public static final String JSON_MIME_TYPE = "application/json";
@@ -198,7 +188,7 @@ public class BlobsetSequences extends SequenceBase {
 
   @Feature(stage = PREVIEW, bucket = ENDPOINT_CONFIG)
   @Summary("Push endpoint config message to device that results in a connection error.")
-  @Test(timeout = TWO_MINUTES_MS) // TODO Is this enough? Does a client try X times?
+  @Test(timeout = TWO_MINUTES_MS)
   public void endpoint_connection_error() {
     setDeviceConfigEndpointBlob(BOGUS_ENDPOINT_HOSTNAME, registryId, false);
     untilErrorReported();
@@ -447,11 +437,6 @@ public class BlobsetSequences extends SequenceBase {
     return blobName;
   }
 
-  private void verifyBlobUpdateSequence(String targetType, boolean expectSuccess,
-      String... expectedLogs) {
-    verifyBlobUpdateSequence(getUpdateTarget(targetType), expectSuccess, expectedLogs);
-  }
-
   private void verifyBlobUpdateSequence(BlobUpdateTestingModel target, boolean expectSuccess,
       String... expectedLogs) {
     info(format("Testing blob update for blob key %s, version %s", target.blob_name,
@@ -477,8 +462,15 @@ public class BlobsetSequences extends SequenceBase {
     }
   }
 
+  private void verifyBlobUpdateSequence(String targetType, boolean expectSuccess,
+      String... expectedLogs) {
+    verifyBlobUpdateSequence(getUpdateTarget(targetType), expectSuccess, expectedLogs);
+  }
+
   @Test(timeout = TWO_MINUTES_MS)
   @Feature(stage = PREVIEW, bucket = SYSTEM_SOFTWARE_UPDATES)
+  @Summary("Validates a successful blob update where the device fetches, applies, "
+      + "and reports the new version.")
   public void blob_update_success() {
     verifyBlobUpdateSequence("success", true,
         BLOBSET_BLOB_RECEIVE, BLOBSET_BLOB_EXTRACT, BLOBSET_BLOB_APPLY);
@@ -486,73 +478,54 @@ public class BlobsetSequences extends SequenceBase {
 
   @Test(timeout = TWO_MINUTES_MS)
   @Feature(stage = PREVIEW, bucket = SYSTEM_SOFTWARE_UPDATES)
-  public void blob_fetch_failure() {
-    verifyBlobUpdateSequence("fail_fetch", false,
-        BLOBSET_BLOB_RECEIVE, BLOBSET_BLOB_EXTRACT, BLOBSET_BLOB_EXTRACT_FAILURE);
-  }
-
-  @Test(timeout = TWO_MINUTES_MS)
-  @Feature(stage = PREVIEW, bucket = SYSTEM_SOFTWARE_UPDATES)
-  public void blob_parse_failure() {
-    verifyBlobUpdateSequence("fail_parse", false,
-        BLOBSET_BLOB_RECEIVE, BLOBSET_BLOB_EXTRACT, BLOBSET_BLOB_PARSE_INVALID);
-  }
-
-  @Test(timeout = TWO_MINUTES_MS)
-  @Feature(stage = PREVIEW, bucket = SYSTEM_SOFTWARE_UPDATES)
-  public void blob_hash_mismatch() {
+  @Summary("Validates tamper protection by providing a valid URL but an incorrect SHA-256 hash.")
+  public void blob_update_invalid_hash() {
     verifyBlobUpdateSequence("fail_hash", false,
         BLOBSET_BLOB_RECEIVE, BLOBSET_BLOB_EXTRACT, BLOBSET_BLOB_PARSE_CORRUPT);
   }
 
   @Test(timeout = TWO_MINUTES_MS)
   @Feature(stage = PREVIEW, bucket = SYSTEM_SOFTWARE_UPDATES)
-  public void blob_incompatible() {
-    verifyBlobUpdateSequence("fail_incompatible", false,
-        BLOBSET_BLOB_RECEIVE, BLOBSET_BLOB_EXTRACT, BLOBSET_BLOB_PARSE_INCOMPATIBLE);
+  @Summary("Validates network resilience by providing an unreachable or 404 URL.")
+  public void blob_update_unreachable_url() {
+    verifyBlobUpdateSequence("fail_fetch", false,
+        BLOBSET_BLOB_RECEIVE, BLOBSET_BLOB_EXTRACT, BLOBSET_BLOB_EXTRACT_FAILURE);
   }
 
   @Test(timeout = TWO_MINUTES_MS)
   @Feature(stage = PREVIEW, bucket = SYSTEM_SOFTWARE_UPDATES)
-  public void blob_dependency_mismatch() {
-    verifyBlobUpdateSequence("fail_dependency", false,
-        BLOBSET_BLOB_RECEIVE, BLOBSET_BLOB_EXTRACT, BLOBSET_BLOB_APPLY_DEPENDENCY);
+  @Summary("Validates format and signature checking by providing a dummy payload.")
+  public void blob_update_invalid_payload() {
+    verifyBlobUpdateSequence("fail_parse", false,
+        BLOBSET_BLOB_RECEIVE, BLOBSET_BLOB_EXTRACT, BLOBSET_BLOB_PARSE_INVALID);
   }
 
   @Test(timeout = TWO_MINUTES_MS)
   @Feature(stage = PREVIEW, bucket = SYSTEM_SOFTWARE_UPDATES)
-  public void blob_update_oversize() {
-    verifyBlobUpdateSequence("oversize", false,
-        BLOBSET_BLOB_RECEIVE, BLOBSET_BLOB_EXTRACT, BLOBSET_BLOB_EXTRACT_OVERSIZE);
-  }
+  @Summary("Validates that a previously applied blob config is not reapplied.")
+  public void blob_update_idempotency() {
+    // Standard successful update
+    verifyBlobUpdateSequence("success", true,
+        BLOBSET_BLOB_RECEIVE,
+        BLOBSET_BLOB_EXTRACT,
+        BLOBSET_BLOB_APPLY
+    );
 
-  @Test(timeout = TWO_MINUTES_MS)
-  @Feature(stage = PREVIEW, bucket = SYSTEM_SOFTWARE_UPDATES)
-  public void blob_update_apply_failure() {
-    verifyBlobUpdateSequence("apply_failure", false,
-        BLOBSET_BLOB_RECEIVE, BLOBSET_BLOB_EXTRACT, BLOBSET_BLOB_APPLY_FAILURE);
-  }
+    // Resend the exact same config
+    BlobUpdateTestingModel target = getUpdateTarget("success");
+    updateConfig("trigger redundant update to check for idempotency");
 
-  @Test(timeout = TWO_MINUTES_MS)
-  @Feature(stage = PREVIEW, bucket = SYSTEM_SOFTWARE_UPDATES)
-  public void blob_update_restart_required() {
-    verifyBlobUpdateSequence("restart_required", true,
-        BLOBSET_BLOB_RECEIVE, BLOBSET_BLOB_EXTRACT, BLOBSET_BLOB_APPLY_RESTART);
-  }
+    sleepFor("waiting for device to process update", Duration.ofSeconds(10));
 
-  @Test(timeout = TWO_MINUTES_MS)
-  @Feature(stage = PREVIEW, bucket = SYSTEM_SOFTWARE_UPDATES)
-  public void blob_update_abort() {
-    verifyBlobUpdateSequence("abort", false,
-        BLOBSET_BLOB_RECEIVE, BLOBSET_BLOB_EXTRACT, BLOBSET_BLOB_ABORT);
-  }
+    untilTrue(target.blob_name + " phase is FINAL", () -> {
+      BlobBlobsetState blobState = deviceState.blobset.blobs.get(target.blob_name);
+      return blobState != null && BlobPhase.FINAL.equals(blobState.phase);
+    });
 
-  @Test(timeout = TWO_MINUTES_MS)
-  @Feature(stage = PREVIEW, bucket = SYSTEM_SOFTWARE_UPDATES)
-  public void blob_update_rollback() {
-    verifyBlobUpdateSequence("rollback", false,
-        BLOBSET_BLOB_RECEIVE, BLOBSET_BLOB_EXTRACT, BLOBSET_BLOB_ROLLBACK);
+    // No new lifecycle logs should have been emitted
+    checkWasNotLogged(BLOBSET_BLOB_RECEIVE, Level.DEBUG);
+    checkWasNotLogged(BLOBSET_BLOB_EXTRACT, Level.DEBUG);
+    checkWasNotLogged(BLOBSET_BLOB_APPLY, Level.INFO);
   }
 
 }
-

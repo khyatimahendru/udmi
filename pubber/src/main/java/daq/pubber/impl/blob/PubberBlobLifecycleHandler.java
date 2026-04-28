@@ -1,6 +1,6 @@
 package daq.pubber.impl.blob;
 
-import static com.google.udmi.util.JsonUtil.parseJson;
+import static com.google.udmi.util.JsonUtil.asMap;
 import static udmi.schema.Category.BLOBSET_BLOB_APPLY_RESTART;
 
 import java.util.HashMap;
@@ -125,12 +125,13 @@ public class PubberBlobLifecycleHandler implements BlobLifecycleHandler {
    * Validates and prepares a software module update.
    */
   private void stagePubberModuleUpdate(String blobName, String payload) {
+    Map<String, Object> payloadMap;
     try {
-      parseJson(payload);
+      payloadMap = asMap(payload);
     } catch (Exception e) {
-      throw new BlobParseException("Failed to parse blob payload as JSON for " + blobName);
+      throw new BlobParseException("Failed to parse blob payload for " + blobName);
     }
-    moduleEmulator.updateTo(payload);
+    moduleEmulator.updateTo(payloadMap);
     updateModuleVersionInState();
   }
 

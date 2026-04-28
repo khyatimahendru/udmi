@@ -338,6 +338,7 @@ public interface PublisherHost extends ManagerHost {
     BlobBlobsetState state = ensureBlobsetState(blobName);
     if (config.generation != null && config.generation.equals(state.generation)
         && BlobPhase.FINAL.equals(state.phase)) {
+      info(format("Blob %s generation %s already applied", blobName, config.generation));
       return;
     }
 

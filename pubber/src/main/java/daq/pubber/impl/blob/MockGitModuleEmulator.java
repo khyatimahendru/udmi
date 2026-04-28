@@ -1,6 +1,5 @@
 package daq.pubber.impl.blob;
 
-import static com.google.udmi.util.JsonUtil.asMap;
 import static com.google.udmi.util.JsonUtil.safeSleep;
 import static java.lang.String.format;
 import static java.nio.charset.StandardCharsets.UTF_8;
@@ -105,14 +104,13 @@ public class MockGitModuleEmulator {
    * Handles an OTA update by parsing the payload and checking out the specified version. This
    * method also processes "simulate" keys in the payload to trigger mock errors.
    *
-   * @param payload The JSON string containing update instructions (version and behavior).
+   * @param payloadMap The JSON payload containing update instructions (version and behavior).
    * @throws RuntimeException if the version is missing or JGit checkout fails.
    */
-  public void updateTo(String payload) {
-    Map<String, Object> payloadMap = asMap(payload);
+  public void updateTo(Map<String, Object> payloadMap) {
     String version = Optional.ofNullable((String) payloadMap.get(VERSION_KEY))
         .map(String::trim)
-        .orElseThrow(() -> new RuntimeException("Missing version in payload"));
+        .orElseThrow(() -> new BlobIncompatibleException("Missing version in payload"));
 
     handleSimulatedBehaviors((String) payloadMap.get(SIMULATE_KEY));
 
@@ -128,7 +126,8 @@ public class MockGitModuleEmulator {
       git.checkout().setName(version).call();
       noticeLogger.accept("Mock module update completed successfully.");
     } catch (Exception e) {
-      throw new RuntimeException("JGit checkout failed for version: " + version, e);
+      throw new BlobApplyFailureException(
+          "JGit checkout failed for version: " + version + e.getMessage());
     }
   }
 
