@@ -125,7 +125,7 @@ class Category(Enum):
     # Restart required to take effect
     BLOBSET_BLOB_APPLY_RESTART = ("blobset.blob.apply.restart", Level.NOTICE)
 
-    # Blob update process was cancelled or aborted
+    # Blob update process was canceled or aborted
     BLOBSET_BLOB_ABORT = ("blobset.blob.abort", Level.NOTICE)
 
     # Reverting to previous blob version

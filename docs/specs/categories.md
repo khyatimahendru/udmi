@@ -69,7 +69,7 @@ could be used with a **WARNING** level for a warning case during normal operatio
       * _failure_: (**ERROR**) Failed to install or execute
       * _dependency_: (**ERROR**) Dependencies required to apply are missing
       * _restart_: (**NOTICE**) Restart required to take effect
-    * _abort_: (**NOTICE**) Blob update process was cancelled or aborted
+    * _abort_: (**NOTICE**) Blob update process was canceled or aborted
     * _rollback_: (**NOTICE**) Reverting to previous blob version
 * _validation_: Handling validation pipeline messages
   * _device_: Conditions specific to processing a given device message.

@@ -243,7 +243,7 @@ public class Category {
     public static final int BLOBSET_BLOB_APPLY_RESTART_VALUE = NOTICE.value();
     static { LEVEL.put(BLOBSET_BLOB_APPLY_RESTART, NOTICE); }
 
-    // Blob update process was cancelled or aborted
+    // Blob update process was canceled or aborted
     public static final String BLOBSET_BLOB_ABORT = "blobset.blob.abort";
     public static final Level BLOBSET_BLOB_ABORT_LEVEL = NOTICE;
     public static final int BLOBSET_BLOB_ABORT_VALUE = NOTICE.value();
