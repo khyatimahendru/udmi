@@ -26,7 +26,6 @@ import static udmi.lib.base.MqttDevice.CONFIG_TOPIC;
 import static udmi.lib.base.MqttDevice.ERRORS_TOPIC;
 import static udmi.lib.base.MqttDevice.STATE_TOPIC;
 import static udmi.lib.base.MqttPublisher.DEFAULT_CONFIG_WAIT_SEC;
-import static udmi.lib.blob.BlobFetcherRegistry.getFetcher;
 import static udmi.lib.client.manager.SystemManager.UDMI_PUBLISHER_LOG_CATEGORY;
 import static udmi.schema.BlobBlobsetConfig.BlobPhase.FINAL;
 import static udmi.schema.BlobsetConfig.SystemBlobsets.IOT_ENDPOINT_CONFIG;
@@ -49,6 +48,9 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -67,6 +69,7 @@ import udmi.lib.base.UdmiException.BlobParseException;
 import udmi.lib.base.UdmiException.BlobRollbackException;
 import udmi.lib.base.UdmiException.HashMismatchException;
 import udmi.lib.base.UdmiException.PayloadTooBigException;
+import udmi.lib.blob.intf.BlobLifecycleHandler;
 import udmi.lib.client.manager.DeviceManager;
 import udmi.lib.client.manager.PointsetManager;
 import udmi.lib.client.manager.SystemManager;
@@ -131,7 +134,7 @@ public interface PublisherHost extends ManagerHost {
       "events/gateway", "{ \"testing\": \"This is prematurely terminated",
       "events/mapping", "{ NOT VALID JSON!");
   List<String> INVALID_KEYS = new ArrayList<>(INVALID_REPLACEMENTS.keySet());
-  Map<Class<? extends Exception>, String> BLOB_ERROR_CATEGORIES = ImmutableMap.of(
+  Map<Class<? extends Exception>, String> BLOB_ERROR_CATEGORIES = Map.of(
       PayloadTooBigException.class, Category.BLOBSET_BLOB_EXTRACT_OVERSIZE,
       BlobParseException.class, Category.BLOBSET_BLOB_PARSE_INVALID,
       HashMismatchException.class, Category.BLOBSET_BLOB_PARSE_CORRUPT,
@@ -142,53 +145,115 @@ public interface PublisherHost extends ManagerHost {
   );
   String CORRUPT_STATE_MESSAGE = "!&*@(!*&@!";
 
+  Config getDeviceConfig();
+
+  BlobLifecycleHandler getBlobLifecycleHandler();
+
+  /**
+   * A functional interface similar to {@link java.lang.Runnable}, but designed to allow checked
+   * exceptions to be thrown.
+   *
+   * <p>This is typically used as a target for lambda expressions or method references
+   * that contain code prone to throwing exceptions, allowing those exceptions to be safely
+   * captured, wrapped, or handled by the calling utility.
+   */
+  @FunctionalInterface
+  interface ThrowingRunnable {
+
+    /**
+     * Executes the designated action.
+     *
+     * @throws Exception if any error occurs during the execution of the action
+     */
+    void run() throws Exception;
+  }
+
+  /**
+   * Safely executes an action within the state lock, ensuring it is always unlocked.
+   */
+  default void withStateLock(Runnable action) {
+    try {
+      getStateLock().lock();
+      action.run();
+    } catch (Exception e) {
+      throw new RuntimeException("While executing locked state action", e);
+    } finally {
+      getStateLock().unlock();
+    }
+  }
+
+  /**
+   * Executes a void action and wraps any thrown exceptions in a RuntimeException.
+   */
+  default void wrapExceptions(String message, ThrowingRunnable action) {
+    try {
+      action.run();
+    } catch (Exception e) {
+      throw new RuntimeException(message, e);
+    }
+  }
+
+  /**
+   * Executes an action returning a value and wraps any thrown exceptions in a RuntimeException.
+   */
+  default <T> T wrapExceptions(String message, Callable<T> action) {
+    try {
+      return action.call();
+    } catch (Exception e) {
+      throw new RuntimeException(message, e);
+    }
+  }
+
+  /**
+   * Logs an event with a specific category and level.
+   */
+  default void logEvent(String category, String message, Throwable e, String targetId) {
+    Entry entry;
+    if (e != null) {
+      entry = entryFromException(category, e);
+    } else {
+      entry = new Entry();
+      entry.category = category;
+      entry.timestamp = getNow();
+      entry.message = message;
+      entry.level = Category.LEVEL.getOrDefault(category, Level.INFO).value();
+    }
+
+    String useId = ofNullable(targetId).orElseGet(this::getDeviceId);
+
+    getDeviceManager().localLog(entry);
+    publishLogMessage(entry, useId);
+    registerSystemStatus(entry, useId);
+  }
+
+  default void logEvent(String category, String message, Throwable e) {
+    logEvent(category, message, e, getDeviceId());
+  }
+
+  default void logEvent(String category, String message) {
+    logEvent(category, message, null, getDeviceId());
+  }
+
+  /**
+   * Returns the configured blobs or an empty map if no blobs are configured.
+   */
+  default HashMap<String, BlobBlobsetConfig> getAllBlobsConfig() {
+    return catchToElse(() -> getDeviceConfig().blobset.blobs, new HashMap<>());
+  }
+
   /**
    * Acquires and validates blob data from a given URL encoded in Base64 format.
    */
   static String acquireBlobData(String url, String sha256) {
+    if (!url.startsWith(DATA_URL_JSON_BASE64)) {
+      throw new RuntimeException(format("URL encoding not supported: %s", url));
+    }
     byte[] dataBytes = Base64.getDecoder().decode(url.substring(DATA_URL_JSON_BASE64.length()));
     String dataSha256 = GeneralUtils.sha256(dataBytes);
     if (!dataSha256.equals(sha256)) {
       throw new RuntimeException("Blob data hash mismatch");
     }
     return new String(dataBytes);
-  }
-
-  /**
-   * Fetches blob data for a given blob name and URL using the registered fetcher for the URL
-   * scheme.
-   *
-   * @param url The URL of the blob.
-   * @return The fetched byte array.
-   */
-  default byte[] extractBlobData(String url) {
-    return getFetcher(url).fetch(url);
-  }
-
-  /**
-   * Verifies blob data against a given SHA-256 hash and validates it as JSON.
-   *
-   * @param dataBytes The data to verify.
-   * @param sha256    The expected SHA-256 hash.
-   */
-  static void verifyBlobIntegrity(byte[] dataBytes, String sha256) {
-    String dataSha256 = GeneralUtils.sha256(dataBytes);
-    if (!dataSha256.equals(sha256)) {
-      throw new HashMismatchException("Blob data hash mismatch");
-    }
-  }
-
-  Config getDeviceConfig();
-
-  /**
-   * Returns the configured blobs or an empty map if no blobs are configured.
-   */
-  default HashMap<String, BlobBlobsetConfig> getBlobs() {
-    return catchToElse(() -> getDeviceConfig().blobset.blobs, new HashMap<>());
-  }
-
-  default BlobBlobsetConfig getConfigBlob(String blobName) {
-    return getBlobs().get(blobName);
   }
 
   /**
@@ -215,115 +280,125 @@ public interface PublisherHost extends ManagerHost {
   }
 
   /**
-   * Fetches and verifies a blob by name, following the proper sequence.
+   * Iterates through the active config to evaluate all user-defined device blobs,
+   * intentionally skipping internal system blobs (e.g., _iot_endpoint_config).
+   * Triggers the update lifecycle for any supported blobs.
+   */
+  default void evaluateAllDeviceBlobs() {
+    Map<String, BlobBlobsetConfig> allBlobs = getAllBlobsConfig();
+    if (allBlobs.isEmpty()) {
+      return;
+    }
+
+    Set<String> systemBlobs = Arrays.stream(SystemBlobsets.values())
+        .map(SystemBlobsets::value)
+        .collect(java.util.stream.Collectors.toSet());
+
+    for (String blobName : allBlobs.keySet()) {
+      if (systemBlobs.contains(blobName)) {
+        continue;
+      }
+      if (!getBlobLifecycleHandler().isBlobSupported(blobName)) {
+        warn("Skipping unknown blob name: " + blobName);
+        continue;
+      }
+      evaluateAndDeployBlob(blobName);
+    }
+  }
+
+  /**
+   * Fetches the binary payload for the specified blob and cryptographically
+   * verifies its integrity against the SHA-256 hash provided in the configuration.
    *
-   * @param blobName The name of the blob to fetch and verify.
-   * @return The decoded payload as a String, or null if not available.
+   * @return The decoded payload as a UTF-8 String, or null if the blob is not in the FINAL phase.
    */
   default String fetchVerifiedBlob(String blobName) {
-    BlobBlobsetConfig blobBlobsetConfig = getConfigBlob(blobName);
+    BlobBlobsetConfig blobBlobsetConfig = getAllBlobsConfig().get(blobName);
     if (blobBlobsetConfig != null && FINAL.equals(blobBlobsetConfig.phase)) {
       logEvent(Category.BLOBSET_BLOB_EXTRACT, "Extract blob data for " + blobName);
-      byte[] dataBytes = extractBlobData(blobBlobsetConfig.url);
-      verifyBlobIntegrity(dataBytes, blobBlobsetConfig.sha256);  
+      byte[] dataBytes = getBlobLifecycleHandler().fetchBlobData(blobBlobsetConfig.url);
+      getBlobLifecycleHandler().verifyBlobIntegrity(dataBytes, blobBlobsetConfig.sha256);
       return new String(dataBytes);
     }
     return null;
   }
 
-
   /**
-   * Processes all blobs in the configuration, skipping system blobs (e.g. _iot_endpoint_config).
+   * Evaluates the current state of a specific blob against the target configuration. If an update
+   * is needed, it transitions the state to APPLY synchronously, then offloads the download and
+   * deployment to a background thread to avoid locking the device state during network I/O and
+   * device restarts.
    */
-  default void processBlobset() {
-    for (String blobName : getBlobs().keySet()) {
-      if (Arrays.stream(SystemBlobsets.values()).anyMatch(e -> e.value().equals(blobName))) {
-        continue;
-      }
-      if (!isSupportedBlob(blobName)) {
-        warn("Skipping unknown blob name: " + blobName);
-        continue;
-      }
-      processBlob(blobName);
-    }
-  }
-
-  /**
-   * Processes the blob config for a given blob name and handles state transitions.
-   */
-  default void processBlob(String blobName) {
-    BlobBlobsetConfig config = getConfigBlob(blobName);
+  default void evaluateAndDeployBlob(String blobName) {
+    BlobBlobsetConfig config = getAllBlobsConfig().get(blobName);
     if (config == null) {
       return;
     }
+
     BlobBlobsetState state = ensureBlobsetState(blobName);
     if (config.generation != null && config.generation.equals(state.generation)
         && BlobPhase.FINAL.equals(state.phase)) {
       return;
     }
+
     logEvent(Category.BLOBSET_BLOB_RECEIVE, "Received blob update config for " + blobName);
-    try {
-      state.phase = BlobPhase.APPLY;
-      state.generation = config.generation;
-      publishSynchronousState();
 
-      String payload = fetchVerifiedBlob(blobName);
-      if (payload == null) {
-        warn(format("Blob %s not ready for extraction", blobName));
-        return;
+    state.phase = BlobPhase.APPLY;
+    state.generation = config.generation;
+    publishSynchronousState();
+
+    CompletableFuture.runAsync(() -> {
+      try {
+        String payload = fetchVerifiedBlob(blobName);
+        if (payload == null) {
+          warn(format("Blob %s not ready for extraction", blobName));
+          return;
+        }
+        orchestrateTwoPhaseDeployment(blobName, config, state, payload);
+      } catch (Exception e) {
+        error(format("Failed to apply blob %s", blobName), e);
+
+        withStateLock(() -> {
+          state.phase = BlobPhase.FINAL;
+          state.status = exceptionStatus(e, Category.BLOBSET_BLOB_APPLY);
+        });
+
+        String category = BLOB_ERROR_CATEGORIES.getOrDefault(e.getClass(),
+            Category.BLOBSET_BLOB_EXTRACT_FAILURE);
+        logEvent(category, "For blob name " + blobName + ":\n", e);
+
+        publishAsynchronousState();
       }
-
-      applyBlobPayload(blobName, config, state, payload);
-    } catch (Exception e) {
-      state.phase = BlobPhase.FINAL;
-      state.status = exceptionStatus(e, Category.BLOBSET_BLOB_APPLY);
-      error(format("Failed to apply blob %s", blobName), e);
-
-      String category = BLOB_ERROR_CATEGORIES.getOrDefault(e.getClass(),
-          Category.BLOBSET_BLOB_EXTRACT_FAILURE);
-      logEvent(category, "For blob name " + blobName + ":\n", e);
-    } finally {
-      publishAsynchronousState();
-    }
+    });
   }
 
   /**
-   * Applies the payload for the given blob, setting the proper state transitions and persisting.
+   * Orchestrates the strict two-phase blob deployment pipeline:
+   * 1. Stages the payload safely via the BlobLifecycleHandler.
+   * 2. Commits the 'FINAL' state and publishes it synchronously to the cloud.
+   * 3. Persists the new generation to local storage.
+   * 4. Activates the staged blob (which may involve disruptive actions like a restart).
+   *
+   * <p>This specific order guarantees the cloud is aware of the successful update
+   * before the device potentially drops its connection during activation.
    */
-  default void applyBlobPayload(String blobName, BlobBlobsetConfig config,
+  default void orchestrateTwoPhaseDeployment(String blobName, BlobBlobsetConfig config,
       BlobBlobsetState state, String payload) {
-    logEvent(Category.BLOBSET_BLOB_APPLY, "Applying blob update...");
-    installBlobPayload(blobName, payload);
+    logEvent(Category.BLOBSET_BLOB_APPLY, "Staging blob update...");
+    getBlobLifecycleHandler().stageBlob(blobName, payload);
 
     state.phase = BlobPhase.FINAL;
     state.status = null;
-    notice(format("Blob %s successfully applied", blobName));
+    notice(format("Blob %s successfully staged, publishing final state", blobName));
     publishSynchronousState();
 
     persistAppliedBlob(blobName, isoConvert(config.generation));
 
     // Explicitly flush logs before operations like restart!
     getDeviceManager().getSystemManager().sendSystemEvent();
-    activateBlob(blobName);
-  }
 
-  /**
-   * Checks if the application supports the given blob name.
-   */
-  default boolean isSupportedBlob(String blobName) {
-    return false;
-  }
-
-  /**
-   * Handles application-specific blob processing.
-   */
-  void installBlobPayload(String blobName, String payload);
-
-  /**
-   * Apply blob with actions such as restarts.
-   */
-  default void activateBlob(String blobName) {
-    // Default no-op
+    logEvent(Category.BLOBSET_BLOB_APPLY, "Activating blob update...");
+    getBlobLifecycleHandler().activateBlob(blobName);
   }
 
   default boolean isConnected() {
@@ -664,13 +739,7 @@ public interface PublisherHost extends ManagerHost {
   File getOutDir();
 
   private void processConfigUpdate(Config configMsg) {
-    try {
-      // Grab this to make state-after-config updates monolithic.
-      getStateLock().lock();
-    } catch (Exception e) {
-      throw new RuntimeException("While acquiring state lock", e);
-    }
-    try {
+    withStateLock(() -> {
       updateInterval(DEFAULT_REPORT_SEC);
       if (configMsg != null) {
         if (configMsg.system == null && isBarfConfig()) {
@@ -682,13 +751,11 @@ public interface PublisherHost extends ManagerHost {
         info(format("%s received config %s", getTimestamp(), isoConvert(configMsg.timestamp)));
         getDeviceManager().updateConfig(configMsg);
         extractEndpointBlobConfig();
-        processBlobset();
+        evaluateAllDeviceBlobs();
       } else {
         info(format("%s defaulting empty config", getTimestamp()));
       }
-    } finally {
-      getStateLock().unlock();
-    }
+    });
   }
 
   void updateInterval(Integer defaultReportSec);
@@ -960,28 +1027,6 @@ public interface PublisherHost extends ManagerHost {
   }
 
   /**
-   * Logs an event with a specific category and level.
-   */
-  default void logEvent(String category, String message, Throwable e) {
-    Entry entry;
-    if (e != null) {
-      entry = entryFromException(category, e);
-    } else {
-      entry = new Entry();
-      entry.category = category;
-      entry.timestamp = new Date();
-      entry.message = message;
-      entry.level = Category.LEVEL.getOrDefault(category, Level.INFO).value();
-    }
-    getDeviceManager().localLog(entry);
-    publishLogMessage(entry, getDeviceId());
-  }
-
-  default void logEvent(String category, String message) {
-    logEvent(category, message, null);
-  }
-
-  /**
    * Publishes the current state asynchronously, deferring if necessary to ensure that the state
    * update does not occur too frequently.
    */
@@ -1009,14 +1054,7 @@ public interface PublisherHost extends ManagerHost {
    * ensure thread safety, and handles exceptions by wrapping them in a RuntimeException.
    */
   default void publishSynchronousState() {
-    try {
-      getStateLock().lock();
-      publishStateMessage();
-    } catch (Exception e) {
-      throw new RuntimeException("While sending synchronous state", e);
-    } finally {
-      getStateLock().unlock();
-    }
+    withStateLock(this::publishStateMessage);
   }
 
   /**
@@ -1041,12 +1079,7 @@ public interface PublisherHost extends ManagerHost {
    * @param stateToSend The state object to be published.
    */
   default void publishStateMessage(Object stateToSend) {
-    try {
-      getStateLock().lock();
-      publishStateMessageRaw(stateToSend);
-    } finally {
-      getStateLock().unlock();
-    }
+    withStateLock(() -> publishStateMessageRaw(stateToSend));
   }
 
   AtomicBoolean getStateDirty();

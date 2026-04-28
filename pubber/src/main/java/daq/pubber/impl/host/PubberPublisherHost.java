@@ -13,7 +13,6 @@ import static com.google.udmi.util.GeneralUtils.ifNullThen;
 import static com.google.udmi.util.GeneralUtils.isTrue;
 import static com.google.udmi.util.GeneralUtils.optionsString;
 import static com.google.udmi.util.GeneralUtils.toJsonFile;
-import static com.google.udmi.util.JsonUtil.parseJson;
 import static com.google.udmi.util.JsonUtil.safeSleep;
 import static com.google.udmi.util.JsonUtil.stringify;
 import static java.lang.String.format;
@@ -25,6 +24,8 @@ import com.google.udmi.util.CertManager;
 import com.google.udmi.util.SiteModel;
 import daq.pubber.impl.PubberFeatures;
 import daq.pubber.impl.PubberManager;
+import daq.pubber.impl.blob.MockGitModuleEmulator;
+import daq.pubber.impl.blob.PubberBlobLifecycleHandler;
 import daq.pubber.impl.manager.PubberDeviceManager;
 import java.io.File;
 import java.io.PrintStream;
@@ -37,11 +38,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
-import java.util.function.Consumer;
 import udmi.lib.base.MqttDevice;
-import udmi.lib.base.UdmiException.BlobParseException;
-import udmi.lib.base.UdmiException.PayloadTooBigException;
-import udmi.schema.Category;
+import udmi.lib.blob.intf.BlobLifecycleHandler;
 import udmi.lib.client.host.PublisherHost;
 import udmi.lib.client.manager.DeviceManager;
 import udmi.schema.BlobBlobsetConfig.BlobPhase;
@@ -59,10 +57,25 @@ import udmi.util.SchemaVersion;
 public class PubberPublisherHost extends PubberManager implements PublisherHost {
 
   private static final int CONNECT_RETRIES = 10;
-
+  // <editor-fold desc="TODO move this part to the library">
+  private final Map<String, AtomicInteger> messageCounts = new ConcurrentHashMap<>();
+  private final AtomicInteger retriesCount = new AtomicInteger(0);
+  private final ReentrantLock stateLock = new ReentrantLock();
+  public DevicePersistent persistentData;
   private PubberDeviceManager deviceManager;
   private SiteModel siteModel;
   private MockGitModuleEmulator moduleEmulator;
+  private BlobLifecycleHandler blobLifecycleHandler;
+  private CountDownLatch configLatch;
+  private MqttDevice deviceTarget;
+  private long lastStateTimeMs;
+  private String workingEndpoint;
+  private String attemptedEndpoint;
+  private EndpointConfiguration extractedEndpoint;
+  private SchemaVersion targetSchema;
+  private int deviceUpdateCount = -1;
+  private boolean isGatewayDevice;
+  private PrintStream logPrintWriter;
 
   /**
    * Start an instance from a configuration file.
@@ -90,7 +103,7 @@ public class PubberPublisherHost extends PubberManager implements PublisherHost 
   @Override
   public void initialize() {
     EndpointConfiguration.Protocol protocol = requireNonNullElse(
-            ifNotNullGet(config.endpoint, endpoint -> endpoint.protocol), MQTT);
+        ifNotNullGet(config.endpoint, endpoint -> endpoint.protocol), MQTT);
     checkArgument(MQTT.equals(protocol), "Protocol mismatch");
     PublisherHost.super.initialize();
   }
@@ -122,70 +135,14 @@ public class PubberPublisherHost extends PubberManager implements PublisherHost 
         config.deviceId, config.serialNo, config.macAddr,
         config.gatewayId, optionsString(config.options)));
 
-    initModuleForBlobUpdates();
+    this.blobLifecycleHandler = new PubberBlobLifecycleHandler(this, config.serialNo);
     markStateDirty();
   }
 
-  private void updateModuleVersionInState() {
-    if (moduleEmulator != null) {
-      if (getDeviceState().system.software == null) {
-        getDeviceState().system.software = new HashMap<>();
-      }
-      getDeviceState().system.software.put(SOFTWARE_MODULE_KEY, moduleEmulator.getModuleVersion());
-      markStateDirty();
-    }
-  }
-
-  private void initModuleForBlobUpdates() {
-    String dynamicDir = "out/pubber_module_repo_" + config.serialNo;
-    moduleEmulator = new MockGitModuleEmulator(dynamicDir, this::info, this::notice, this::error);
-    moduleEmulator.initialize();
-    updateModuleVersionInState();
-  }
-
-  private Consumer<String> getBlobHandler(String blobName) {
-    return Map.<String, Consumer<String>>of(
-        SOFTWARE_MODULE_KEY, this::updateModule
-    ).get(blobName);
-  }
-
   @Override
-  public boolean isSupportedBlob(String blobName) {
-    return getBlobHandler(blobName) != null;
+  public BlobLifecycleHandler getBlobLifecycleHandler() {
+    return blobLifecycleHandler;
   }
-
-  @Override
-  public void installBlobPayload(String blobName, String payload) {
-    getBlobHandler(blobName).accept(payload);
-  }
-
-  @Override
-  public byte[] extractBlobData(String url) {
-    if (url != null && url.contains("mock_oversize")) {
-      throw new PayloadTooBigException("Simulated payload too big");
-    }
-    return PublisherHost.super.extractBlobData(url);
-  }
-
-  @Override
-  public void activateBlob(String blobName) {
-    if (SOFTWARE_MODULE_KEY.equals(blobName)) {
-      logEvent(Category.BLOBSET_BLOB_APPLY_RESTART, "Restart required for " + blobName);
-      notice("Post-processing Git OTA update. Restarting...");
-      getDeviceManager().systemLifecycle(Operation.SystemMode.RESTART);
-    }
-  }
-
-  private void updateModule(String payload) {
-    try {
-      parseJson(payload);
-    } catch (Exception e) {
-      throw new BlobParseException("Failed to parse blob payload as JSON");
-    }
-    moduleEmulator.updateTo(payload);
-    updateModuleVersionInState();
-  }
-
 
   @Override
   public void initializePersistentStore() {
@@ -322,7 +279,7 @@ public class PubberPublisherHost extends PubberManager implements PublisherHost 
     debug(format("Extracted device password from %s", siteModel.getDeviceKeyFile(config.deviceId)));
     String targetDeviceId = getTargetDeviceId(siteModel, config.deviceId);
     CertManager certManager = new CertManager(new File(siteModel.getReflectorDir(), "ca.crt"),
-            siteModel.getDeviceDir(targetDeviceId), endpoint.transport, keyPassword, this::info);
+        siteModel.getDeviceDir(targetDeviceId), endpoint.transport, keyPassword, this::info);
     deviceTarget = new MqttDevice(endpoint, this::publisherException, certManager, isMsTimestamp());
     publishDirtyState();
   }
@@ -364,24 +321,6 @@ public class PubberPublisherHost extends PubberManager implements PublisherHost 
   public SiteModel getSiteModel() {
     return siteModel;
   }
-
-  // <editor-fold desc="TODO move this part to the library">
-  private final Map<String, AtomicInteger> messageCounts = new ConcurrentHashMap<>();
-  private final AtomicInteger retriesCount = new AtomicInteger(0);
-  private final ReentrantLock stateLock = new ReentrantLock();
-
-  private CountDownLatch configLatch;
-  private MqttDevice deviceTarget;
-  private long lastStateTimeMs;
-  private String workingEndpoint;
-  private String attemptedEndpoint;
-  private EndpointConfiguration extractedEndpoint;
-  private SchemaVersion targetSchema;
-  private int deviceUpdateCount = -1;
-  private boolean isGatewayDevice;
-  private PrintStream logPrintWriter;
-
-  public DevicePersistent persistentData;
 
   @Override
   public void periodicSchedule(int sec, Runnable runnable) {
@@ -444,18 +383,23 @@ public class PubberPublisherHost extends PubberManager implements PublisherHost 
   }
 
   @Override
-  public void setLastStateTimeMs(long lastStateTimeMs) {
-    this.lastStateTimeMs = lastStateTimeMs;
-  }
-
-  @Override
   public long getLastStateTimeMs() {
     return lastStateTimeMs;
   }
 
   @Override
+  public void setLastStateTimeMs(long lastStateTimeMs) {
+    this.lastStateTimeMs = lastStateTimeMs;
+  }
+
+  @Override
   public CountDownLatch getConfigLatch() {
     return configLatch;
+  }
+
+  @Override
+  public void setConfigLatch(CountDownLatch configLatch) {
+    this.configLatch = configLatch;
   }
 
   @Override
@@ -484,13 +428,18 @@ public class PubberPublisherHost extends PubberManager implements PublisherHost 
   }
 
   @Override
-  public void setAttemptedEndpoint(String attemptedEndpoint) {
-    this.attemptedEndpoint = attemptedEndpoint;
+  public void setWorkingEndpoint(String workingEndpoint) {
+    this.workingEndpoint = workingEndpoint;
   }
 
   @Override
   public String getAttemptedEndpoint() {
     return attemptedEndpoint;
+  }
+
+  @Override
+  public void setAttemptedEndpoint(String attemptedEndpoint) {
+    this.attemptedEndpoint = attemptedEndpoint;
   }
 
   @Override
@@ -511,16 +460,6 @@ public class PubberPublisherHost extends PubberManager implements PublisherHost 
   @Override
   public boolean isGatewayDevice() {
     return isGatewayDevice;
-  }
-
-  @Override
-  public void setWorkingEndpoint(String workingEndpoint) {
-    this.workingEndpoint = workingEndpoint;
-  }
-
-  @Override
-  public void setConfigLatch(CountDownLatch configLatch) {
-    this.configLatch = configLatch;
   }
 
   @Override

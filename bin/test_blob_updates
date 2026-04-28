@@ -24,12 +24,13 @@ site_path=sites/udmi_site_model
 device_id=AHU-1
 serial_no=sequencer-$RANDOM
 
-# Use tag v2 for OTA update
+# Use tag v2 for module update
 target_commit="v2"
+# shellcheck disable=SC2089
+payload='{"version": "'${target_commit}'"}'
 
 mkdir -p out/
 
-rm -f out/pubber.log.*
 rm -f out/blobs.json
 pubber_log=out/pubber.log.${serial_no}
 
@@ -42,9 +43,9 @@ sleep 20
 
 log "Target commit for update: $target_commit"
 
-log "Generating OTA config..."
-base64_payload=$(echo -n $target_commit | base64 -w 0)
-sha256_payload=$(echo -n $target_commit | openssl sha256 | awk '{print $2}')
+log "Generating blob update config..."
+base64_payload=$(echo -n $payload | base64 -w 0)
+sha256_payload=$(echo -n $payload | openssl sha256 | awk '{print $2}')
 generation_payload=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
 cat <<EOF > out/blobs.json
@@ -66,22 +67,22 @@ out_base=$site_path/devices/$device_id/out
 config_base=$site_path/devices/$device_id/config
 mkdir -p $config_base
 
-rm -f $config_base/ota_config.json
+rm -f $config_base/blob_update_config.json
 
 if [ -f $out_base/generated_config.json ]; then
-    jq -s '.[0] * .[1]' $out_base/generated_config.json out/blobs.json > $config_base/ota_config.json
+    jq -s '.[0] * .[1]' $out_base/generated_config.json out/blobs.json > $config_base/blob_update_config.json
 else
-    cp out/blobs.json $config_base/ota_config.json
+    cp out/blobs.json $config_base/blob_update_config.json
 fi
 
 log "Applying update config..."
-bin/reset_config $site_path $project_spec $device_id ota_config.json
+bin/reset_config $site_path $project_spec $device_id blob_update_config.json
 
 log "Waiting for pubber to process update..."
 sleep 20
 
 log "Verifying logs..."
-if grep -q "Triggering mock OTA update to commit $target_commit" $pubber_log; then
+if grep -q "Updating pubber module to: $target_commit" $pubber_log; then
     log "Update trigger detected."
 else
     fail "Update trigger NOT detected."
@@ -90,10 +91,10 @@ fi
 # Wait for update to complete and state to propagate
 sleep 20
 
-if grep -q "Mock OTA update completed successfully" $pubber_log; then
-    log "OTA success detected."
+if grep -q "Mock module update completed" $pubber_log; then
+    log "Blob update success detected."
 else
-    fail "OTA success NOT detected."
+    fail "Blob success NOT detected."
 fi
 
 if jq -e --arg gen "$generation_payload" '.blobset.blobs.pubber_module.phase == "final" and .blobset.blobs.pubber_module.generation == $gen' pubber/out/state.json > /dev/null; then
@@ -102,7 +103,7 @@ else
     fail "Blob state phase: FINAL NOT found in state"
 fi
 
-log "OTA updates test passed!"
+log "Blob update test passed!"
 
 echo Cleaning up pubber background process...
 kill $pubber_pid

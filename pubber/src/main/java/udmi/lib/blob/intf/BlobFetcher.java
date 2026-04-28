@@ -1,4 +1,4 @@
-package udmi.lib.intf;
+package udmi.lib.blob.intf;
 
 /**
  * Interface for fetching blob data from a given URL.

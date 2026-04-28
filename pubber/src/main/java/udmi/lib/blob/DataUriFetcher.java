@@ -5,7 +5,7 @@ import static udmi.lib.client.host.PublisherHost.DATA_URL_JSON_BASE64;
 
 import java.util.Base64;
 import udmi.lib.base.UdmiException.BlobParseException;
-import udmi.lib.intf.BlobFetcher;
+import udmi.lib.blob.intf.BlobFetcher;
 
 
 /**

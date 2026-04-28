@@ -2,7 +2,7 @@ package udmi.lib.blob;
 
 import java.util.HashMap;
 import java.util.Map;
-import udmi.lib.intf.BlobFetcher;
+import udmi.lib.blob.intf.BlobFetcher;
 
 /**
  * Registry for blob fetchers based on URL schemes.
