@@ -20,6 +20,7 @@ bambi
 BCD
 bcd
 blobset
+blobsets
 BMS
 boolean
 BOS
@@ -38,6 +39,7 @@ contextualise
 coreutils
 CoV
 cron
+cryptographically
 datapoint
 DBO
 DBP
@@ -87,6 +89,7 @@ hostname
 http
 https
 IAM
+idempotency
 idToken
 integrations
 invoker
