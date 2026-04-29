@@ -363,6 +363,8 @@ class SystemManager(BaseManager):
 
             LOGGER.info("New generation detected for blob '%s': %s",
                         key, blob_config.generation)
+            LOGGER.info("Received blob update config for %s", key,
+                        extra={"category": "blobset.blob.receive"})
             self._apply_blob(key, blob_config)
 
     def _apply_blob(self, key: str, config: BlobBlobsetConfig) -> None:
@@ -394,6 +396,8 @@ class SystemManager(BaseManager):
         os.close(tmp_fd)
 
         try:
+            LOGGER.info("Extract blob data for %s", key,
+                        extra={"category": "blobset.blob.extract"})
             LOGGER.info("Streaming blob '%s' to %s...", key, tmp_path)
             get_verified_blob_file(config, tmp_path)
 
@@ -406,10 +410,12 @@ class SystemManager(BaseManager):
                 with open(tmp_path, 'rb') as f:
                     payload = f.read()
 
+            LOGGER.info("Staging blob update...",
+                        extra={"category": "blobset.blob.apply"})
             LOGGER.info("Invoking handler for blob '%s'...", key)
             process_output = handler.process(key, payload)
 
-            LOGGER.info("Blob '%s' applied successfully.", key)
+            LOGGER.info("Blob '%s' successfully staged, publishing final state", key)
             self._applied_blob_generations[key] = config.generation
             self._update_blob_state(key, Phase.final, config.generation)
             self.trigger_state_update(immediate=True)
@@ -419,10 +425,13 @@ class SystemManager(BaseManager):
                                              self._applied_blob_generations)
 
             if handler.post_process:
+                LOGGER.info("Activating blob update...",
+                            extra={"category": "blobset.blob.apply"})
                 handler.post_process(key, process_output)
 
         except Exception as e:  # pylint:disable=broad-exception-caught
-            LOGGER.error("Failed to apply blob '%s': %s", key, e)
+            LOGGER.error("Failed to apply blob '%s': %s", key, e,
+                         extra={"category": "blobset.blob.apply.failure"})
             self._update_blob_state(key, Phase.final, config.generation, str(e))
             self.trigger_state_update()
 
@@ -440,7 +449,8 @@ class SystemManager(BaseManager):
             status_entry = Entry(
                 message=error_message,
                 level=500,
-                timestamp=datetime.now(timezone.utc).isoformat()
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                category="blobset.blob.apply"
             )
 
         self._blob_states[key] = BlobBlobsetState(

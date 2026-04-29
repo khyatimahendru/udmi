@@ -59,10 +59,13 @@ class UDMIMqttLogHandler(logging.Handler):
             timestamp = datetime.fromtimestamp(record.created,
                                                tz=timezone.utc).isoformat()
 
+            category = getattr(record, "category", None)
+
             log_entry = Entry(
                 message=msg,
                 level=udmi_level,
-                timestamp=timestamp
+                timestamp=timestamp,
+                category=category
             )
 
             system_event = SystemEvents(
