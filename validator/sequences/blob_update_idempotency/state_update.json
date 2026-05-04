@@ -45,10 +45,10 @@
     "operation" : {
       "operational" : true,
       "last_start" : "TIMESTAMP",
-      "restart_count" : 2,
+      "restart_count" : 3,
       "mode" : "initial"
     },
-    "serial_no" : "sequencer-4810",
+    "serial_no" : "sequencer-23930",
     "hardware" : {
       "make" : "BOS",
       "model" : "pubber"

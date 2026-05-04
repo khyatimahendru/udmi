@@ -10,17 +10,16 @@
     "restart_count" : 1,
     "mode" : "initial"
   },
-  "serial_no" : "sequencer-21370",
+  "serial_no" : "sequencer-4857",
   "software" : {
     "firmware" : "v1",
     "pubber_module" : "v1"
   },
   "status" : {
-    "message" : "Failed to parse blob payload for pubber_module",
-    "detail" : "udmi.lib.base.UdmiException$BlobParseException: Failed to parse blob payload for pubber_module;",
-    "category" : "blobset.blob.parse.invalid",
+    "message" : "Received blob update config for pubber_module",
+    "category" : "blobset.blob.receive",
     "timestamp" : "TIMESTAMP",
-    "level" : 500
+    "level" : 100
   },
   "timestamp" : "TIMESTAMP",
   "version" : "1.5.3"
