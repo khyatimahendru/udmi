@@ -177,23 +177,23 @@ public class Category {
     public static final int BLOBSET_BLOB_RECEIVE_VALUE = DEBUG.value();
     static { LEVEL.put(BLOBSET_BLOB_RECEIVE, DEBUG); }
 
-    // Extracting a blob payload
-    public static final String BLOBSET_BLOB_EXTRACT = "blobset.blob.extract";
-    public static final Level BLOBSET_BLOB_EXTRACT_LEVEL = DEBUG;
-    public static final int BLOBSET_BLOB_EXTRACT_VALUE = DEBUG.value();
-    static { LEVEL.put(BLOBSET_BLOB_EXTRACT, DEBUG); }
+    // Fetching a blob update
+    public static final String BLOBSET_BLOB_FETCH = "blobset.blob.fetch";
+    public static final Level BLOBSET_BLOB_FETCH_LEVEL = DEBUG;
+    public static final int BLOBSET_BLOB_FETCH_VALUE = DEBUG.value();
+    static { LEVEL.put(BLOBSET_BLOB_FETCH, DEBUG); }
 
     // Insufficient storage to download or unpack blob
-    public static final String BLOBSET_BLOB_EXTRACT_OVERSIZE = "blobset.blob.extract.oversize";
-    public static final Level BLOBSET_BLOB_EXTRACT_OVERSIZE_LEVEL = ERROR;
-    public static final int BLOBSET_BLOB_EXTRACT_OVERSIZE_VALUE = ERROR.value();
-    static { LEVEL.put(BLOBSET_BLOB_EXTRACT_OVERSIZE, ERROR); }
+    public static final String BLOBSET_BLOB_FETCH_OVERSIZE = "blobset.blob.fetch.oversize";
+    public static final Level BLOBSET_BLOB_FETCH_OVERSIZE_LEVEL = ERROR;
+    public static final int BLOBSET_BLOB_FETCH_OVERSIZE_VALUE = ERROR.value();
+    static { LEVEL.put(BLOBSET_BLOB_FETCH_OVERSIZE, ERROR); }
 
-    // Blob extraction failed
-    public static final String BLOBSET_BLOB_EXTRACT_FAILURE = "blobset.blob.extract.failure";
-    public static final Level BLOBSET_BLOB_EXTRACT_FAILURE_LEVEL = ERROR;
-    public static final int BLOBSET_BLOB_EXTRACT_FAILURE_VALUE = ERROR.value();
-    static { LEVEL.put(BLOBSET_BLOB_EXTRACT_FAILURE, ERROR); }
+    // Blob fetch failed
+    public static final String BLOBSET_BLOB_FETCH_FAILURE = "blobset.blob.fetch.failure";
+    public static final Level BLOBSET_BLOB_FETCH_FAILURE_LEVEL = ERROR;
+    public static final int BLOBSET_BLOB_FETCH_FAILURE_VALUE = ERROR.value();
+    static { LEVEL.put(BLOBSET_BLOB_FETCH_FAILURE, ERROR); }
 
     // Parsing and verifying a blob
     public static final String BLOBSET_BLOB_PARSE = "blobset.blob.parse";

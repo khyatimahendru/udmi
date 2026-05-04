@@ -10,7 +10,7 @@
     "restart_count" : 1,
     "mode" : "initial"
   },
-  "serial_no" : "sequencer-5955",
+  "serial_no" : "sequencer-1125",
   "software" : {
     "firmware" : "v1",
     "pubber_module" : "v1"

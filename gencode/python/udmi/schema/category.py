@@ -92,14 +92,14 @@ class Category(Enum):
     # About receiving a blob update
     BLOBSET_BLOB_RECEIVE = ("blobset.blob.receive", Level.DEBUG)
 
-    # Extracting a blob payload
-    BLOBSET_BLOB_EXTRACT = ("blobset.blob.extract", Level.DEBUG)
+    # Fetching a blob update
+    BLOBSET_BLOB_FETCH = ("blobset.blob.fetch", Level.DEBUG)
 
     # Insufficient storage to download or unpack blob
-    BLOBSET_BLOB_EXTRACT_OVERSIZE = ("blobset.blob.extract.oversize", Level.ERROR)
+    BLOBSET_BLOB_FETCH_OVERSIZE = ("blobset.blob.fetch.oversize", Level.ERROR)
 
-    # Blob extraction failed
-    BLOBSET_BLOB_EXTRACT_FAILURE = ("blobset.blob.extract.failure", Level.ERROR)
+    # Blob fetch failed
+    BLOBSET_BLOB_FETCH_FAILURE = ("blobset.blob.fetch.failure", Level.ERROR)
 
     # Parsing and verifying a blob
     BLOBSET_BLOB_PARSE = ("blobset.blob.parse", Level.DEBUG)

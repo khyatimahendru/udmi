@@ -58,9 +58,9 @@ could be used with a **WARNING** level for a warning case during normal operatio
   * _blob_: (**INFO**) Conditions specific to an individual blob
     * _update_: (**INFO**) Processing a blob update
     * _receive_: (**DEBUG**) About receiving a blob update
-    * _extract_: (**DEBUG**) Extracting a blob payload
+    * _fetch_: (**DEBUG**) Fetching a blob update
       * _oversize_: (**ERROR**) Insufficient storage to download or unpack blob
-      * _failure_: (**ERROR**) Blob extraction failed
+      * _failure_: (**ERROR**) Blob fetch failed
     * _parse_: (**DEBUG**) Parsing and verifying a blob
       * _corrupt_: (**ERROR**) Data integrity check failed
       * _invalid_: (**ERROR**) The data is invalid in some way

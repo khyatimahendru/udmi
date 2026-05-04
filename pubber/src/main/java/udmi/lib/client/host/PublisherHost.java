@@ -135,7 +135,7 @@ public interface PublisherHost extends ManagerHost {
       "events/mapping", "{ NOT VALID JSON!");
   List<String> INVALID_KEYS = new ArrayList<>(INVALID_REPLACEMENTS.keySet());
   Map<Class<? extends Exception>, String> BLOB_ERROR_CATEGORIES = Map.of(
-      PayloadTooBigException.class, Category.BLOBSET_BLOB_EXTRACT_OVERSIZE,
+      PayloadTooBigException.class, Category.BLOBSET_BLOB_FETCH_OVERSIZE,
       BlobParseException.class, Category.BLOBSET_BLOB_PARSE_INVALID,
       HashMismatchException.class, Category.BLOBSET_BLOB_PARSE_CORRUPT,
       BlobIncompatibleException.class, Category.BLOBSET_BLOB_PARSE_INCOMPATIBLE,
@@ -315,7 +315,7 @@ public interface PublisherHost extends ManagerHost {
   default String fetchVerifiedBlob(String blobName) {
     BlobBlobsetConfig blobBlobsetConfig = getAllBlobsConfig().get(blobName);
     if (blobBlobsetConfig != null && FINAL.equals(blobBlobsetConfig.phase)) {
-      logEvent(Category.BLOBSET_BLOB_EXTRACT, "Extract blob data for " + blobName);
+      logEvent(Category.BLOBSET_BLOB_FETCH, "Fetch blob data for " + blobName);
       byte[] dataBytes = getBlobLifecycleHandler().fetchBlobData(blobBlobsetConfig.url);
       getBlobLifecycleHandler().verifyBlobIntegrity(dataBytes, blobBlobsetConfig.sha256);
       return new String(dataBytes);
@@ -352,7 +352,7 @@ public interface PublisherHost extends ManagerHost {
       try {
         String payload = fetchVerifiedBlob(blobName);
         if (payload == null) {
-          warn(format("Blob %s not ready for extraction", blobName));
+          warn(format("Blob %s not ready for fetch", blobName));
           return;
         }
         orchestrateTwoPhaseDeployment(blobName, config, state, payload);
@@ -365,7 +365,7 @@ public interface PublisherHost extends ManagerHost {
         });
 
         String category = BLOB_ERROR_CATEGORIES.getOrDefault(e.getClass(),
-            Category.BLOBSET_BLOB_EXTRACT_FAILURE);
+            Category.BLOBSET_BLOB_FETCH_FAILURE);
         logEvent(category, "For blob name " + blobName + ":\n", e);
 
         publishAsynchronousState();

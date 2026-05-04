@@ -19,8 +19,8 @@ import static udmi.schema.Bucket.ENDPOINT_CONFIG;
 import static udmi.schema.Bucket.SYSTEM_MODE;
 import static udmi.schema.Bucket.SYSTEM_SOFTWARE_UPDATES;
 import static udmi.schema.Category.BLOBSET_BLOB_APPLY;
-import static udmi.schema.Category.BLOBSET_BLOB_EXTRACT;
-import static udmi.schema.Category.BLOBSET_BLOB_EXTRACT_FAILURE;
+import static udmi.schema.Category.BLOBSET_BLOB_FETCH;
+import static udmi.schema.Category.BLOBSET_BLOB_FETCH_FAILURE;
 import static udmi.schema.Category.BLOBSET_BLOB_PARSE_CORRUPT;
 import static udmi.schema.Category.BLOBSET_BLOB_PARSE_INVALID;
 import static udmi.schema.Category.BLOBSET_BLOB_RECEIVE;
@@ -473,7 +473,7 @@ public class BlobsetSequences extends SequenceBase {
       + "and reports the new version.")
   public void blob_update_success() {
     verifyBlobUpdateSequence("success", true,
-        BLOBSET_BLOB_RECEIVE, BLOBSET_BLOB_EXTRACT, BLOBSET_BLOB_APPLY);
+        BLOBSET_BLOB_RECEIVE, BLOBSET_BLOB_FETCH, BLOBSET_BLOB_APPLY);
   }
 
   @Test(timeout = TWO_MINUTES_MS)
@@ -481,7 +481,7 @@ public class BlobsetSequences extends SequenceBase {
   @Summary("Validates tamper protection by providing a valid URL but an incorrect SHA-256 hash.")
   public void blob_update_invalid_hash() {
     verifyBlobUpdateSequence("fail_hash", false,
-        BLOBSET_BLOB_RECEIVE, BLOBSET_BLOB_EXTRACT, BLOBSET_BLOB_PARSE_CORRUPT);
+        BLOBSET_BLOB_RECEIVE, BLOBSET_BLOB_FETCH, BLOBSET_BLOB_PARSE_CORRUPT);
   }
 
   @Test(timeout = TWO_MINUTES_MS)
@@ -489,7 +489,7 @@ public class BlobsetSequences extends SequenceBase {
   @Summary("Validates network resilience by providing an unreachable or 404 URL.")
   public void blob_update_unreachable_url() {
     verifyBlobUpdateSequence("fail_fetch", false,
-        BLOBSET_BLOB_RECEIVE, BLOBSET_BLOB_EXTRACT, BLOBSET_BLOB_EXTRACT_FAILURE);
+        BLOBSET_BLOB_RECEIVE, BLOBSET_BLOB_FETCH, BLOBSET_BLOB_FETCH_FAILURE);
   }
 
   @Test(timeout = TWO_MINUTES_MS)
@@ -497,7 +497,7 @@ public class BlobsetSequences extends SequenceBase {
   @Summary("Validates format and signature checking by providing a dummy payload.")
   public void blob_update_invalid_payload() {
     verifyBlobUpdateSequence("fail_parse", false,
-        BLOBSET_BLOB_RECEIVE, BLOBSET_BLOB_EXTRACT, BLOBSET_BLOB_PARSE_INVALID);
+        BLOBSET_BLOB_RECEIVE, BLOBSET_BLOB_FETCH, BLOBSET_BLOB_PARSE_INVALID);
   }
 
   @Test(timeout = TWO_MINUTES_MS)
@@ -507,7 +507,7 @@ public class BlobsetSequences extends SequenceBase {
     // Standard successful update
     verifyBlobUpdateSequence("success", true,
         BLOBSET_BLOB_RECEIVE,
-        BLOBSET_BLOB_EXTRACT,
+        BLOBSET_BLOB_FETCH,
         BLOBSET_BLOB_APPLY
     );
 
@@ -524,7 +524,7 @@ public class BlobsetSequences extends SequenceBase {
 
     // No new lifecycle logs should have been emitted
     checkWasNotLogged(BLOBSET_BLOB_RECEIVE, Level.DEBUG);
-    checkWasNotLogged(BLOBSET_BLOB_EXTRACT, Level.DEBUG);
+    checkWasNotLogged(BLOBSET_BLOB_FETCH, Level.DEBUG);
     checkWasNotLogged(BLOBSET_BLOB_APPLY, Level.INFO);
   }
 

@@ -4,7 +4,7 @@
   "logentries" : [ ],
   "metrics" : {
     "mem_total_mb" : 112.0,
-    "mem_free_mb" : 80.07637023925781
+    "mem_free_mb" : 79.62162780761719
   },
   "timestamp" : "TIMESTAMP",
   "version" : "1.5.3"

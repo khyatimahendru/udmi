@@ -8,7 +8,7 @@ Validates a successful blob update where the device fetches, applies, and report
 1. Wait for pubber_module phase transitions
 1. Wait for pubber_module phase is FINAL
 1. Wait until system logs level `DEBUG` category `blobset.blob.receive`
-1. Wait until system logs level `DEBUG` category `blobset.blob.extract`
+1. Wait until system logs level `DEBUG` category `blobset.blob.fetch`
 1. Wait until system logs level `NOTICE` category `blobset.blob.apply`
 1. Check that pubber_module state is success
 1. Check that pubber_module software version reflects update
