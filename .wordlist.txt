@@ -39,6 +39,7 @@ contextualise
 coreutils
 CoV
 cron
+cryptographic
 cryptographically
 datapoint
 DBO
@@ -109,6 +110,7 @@ KNX
 kube
 kubectl
 Kubernetes
+lifecycle
 localhost
 localnet
 logentry
@@ -215,6 +217,7 @@ UI
 uint
 unconfigured
 underspecified
+unencoded
 uniqs
 unitid
 UNK
