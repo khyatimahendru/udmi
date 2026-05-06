@@ -15,7 +15,9 @@ public class DiscoveryFacetResolver implements FacetResolver {
 
   @Override
   public Set<String> resolve(SiteModel siteModel, String deviceId) {
-    return catchToNull(() -> siteModel.getMetadata(deviceId).discovery.families.keySet());
+    Set<String> families = catchToNull(
+        () -> siteModel.getMetadata(deviceId).discovery.families.keySet());
+    return families == null ? Set.of() : families;
   }
 
   @Override
