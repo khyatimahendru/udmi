@@ -1,8 +1,8 @@
-[**UDMI**](../../) / [**Docs**](../) / [**Specs**](./) / [Blobset](#)
+[**UDMI**](../../) / [**Docs**](../) / [**Specs**](./) / [Blob Updates](#)
 
 # Blob Updates Specification
 
-The _Blobset API_ defines a standard mechanism for delivering data blobs to a device via the UDMI configuration channel. This mechanism is commonly utilized for firmware updates, software module installations, security keys, or large configuration packages that are too large to fit directly into standard JSON configuration messages.
+The _Blob Updates API_ defines a standard mechanism for delivering data blobs to a device via the UDMI configuration channel. This mechanism is commonly utilized for firmware updates, software module installations, security keys, or large configuration packages that are too large to fit directly into standard JSON configuration messages.
 
 A device indicates its supported data blobs through discovery mechanisms, and the cloud controls the download, validation, and application of these blobs through the `blobset` block in the device configuration.
 
@@ -36,6 +36,10 @@ The [`blobset` block in state](../../schema/state_blobset.json) reflects the pro
 
 ## Update Sequence Flow
 
+> [!IMPORTANT]
+> **Observable Update Process**
+> Devices are required to emit standard hierarchical log categories at each distinct operational milestone. This systematic telemetry creates a fully observable update pipeline, allowing cloud management platforms and automated testing frameworks to trace payload downloads, verification steps, and installation progress in real-time.
+
 A standard successful blob update execution flows as follows:
 
 ```mermaid
@@ -62,17 +66,18 @@ Devices **must** check the `generation` or cryptographic `sha256` hash of a newl
 
 ## Error Handling & Log Categories
 
-When tracking blob updates or reporting processing failures, the device must use hierarchical log categories and status entries under the `blobset.blob` namespace.
+Granular observability relies on consistent telemetry. When tracking the lifecycle of blob updates or reporting processing failures, the device must use hierarchical log categories and status entries under the `blobset.blob` namespace.
 
 | Category | Level | Description / Failure Scenarios |
 | :--- | :--- | :--- |
+| **`blobset.blob.update`** | `INFO` | Information: General category for processing a blob update. |
 | **`blobset.blob.receive`** | `DEBUG` | Emitted when a new or updated blob configuration block is received. |
 | **`blobset.blob.fetch`** | `DEBUG` | Emitted when starting a network fetch or reading inline data payload. |
-| **`blobset.blob.fetch.oversize`** | `ERROR` | terminal failure: Insufficient local storage or memory to download or unpack the blob. |
+| **`blobset.blob.fetch.oversize`** | `ERROR` | Terminal failure: Insufficient local storage or memory to download or unpack the blob. |
 | **`blobset.blob.fetch.failure`** | `ERROR` | Terminal failure: Resource unreachable, network connection timed out, or HTTP 404 returned. |
 | **`blobset.blob.parse`** | `DEBUG` | Emitted when beginning the verification, checksum calculation, or format parsing. |
 | **`blobset.blob.parse.corrupt`** | `ERROR` | Terminal failure: The computed SHA-256 hash of the downloaded resource does not match the expected `sha256` parameter. |
-| **`blobset.blob.parse.invalid`** | `ERROR` | Terminal failure: The format or structure of the payload payload is invalid or structurally malformed. |
+| **`blobset.blob.parse.invalid`** | `ERROR` | Terminal failure: The format or structure of the payload is invalid or structurally malformed. |
 | **`blobset.blob.parse.incompatible`**| `ERROR` | Terminal failure: The content is valid but target version/architecture is incompatible with this hardware model. |
 | **`blobset.blob.apply`** | `NOTICE`| Emitted when applying or executing the validated update block. |
 | **`blobset.blob.apply.failure`** | `ERROR` | Terminal failure: Unexpected execution exception or internal installer error during setup. |
