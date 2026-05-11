@@ -43,40 +43,10 @@ sleep 20
 
 log "Target commit for update: $target_commit"
 
-log "Generating blob update config..."
-base64_payload=$(echo -n $payload | base64 -w 0)
-sha256_payload=$(echo -n $payload | openssl sha256 | awk '{print $2}')
+log "Generating and applying blob update config..."
 generation_payload=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
-cat <<EOF > out/blobs.json
-{
-  "blobset": {
-    "blobs": {
-      "pubber_module": {
-        "phase": "final",
-        "url": "data:application/json;base64,$base64_payload",
-        "sha256": "$sha256_payload",
-        "generation": "$generation_payload"
-      }
-    }
-  }
-}
-EOF
-
-out_base=$site_path/devices/$device_id/out
-config_base=$site_path/devices/$device_id/config
-mkdir -p $config_base
-
-rm -f $config_base/blob_update_config.json
-
-if [ -f $out_base/generated_config.json ]; then
-    jq -s '.[0] * .[1]' $out_base/generated_config.json out/blobs.json > $config_base/blob_update_config.json
-else
-    cp out/blobs.json $config_base/blob_update_config.json
-fi
-
-log "Applying update config..."
-bin/reset_config $site_path $project_spec $device_id blob_update_config.json
+bin/update_blob $site_path $project_spec $device_id pubber_module "$payload" --generation "$generation_payload"
 
 log "Waiting for pubber to process update..."
 sleep 20
