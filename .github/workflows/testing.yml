@@ -323,8 +323,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
-      UDMI_ALT_REGISTRY: ZZ-REDIRECT-NA
-      TARGET_PROJECT: //mqtt/localhost
+      TARGET_PROJECT: ${{ vars.TARGET_PROJECT || '//mqtt/localhost' }}
     steps:
       - uses: actions/checkout@v6
         with:
