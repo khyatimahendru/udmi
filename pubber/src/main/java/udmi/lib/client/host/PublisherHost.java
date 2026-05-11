@@ -56,6 +56,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.Lock;
+import java.util.stream.Collectors;
 import org.apache.http.ConnectionClosedException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -303,6 +304,28 @@ public interface PublisherHost extends ManagerHost {
         continue;
       }
       evaluateAndDeployBlob(blobName);
+    }
+  }
+
+  /**
+   * Cleans up blobset state and persistence for any user-defined blobs that have been removed
+   * from the active configuration.
+   */
+  default void cleanupRemovedBlobs() {
+    if (getDeviceState().blobset == null || getDeviceState().blobset.blobs == null) {
+      return;
+    }
+    Map<String, BlobBlobsetConfig> allBlobs = getAllBlobsConfig();
+    Set<String> systemBlobs = Arrays.stream(SystemBlobsets.values())
+        .map(SystemBlobsets::value)
+        .collect(Collectors.toSet());
+
+    List<String> stateBlobs = new ArrayList<>(getDeviceState().blobset.blobs.keySet());
+    for (String blobName : stateBlobs) {
+      if (!systemBlobs.contains(blobName) && !allBlobs.containsKey(blobName)) {
+        info("Removing blobset state for removed blob: " + blobName);
+        removeBlobsetBlobState(blobName);
+      }
     }
   }
 
@@ -753,6 +776,7 @@ public interface PublisherHost extends ManagerHost {
         getDeviceManager().updateConfig(configMsg);
         extractEndpointBlobConfig();
         evaluateAllDeviceBlobs();
+        cleanupRemovedBlobs();
       } else {
         info(format("%s defaulting empty config", getTimestamp()));
       }
@@ -887,13 +911,23 @@ public interface PublisherHost extends ManagerHost {
 
   void setExtractedEndpoint(EndpointConfiguration endpointConfiguration);
 
-  private void removeBlobsetBlobState(BlobsetConfig.SystemBlobsets blobId) {
-    if (getDeviceState().blobset == null) {
+  /**
+   * Removes a specified blob configuration from the device state and persistent storage records.
+   *
+   * @param blobName The unique identifier or name of the blob to remove.
+   */
+  default void removeBlobsetBlobState(String blobName) {
+    if (getDeviceState().blobset == null || getDeviceState().blobset.blobs == null) {
       return;
     }
 
-    if (getDeviceState().blobset.blobs.remove(blobId.value()) == null) {
+    if (getDeviceState().blobset.blobs.remove(blobName) == null) {
       return;
+    }
+
+    if (getPersistentData() != null && getPersistentData().applied_blobs != null) {
+      getPersistentData().applied_blobs.remove(blobName);
+      writePersistentStore();
     }
 
     if (getDeviceState().blobset.blobs.isEmpty()) {
@@ -901,6 +935,10 @@ public interface PublisherHost extends ManagerHost {
     }
 
     markStateDirty();
+  }
+
+  private void removeBlobsetBlobState(BlobsetConfig.SystemBlobsets blobId) {
+    removeBlobsetBlobState(blobId.value());
   }
 
   /**
