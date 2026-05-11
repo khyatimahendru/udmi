@@ -190,7 +190,7 @@ public class BlobsetSequences extends SequenceBase {
 
   @Feature(stage = PREVIEW, bucket = ENDPOINT_CONFIG)
   @Summary("Push endpoint config message to device that results in a connection error.")
-  @Test(timeout = TWO_MINUTES_MS)
+  @Test(timeout = TWO_MINUTES_MS) // TODO Is this enough? Does a client try X times?
   public void endpoint_connection_error() {
     setDeviceConfigEndpointBlob(BOGUS_ENDPOINT_HOSTNAME, registryId, false);
     untilErrorReported();
