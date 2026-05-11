@@ -21,7 +21,9 @@ import static udmi.schema.Bucket.SYSTEM_SOFTWARE_UPDATES;
 import static udmi.schema.Category.BLOBSET_BLOB_APPLY;
 import static udmi.schema.Category.BLOBSET_BLOB_FETCH;
 import static udmi.schema.Category.BLOBSET_BLOB_FETCH_FAILURE;
+import static udmi.schema.Category.BLOBSET_BLOB_FETCH_OVERSIZE;
 import static udmi.schema.Category.BLOBSET_BLOB_PARSE_CORRUPT;
+import static udmi.schema.Category.BLOBSET_BLOB_PARSE_INCOMPATIBLE;
 import static udmi.schema.Category.BLOBSET_BLOB_PARSE_INVALID;
 import static udmi.schema.Category.BLOBSET_BLOB_RECEIVE;
 import static udmi.schema.FeatureDiscovery.FeatureStage.PREVIEW;
@@ -499,6 +501,23 @@ public class BlobsetSequences extends SequenceBase {
     verifyBlobUpdateSequence("fail_parse", false,
         BLOBSET_BLOB_RECEIVE, BLOBSET_BLOB_FETCH, BLOBSET_BLOB_PARSE_INVALID);
   }
+
+  @Test(timeout = TWO_MINUTES_MS)
+  @Feature(stage = PREVIEW, bucket = SYSTEM_SOFTWARE_UPDATES)
+  @Summary("Validates reporting of incompatibility for a blob update.")
+  public void blob_update_incompatible() {
+    verifyBlobUpdateSequence("fail_incompatible", false,
+        BLOBSET_BLOB_RECEIVE, BLOBSET_BLOB_FETCH, BLOBSET_BLOB_PARSE_INCOMPATIBLE);
+  }
+
+  @Test(timeout = TWO_MINUTES_MS)
+  @Feature(stage = PREVIEW, bucket = SYSTEM_SOFTWARE_UPDATES)
+  @Summary("Validates reporting of an oversized payload fetch failure.")
+  public void blob_update_oversize() {
+    verifyBlobUpdateSequence("fail_oversize", false,
+        BLOBSET_BLOB_RECEIVE, BLOBSET_BLOB_FETCH, BLOBSET_BLOB_FETCH_OVERSIZE);
+  }
+
 
   @Test(timeout = TWO_MINUTES_MS)
   @Feature(stage = PREVIEW, bucket = SYSTEM_SOFTWARE_UPDATES)

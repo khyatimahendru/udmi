@@ -44,8 +44,10 @@ RESULT pass system family_ipv4_addr PREVIEW 10/10 Sequence complete
 RESULT skip system family_ipv6_addr PREVIEW 0/0 No ipv6 address defined in metadata
 RESULT pass system.mode system_mode_restart PREVIEW 10/10 Sequence complete
 RESULT pass system.software.updates blob_update_idempotency PREVIEW 10/10 Sequence complete
+RESULT pass system.software.updates blob_update_incompatible PREVIEW 10/10 Sequence complete
 RESULT pass system.software.updates blob_update_invalid_hash PREVIEW 10/10 Sequence complete
 RESULT pass system.software.updates blob_update_invalid_payload PREVIEW 10/10 Sequence complete
+RESULT pass system.software.updates blob_update_oversize PREVIEW 10/10 Sequence complete
 RESULT pass system.software.updates blob_update_success PREVIEW 10/10 Sequence complete
 RESULT pass system.software.updates blob_update_unreachable_url PREVIEW 10/10 Sequence complete
 RESULT pass system state_make_model STABLE 10/10 Sequence complete

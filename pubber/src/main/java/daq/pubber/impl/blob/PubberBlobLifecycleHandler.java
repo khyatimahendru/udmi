@@ -7,6 +7,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
+import udmi.lib.base.UdmiException.BlobIncompatibleException;
 import udmi.lib.base.UdmiException.BlobParseException;
 import udmi.lib.base.UdmiException.PayloadTooBigException;
 import udmi.lib.blob.intf.BlobLifecycleHandler;
@@ -130,6 +131,9 @@ public class PubberBlobLifecycleHandler implements BlobLifecycleHandler {
       payloadMap = asMap(payload);
     } catch (Exception e) {
       throw new BlobParseException("Failed to parse blob payload for " + blobName);
+    }
+    if ("incompatible".equals(payloadMap.get("trigger"))) {
+      throw new BlobIncompatibleException("Simulated incompatibility for " + blobName);
     }
     moduleEmulator.updateTo(payloadMap);
     updateModuleVersionInState();
