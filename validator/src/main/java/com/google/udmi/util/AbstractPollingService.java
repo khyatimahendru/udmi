@@ -14,6 +14,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -57,6 +58,14 @@ public abstract class AbstractPollingService {
    */
   public AbstractPollingService(String serviceName, String subscriptionSuffix, String projectTarget,
       String siteModelBaseDir, String localOriginDir) {
+    this(serviceName, subscriptionSuffix, projectTarget, siteModelBaseDir, localOriginDir, 1);
+  }
+
+  /**
+   * Abstract class for a polling service with configurable concurrency.
+   */
+  public AbstractPollingService(String serviceName, String subscriptionSuffix, String projectTarget,
+      String siteModelBaseDir, String localOriginDir, int concurrency) {
     if (!projectTarget.matches(PROJECT_TARGET_REGEX.pattern())) {
       throw new IllegalArgumentException("Invalid project target format: " + projectTarget);
     }
@@ -72,8 +81,16 @@ public abstract class AbstractPollingService {
       LOGGER.info("Running in local origin mode.");
     }
 
-    String threadName = serviceName + "-poller";
-    this.pollingExecutor = Executors.newSingleThreadExecutor(r -> new Thread(r, threadName));
+    AtomicInteger threadCount = new AtomicInteger(1);
+    if (concurrency > 1) {
+      this.pollingExecutor = Executors.newFixedThreadPool(concurrency, r -> {
+        return new Thread(r, serviceName + "-poller-" + threadCount.getAndIncrement());
+      });
+    } else {
+      this.pollingExecutor = Executors.newSingleThreadExecutor(r -> {
+        return new Thread(r, serviceName + "-poller");
+      });
+    }
 
     String udmiNamespacePrefix = ofNullable(spec.udmiNamespace).map(ns -> ns + "~").orElse("");
     String requestsSubscription = udmiNamespacePrefix + subscriptionSuffix;
