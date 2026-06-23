@@ -4,6 +4,7 @@ PIP_OPTS="--index-url https://pypi.org/simple"
 ROOT_DIR=$(realpath $(dirname $0)/..)
 cd $ROOT_DIR
 
+VENV_OPTS=""
 if [[ -n $(which apt-get) ]]; then
     sudo apt-get update -y
     update_cmd="apt-get install -y"
@@ -11,13 +12,15 @@ if [[ -n $(which apt-get) ]]; then
 else
     update_cmd="apk add"
     # Some extra packages are necessary for alpine based docker builds.
-    extra_packages="${NO_CACHE_DIR:+--no-cache} linux-headers g++ gcc"
+    # We install pre-compiled versions of heavy libraries to avoid compiling them from source.
+    extra_packages="${NO_CACHE_DIR:+--no-cache} linux-headers g++ gcc py3-grpcio py3-cryptography py3-protobuf py3-cffi py3-pip py3-yaml"
+    VENV_OPTS="--system-site-packages"
 fi
 
 sudo $update_cmd $extra_packages moreutils expect python3-dev mosquitto mosquitto-clients
 
 python3 --version
-python3 -m venv venv
+python3 -m venv $VENV_OPTS venv
 
 venv_pip3=$($(dirname $0)/which_venv_pip3)
 echo $venv_pip3
