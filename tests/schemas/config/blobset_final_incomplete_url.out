@@ -1,0 +1,2 @@
+1 schema violations found
+  /blobset/blobs/_firmware_update: object has missing required properties (["generation","sha256"])

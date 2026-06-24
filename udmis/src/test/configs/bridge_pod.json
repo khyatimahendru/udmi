@@ -1,0 +1,18 @@
+{
+  "flow_defaults": {
+    "protocol": "local",
+    "hostname": "local"
+  },
+  "bridges": {
+    "test": {
+      "from": {
+        "recv_id": "from",
+        "send_id": "to"
+      },
+      "morf": {
+        "recv_id": "mark",
+        "send_id": "mend"
+      }
+    }
+  }
+}

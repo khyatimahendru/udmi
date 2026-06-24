@@ -1,0 +1,64 @@
+#!/bin/bash -e
+
+PREFIX=$1
+shift || true
+
+ROOT_DIR=$(dirname $0)/..
+
+out_dir=$ROOT_DIR/out
+if [[ -n $UDMI_REGISTRY_SUFFIX && -n $out_dir ]]; then
+    echo Relocating $out_dir to $out_dir${UDMI_REGISTRY_SUFFIX}
+    mv $out_dir $out_dir${UDMI_REGISTRY_SUFFIX}
+    out_dir=$out_dir${UDMI_REGISTRY_SUFFIX}
+fi
+
+TIME=`date --utc +%Y%m%d-%H%M%S`
+ARCHIVE=${PREFIX}udmi-support${UDMI_REGISTRY_SUFFIX}_$TIME.tgz
+OUT_DIR=$(realpath $out_dir --relative-to=$PWD)
+
+CONFIG_FILES="/tmp/validator_config.json /tmp/registrar_config.json /tmp/sequencer_config.json /tmp/pubber_config.json"
+
+mkdir -p $OUT_DIR
+echo Copying cached config files to $OUT_DIR/
+cp $CONFIG_FILES $OUT_DIR/ || true
+
+site_model=
+config_files=$(ls -t $OUT_DIR/*_config.json) || true
+for config in $config_files; do
+    site_model=$(jq -r .site_model $config)
+    site_model=$(realpath --relative-to=$PWD $site_model)
+    if [[ $site_model != null ]]; then
+        echo Using site_model $site_model from cached $config
+        break
+    fi
+done
+
+if [[ $site_model == null ]]; then
+    echo Could not determine site_model from recent configs.
+    site_model=
+fi
+
+if [[ -n $UDMI_REGISTRY_SUFFIX && -n $site_model ]]; then
+    echo Relocating $site_model to $site_model${UDMI_REGISTRY_SUFFIX}
+    mv $site_model $site_model${UDMI_REGISTRY_SUFFIX}
+    site_model=$site_model${UDMI_REGISTRY_SUFFIX}
+fi
+
+echo Lingering pubber processes:
+ps ax | fgrep pubber | fgrep java || true
+echo
+
+STAGING_DIR=/tmp/support_staging
+echo Staging files to $STAGING_DIR...
+rm -rf $STAGING_DIR
+mkdir -p $STAGING_DIR
+cp --parents -a $site_model $OUT_DIR $STAGING_DIR
+
+echo tar --exclude-vcs -czf /tmp/$ARCHIVE -C $STAGING_DIR $site_model $OUT_DIR
+tar --exclude-vcs -czf /tmp/$ARCHIVE -C $STAGING_DIR $site_model $OUT_DIR
+rm -rf $STAGING_DIR
+mv /tmp/$ARCHIVE .
+
+echo Created support archive $(realpath $ARCHIVE)
+ls -l $ARCHIVE
+md5sum $ARCHIVE

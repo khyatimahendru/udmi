@@ -1,0 +1,11 @@
+{
+  "min_loglevel" : 100,
+  "metrics_rate_sec" : 10,
+  "operation" : {
+    "mode" : "active",
+    "last_start" : "TIMESTAMP"
+  },
+  "testing" : {
+    "sequence_name" : "system_mode_restart"
+  }
+}

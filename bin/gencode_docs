@@ -1,0 +1,101 @@
+#!/bin/bash -e
+#
+# Automatic document generation, validation and helpers
+#
+# bin/gendocs [cmd]
+# 
+# <unspecified> (default)
+#   Generate HTML documentation from JSON schema. Stored in gencode/docs
+#a
+
+ROOT_DIR=$(realpath $(dirname $0)/..)
+cd $ROOT_DIR
+
+HIDEME_LIST=etc/schema_hideme.txt
+OUTPUT_DIR=gencode/docs
+TMP_DIR=tmp/schema
+
+error() {
+  echo "ERROR $*" >&2
+  exit 1
+}
+
+# Generate schema documentation (default)
+
+if [ -d venv ]; then
+    source venv/bin/activate
+fi
+
+rm -rf $OUTPUT_DIR $TMP_DIR
+mkdir -p $OUTPUT_DIR $TMP_DIR
+
+# Make a copy of the schema files into a tmp folder for any pre generator fixes
+cp -r schema/. $TMP_DIR
+
+# Remove file: prefix from references so document generator works
+find $TMP_DIR -type f -exec sed -i 's/file://' {} \;
+
+# Redirect links to internal documentation for the hosted as the output folder 
+# is one level down
+find $TMP_DIR -type f -exec sed -i 's;(../docs/;(../../docs/;' {} \;
+
+# Hide properties according to the hide me list
+echo Processing schema hide me list ...
+while read file property; do
+    [[ -n $file ]] && [[ $file != "#" ]] || continue
+    actual_file=$TMP_DIR/$file
+    actual_property=.properties$property
+    if ! jq -e "$actual_property" $actual_file >/dev/null 2>&1; then
+        error file $actual_file or property .properties$property do not exist
+    fi
+    echo removing $property from $file
+    jq -r "del($actual_property)" $actual_file | sponge $actual_file
+done <$HIDEME_LIST
+
+schemas=$(bin/gencode_root_schemas schema/)
+echo Processing schemas $schemas
+
+for schema in $schemas; do
+    echo == Processing $schema.json
+    python3 bin/gendocs.py $schema $TMP_DIR $OUTPUT_DIR
+done
+
+rm -rf $TMP_DIR
+
+echo Generating schema index page...
+
+# Create index page with links to different schemas
+cp etc/schema_readme_template.md $OUTPUT_DIR/readme.md
+
+for schema in $schemas; do
+    section=$(jq -r '.["$section"]' schema/$schema.json)
+    if [[ -z $section || $(grep -c "## $section\$" $OUTPUT_DIR/readme.md) -eq 0 ]]; then
+        section=Other
+    fi
+    description=$(jq -r .description schema/$schema.json)
+    if [[ $description == null ]]; then
+        description=""
+    else
+        description=$(echo " - $description" | sed 's@(\.\./@(\.\./\.\./@g')
+    fi
+    sed -i "s@## $section@## $section\n* [**$schema**]($schema.html)$description@" $OUTPUT_DIR/readme.md
+done
+
+# Add navbar
+navbar=$(cat etc/schema_navbar.html)
+navbar=$(printf '%q ' $navbar)
+find $OUTPUT_DIR -type f -exec sed -i -E "s;(<body[^>]*>);\1$navbar;g" {} \;
+
+# Add dynamic documentation link rewriting
+cp etc/schema_extras.js $OUTPUT_DIR/schema_extras.js
+
+find $OUTPUT_DIR -type f -exec sed -i -E "s;</head>;<script src=\"schema_extras.js\" ></script></head>;" {} \;
+
+find $OUTPUT_DIR -type f -exec sed -i -E "s/<body onload=\"anchorOnLoad\(\);\"/\
+    <body onload=\"anchorOnLoad\(\);removedHostedMDExtensions\(\);\"/" {} \;
+
+# And update examples if necessary
+echo Generating docs examples updates...
+bin/gencode_docs_examples
+
+echo Done with $0

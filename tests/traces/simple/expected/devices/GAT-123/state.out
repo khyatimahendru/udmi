@@ -1,0 +1,20 @@
+{
+  "errors" : [ {
+    "category" : "validation.device.schema",
+    "detail" : "While validating pointset message at 1999-10-20T01:02:03Z",
+    "level" : 500,
+    "message" : "missing pointset subblock",
+    "timestamp" : "1999-10-20T01:02:03Z"
+  } ],
+  "status" : {
+    "category" : "validation.device.schema",
+    "detail" : "While validating pointset message at 1999-10-20T01:02:03Z",
+    "level" : 500,
+    "message" : "missing pointset subblock",
+    "timestamp" : "1999-10-20T01:02:03Z"
+  },
+  "sub_folder" : "update",
+  "sub_type" : "state",
+  "timestamp" : "1999-10-20T01:02:03Z",
+  "version" : "1.5.2"
+}

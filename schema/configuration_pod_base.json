@@ -1,0 +1,18 @@
+{
+  "$udmi_version": "1.5.2",
+  "title": "Base Pod Configuration",
+  "description": "Parameters to define pod base parameters",
+  "type": "object",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+    "udmi_prefix": {
+      "description": "prefix for udmi namespacing",
+      "type": "string"
+    },
+    "failure_rate": {
+      "description": "chance of random failure in various bits of the system",
+      "type": "number"
+    }
+  }
+}

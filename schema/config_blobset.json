@@ -1,0 +1,22 @@
+{
+  "$udmi_version": "1.5.2",
+  "title": "Blobset Config",
+  "type": "object",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+    "blobsets": {
+      "description": "Placeholder to create generated code enum",
+      "$ref": "file:common.json#/definitions/blobsets"
+    },
+    "blobs": {
+      "additionalProperties": false,
+      "existingJavaType": "java.util.HashMap<String, BlobBlobsetConfig>",
+      "patternProperties": {
+        "^_?[a-z][a-z0-9]*(_[a-z0-9]+)*$": {
+          "$ref": "file:config_blobset_blob.json#"
+        }
+      }
+    }
+  }
+}

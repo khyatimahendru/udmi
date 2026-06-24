@@ -1,0 +1,43 @@
+{
+  "discovery": {
+    "families": {
+      "bacnet": {
+        "generation": "2018-08-26T21:00:13Z",
+        "scan_duration_sec": 60,
+        "scan_interval_sec": 600
+      }
+    }
+  },
+  "localnet": {
+    "families": {
+      "bacnet": {},
+      "ether": {},
+      "ipv4": {},
+      "vendor": {}
+    }
+  },
+  "pointset": {
+    "points": {
+      "filter_alarm_pressure_status": {
+        "ref": "BV11.present_value",
+        "units": "No-units"
+      },
+      "filter_differential_pressure_sensor": {
+        "ref": "AV12.present_value",
+        "units": "Degrees-Celsius"
+      },
+      "filter_differential_pressure_setpoint": {
+        "set_value": 98,
+        "units": "Bars"
+      }
+    },
+    "sample_rate_sec": 30
+  },
+  "system": {
+    "metrics_rate_sec": 10,
+    "min_loglevel": 300,
+    "operation": {}
+  },
+  "timestamp": "2020-05-01T13:39:07Z",
+  "version": "1.5.3"
+}

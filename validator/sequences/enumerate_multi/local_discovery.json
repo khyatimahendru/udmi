@@ -1,0 +1,11 @@
+{
+  "enumerations" : {
+    "families" : "details",
+    "points" : "details",
+    "features" : "details"
+  },
+  "families" : {
+    "vendor" : { },
+    "bacnet" : { }
+  }
+}

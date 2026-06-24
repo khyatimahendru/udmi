@@ -1,0 +1,68 @@
+#!/bin/bash -e
+
+UDMI_ROOT=$(dirname $0)/..
+cd $UDMI_ROOT
+
+source $UDMI_ROOT/etc/shell_common.sh
+
+[[ $# == 1 ]] || usage project_spec
+
+project_spec=$1
+shift
+
+msg_file=/tmp/message_captured.json
+
+registry_id=${project_spec##*%}
+[[ $registry_id != $project_spec ]] || registry_id=+
+
+source $UDMI_ROOT/etc/mosquitto_ctrl.sh
+
+topic_filter_udmi="/r/${registry_id}/d/+/#"
+topic_filter_uufi="/uufi/#"
+OUT_BASE=$UDMI_ROOT/out/registries
+
+echo Starting mqtt message capture at $(date -u -Is) on topics $topic_filter_udmi and $topic_filter_uufi, capture to $OUT_BASE
+
+sudo mosquitto_sub $SERVER_OPTS -R -F "%j" -t $topic_filter_udmi -t $topic_filter_uufi |
+    while read -r mqtt_message; do
+        echo $mqtt_message > $msg_file
+        topic=$(jq -r .topic <<< "$mqtt_message")
+        payload=$(jq -r .payload $msg_file)
+        timestamp=$(jq -r .tst $msg_file)
+        json=$(jq . <<< "$payload" 2> /dev/null) || json=$payload
+
+        readarray -d '/' -t array <<< "${topic}/"
+
+        registryId=${array[2]:-}  # Use :- to substute default empty to prevent script termination-on-undefined
+        deviceId=${array[4]:-}
+        subType=${array[5]:-}
+        subFolder=${array[6]:-}
+
+
+        subFolder=$(echo $subFolder | xargs)  # Trim whitespace
+        [[ -n $subFolder ]] || subFolder=update
+
+        subType=$(echo $subType | xargs)
+        [[ -n $subType ]] || subType=events
+        [[ $subType != "null" ]] || subType=events
+
+
+        if [[ $deviceId == "" ]]; then
+            deviceId=empty
+        fi
+
+        timepath=$(echo ${timestamp%:*} | tr T: //) # Bucket messages by minute
+        usetime=$(echo $timestamp | tr : x)  # Colon is not allowed on Windows!
+        out_path=$OUT_BASE/$registryId/devices/$deviceId/${timepath}/${usetime}_${subFolder}_${subType}
+        out_dir=$(dirname $out_path)
+        mkdir -p $out_dir
+        echo $(realpath --relative-to $UDMI_ROOT $out_path).json
+        echo $json > $out_path.json
+        echo {} | jq ".deviceRegistryId=\"$registryId\" | \
+             .subFolder=\"$subFolder\" |
+             .subType=\"$subType\" |
+             .deviceId=\"$deviceId\"" > $out_path.attr
+        echo $topic > $out_path.mqtt
+    done
+
+echo Finished mqtt message capture at $(date -u -Is)

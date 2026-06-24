@@ -1,0 +1,29 @@
+{
+  "$udmi_version": "1.5.2",
+  "title": "Point Pointset State",
+  "description": "Object representation for for a single point",
+  "type": "object",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+    "units": {
+      "description": "If specified, indicates a programmed point unit. If empty, means unspecified or matches configured point.",
+      "type": "string"
+    },
+    "value_state": {
+      "description": "State of the individual point",
+      "enum": [
+        "initializing",
+        "applied",
+        "updating",
+        "overridden",
+        "invalid",
+        "failure"
+      ]
+    },
+    "status": {
+      "description": "Optional status information about this point, subject to log severity level",
+      "$ref": "file:entry.json"
+    }
+  }
+}

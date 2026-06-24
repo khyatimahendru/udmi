@@ -1,0 +1,51 @@
+{
+  "$udmi_version": "1.5.2",
+  "title": "State",
+  "$section": "Messages",
+  "type": "object",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "description": "[State](../docs/messages/state.md) message, defined by [`state.json`]",
+  "additionalProperties": false,
+  "required": [ 
+    "timestamp",
+    "version",
+    "system"
+  ],
+  "properties": {
+    "timestamp": {
+      "description": "RFC 3339 UTC Timestamp the state payload was generated",
+      "type": "string",
+      "format": "date-time",
+      "examples": ["2019-01-17T14:02:29.364Z"]
+    },
+    "version": {
+      "description": "Version of the UDMI schema",
+      "type": "string"
+    },
+    "upgraded_from": {
+      "description": "Original version of schema pre-upgrade",
+      "type": "string"
+    },
+    "system": {
+      "$ref": "file:state_system.json#"
+    },
+    "gateway": {
+      "$ref": "file:state_gateway.json#"
+    },
+    "discovery": {
+      "$ref": "file:state_discovery.json#"
+    },
+    "localnet": {
+      "$ref": "file:state_localnet.json#"
+    },
+    "blobset": {
+      "$ref": "file:state_blobset.json#"
+    },
+    "alarmset": {
+      "$ref": "file:state_alarmset.json#"
+    },
+    "pointset": {
+      "$ref": "file:state_pointset.json#"
+    }
+  }
+}

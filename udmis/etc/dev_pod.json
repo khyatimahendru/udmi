@@ -1,0 +1,8 @@
+{
+  "include": "prod_pod.json",
+  "flows": {
+    "distributor": {
+      "enabled": "false"
+    }
+  }
+}

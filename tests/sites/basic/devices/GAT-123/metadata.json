@@ -1,0 +1,52 @@
+
+{
+  "pointset": {
+    "points": {
+      "globulating_globar": {
+        "units": "Bars"
+      }
+    }
+  },
+  "system": {
+    "node_type": "cloud_gateway",
+    "location": {
+      "section": "2-3N8C"
+    },
+    "physical_tag": {
+      "asset": {
+        "guid": "drw://TBB",
+        "site": "ZZ-TRI-FECTA",
+        "name": "GAT-123"
+      }
+    }
+  },
+  "gateway": {
+  },
+  "localnet": {
+    "families": {
+      "vendor": {
+        "addr": "20231"
+      }
+    },
+    "networks": {
+      "modbus_rtu_1": {
+        "family": "modbus",
+        "adjunct": {
+          "protocol": "RTU",
+          "baud": 9600,
+          "parity": "none",
+          "data_bits": 8,
+          "stop_bits": 1,
+          "device": "COM1"
+        }
+      }
+    }
+  },
+  "cloud": {
+    "auth_type": "ES256",
+    "connection_type": "GATEWAY"
+  },
+  "version": "1.5.2",
+  "timestamp": "2020-05-01T13:39:07Z"
+
+}

@@ -1,0 +1,100 @@
+{
+  "$udmi_version": "1.5.2",
+  "title": "Common",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "family": {
+      "$ref": "#/definitions/family"
+    }
+  },
+  "definitions": {
+    "mode": {
+      "title": "System Mode",
+      "description": "Operating mode for the device. Default is 'active'.",
+      "enum": [
+        "initial",
+        "active",
+        "updating",
+        "restart",
+        "terminate",
+        "shutdown"
+      ]
+    },
+    "family": {
+      "title": "Protocol Family",
+      "type": "string"
+    },
+    "depth": {
+      "enum": [
+        "buckets",
+        "entries",
+        "details",
+        "parts"
+      ]
+    },
+    "iot_provider": {
+      "title": "Iot Provider",
+      "enum": [
+        "local",
+        "dynamic",
+        "implicit",
+        "pubsub",
+        "mqtt",
+        "gbos",
+        "gref",
+        "etcd",
+        "jwt",
+        "clearblade"
+      ],
+      "$presentation": {
+        "display": "show",
+        "style": "bold"
+      }
+    },
+    "operation": {
+      "title": "Model Operation",
+      "enum": [
+        "ERROR",
+        "CREATE",
+        "READ",
+        "REPLY",
+        "UPDATE",
+        "DELETE",
+        "MODIFY",
+        "PREVIEW",
+        "BIND",
+        "UNBIND",
+        "BOUND",
+        "ALLOW",
+        "BLOCK"
+      ]
+    },
+    "stage": {
+      "title": "FeatureStage",
+      "description": "Stage of a feature implemenation",
+      "enum": [
+        "disabled",
+        "alpha",
+        "preview",
+        "beta",
+        "stable"
+      ]
+    },
+    "phase": {
+      "title": "BlobPhase",
+      "description": "Phase for the management of a configuration blob.",
+      "enum": [
+        "apply",
+        "final"
+      ]
+    },
+    "blobsets": {
+      "title": "System Blobsets",
+      "description": "Predefined system blobsets",
+      "enum": [
+        "_iot_endpoint_config"
+      ]
+    }
+  }
+}

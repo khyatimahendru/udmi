@@ -1,0 +1,102 @@
+{
+  "$udmi_version": "1.5.2",
+  "title": "Validation State",
+  "description": "Validation state summary",
+  "type": "object",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+    "timestamp": {
+      "description": "Not included in messages published by devices. Part of message subblocks within cloud pipeline. RFC 3339 Timestamp the payload was generated",
+      "type": "string",
+      "format": "date-time",
+      "examples": ["2019-01-17T14:02:29.364Z"]
+    },
+    "version": {
+      "description": "Version of the UDMI schema",
+      "type": "string"
+    },
+    "cloud_version": {
+      "description": "Version of the udmi cloud install",
+      "$ref": "file:config_udmi.json#/properties/setup"
+    },
+    "udmi_version": {
+      "description": "Version of the local udmi tools",
+      "type": "string"
+    },
+    "last_updated": {
+      "description": "Last time this validation report was updated",
+      "format": "date-time",
+      "type": "string"
+    },
+    "start_time": {
+      "description": "timestamp of when the validation report was started",
+      "format": "date-time",
+      "type": "string"
+    },
+    "status": {
+      "$ref": "file:entry.json"
+    },
+    "features": {
+      "type": "object",
+      "existingJavaType": "java.util.Map<String, FeatureValidationState>",
+      "additionalProperties": false,
+      "patternProperties": {
+        "^[.a-z]+$": {
+          "$ref": "file:state_validation_feature.json"
+        }
+      }
+    },
+    "schemas": {
+      "type": "object",
+      "existingJavaType": "java.util.Map<String, SchemaValidationState>",
+      "additionalProperties": false,
+      "patternProperties": {
+        "^[.a-z]+$": {
+          "$ref": "file:state_validation_schema.json"
+        }
+      }
+    },
+    "summary": {
+      "title": "Validation Summary",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "correct_devices": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "extra_devices": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "missing_devices": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "error_devices": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "devices": {
+      "type": "object",
+      "additionalProperties": false,
+      "existingJavaType": "java.util.Map<String, DeviceValidationEvents>",
+      "patternProperties": {
+        "^[A-Z]{2,6}-[1-9][0-9]*$": {
+          "$ref": "file:events_validation_device.json"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "flow_defaults": {
+    "protocol": "pubsub",
+    "hostname": "udmi-external"
+  },
+  "flows": {
+    "state": {
+      "recv_id": "udmi_state",
+      "send_id": "udmi_target"
+    },
+    "reflect": {
+      "recv_id": "udmi_reflect",
+      "send_id": "udmi_target"
+    }
+  },
+  "iot_access": {
+    "iot-access": {
+      "provider": "dynamic",
+      "project_id": "gcp,clearblade-iot-core"
+    },
+    "clearblade-iot-core": {
+      "provider": "clearblade",
+      "project_id": "udmi-external"
+    },
+    "gcp": {
+      "provider": "gcp",
+      "project_id": "bos-peringknife-dev"
+    }
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "gateway": {
+    "gateway_id": "GAT-123"
+  },
+  "localnet": {
+    "families": {
+      "fqdn": {
+        "addr": "uk-lon-whatever.goog.in."
+      }
+    }
+  },
+  "system": {
+    "location": {
+      "section": "2-3N8C",
+      "site": "ZZ-TRI-FECTA"
+    },
+    "min_loglevel": 300,
+    "physical_tag": {
+      "asset": {
+        "guid": "drw://TBA",
+        "name": "SNS-8",
+        "site": "ZZ-TRI-FECTA"
+      }
+    }
+  },
+  "timestamp": "2020-05-01T13:39:07Z",
+  "version": "1.5.2"
+}

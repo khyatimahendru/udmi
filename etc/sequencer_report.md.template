@@ -1,0 +1,59 @@
+# {{report.device_id}}
+
+- Start {{report.start_time}}
+- End: {{report.end_time}}
+- Status: {{report.status_message}}
+
+## Device Identification
+
+| Device | {{report.device_id}} |
+|---|---|
+| Make | {{report.device_make}} |
+| Model | {{report.device_model}} |
+| Software | {{report.device_software|pretty_dict}} |
+{% if report.gateway is not none %}| Gateway | {{report.gateway}} |{%- endif %}
+
+## Summary
+
+| | Feature | {%- for stage in report.stages %} {{stage.capitalize()}} |{%- endfor %}
+| --- | --- {{report.stages|length|md_table_header}}
+{% for feature, stages in report.features.items() -%}
+| {{report.overall_features.get(feature)|result_icon}} | {{feature}} | {%- for stage in report.stages %} {{stages[stage].scored}}/{{stages[stage].total}} |{%- endfor %}
+{% endfor %}
+
+## Results
+
+| Bucket | Feature | Stage | Score | Result | Description |
+| --- | --- | --- | --- | --- | --- |
+{% for test in report.results.values() -%}
+| {{test.bucket}} | {{test.name}} | {{test.stage}} | {{test.score}} | {{test.result}} | {{test.message}} |
+{% endfor %}
+
+## Schema
+
+| Stage | Result | 
+| --- | --- |
+{% for schema, result in report.schema_results_by_stage.items() -%}
+| {{schema}} | {{result|result_icon}} |
+{% endfor %}
+
+## Sequences
+
+{% for feature, results in report.results_by_feature.items() -%}
+
+### {{feature}}
+{% for result in results %}
+#### {{result.name}}
+
+| | |
+|---|---|
+| Description | {{result.description}} |
+| Result | {{result.result}} |
+| Summary | {{result.message}} |
+
+```
+{{report.sequences[result.name]}}
+```
+
+{% endfor -%}
+{%- endfor -%}

@@ -1,0 +1,89 @@
+{
+  "$udmi_version": "1.5.2",
+  "title": "Envelope",
+  "description": "The UDMI `envelope` is not a message itself, per se, but the attributes and other information that is delivered along with a message. [Message Envelope Documentation](../docs/messages/envelope.md)",
+  "$section": "Messages",
+  "additionalProperties": true,
+  "properties": {
+    "deviceId": {
+      "type": "string",
+      "pattern": "^[A-Z]{2,6}-[1-9][0-9]*$"
+    },
+    "deviceNumId": {
+      "type": "string",
+      "pattern": "^[0-9]+$"
+    },
+    "deviceRegistryId": {
+      "type": "string",
+      "pattern": "^[a-zA-Z][-a-zA-Z0-9._+~%]*[a-zA-Z0-9]$"
+    },
+    "deviceRegistryLocation": {
+      "type": "string",
+      "pattern": "^[a-z]+-[a-z]+1$"
+    },
+    "projectId": {
+      "type": "string",
+      "pattern": "^([.a-z]+:)?[a-z][-a-z0-9]*[a-z0-9]$"
+    },
+    "payload": {
+      "type": "string"
+    },
+    "source": {
+      "type": "string"
+    },
+    "gatewayId": {
+      "type": "string",
+      "pattern": "^[A-Z]{2,6}-[1-9][0-9]*$"
+    },
+    "transactionId": {
+      "type": "string"
+    },
+    "principal": {
+      "type": "string"
+    },
+    "publishTime": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "rawFolder": {
+      "type": "string"
+    },
+    "subFolder": {
+      "enum": [
+        "udmi",
+        "update",
+        "invalid",
+        "error",
+        "cloud",
+        "discovery",
+        "mapping",
+        "system",
+        "gateway",
+        "swarm",
+        "localnet",
+        "pointset",
+        "validation",
+        "blobset",
+        "monitoring"
+      ]
+    },
+    "subType": {
+      "enum": [
+        "invalid",
+        "local",
+        "reflect",
+        "events",
+        "errors",
+        "commands",
+        "config",
+        "state",
+        "query",
+        "reply",
+        "model"
+      ]
+    }
+  },
+  "required": [
+    "deviceRegistryId"
+  ]
+}

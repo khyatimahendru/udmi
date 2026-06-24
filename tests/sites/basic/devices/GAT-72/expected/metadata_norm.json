@@ -1,0 +1,50 @@
+{
+  "cloud": {
+    "auth_type": "ES256"
+  },
+  "discovery": {
+    "families": {
+      "bacnet": {
+        "generation": "2018-08-26T21:00:13Z"
+      },
+      "vendor": {}
+    }
+  },
+  "gateway": {
+    "proxy_ids": [
+      "SNS-4",
+      "AHU-1"
+    ]
+  },
+  "localnet": {
+    "families": {
+      "vendor": {
+        "addr": "20231"
+      }
+    }
+  },
+  "pointset": {
+    "points": {
+      "globulating_globar": {
+        "units": "Bars"
+      }
+    },
+    "sample_rate_sec": 30
+  },
+  "system": {
+    "location": {
+      "section": "2-3N8C",
+      "site": "ZZ-TRI-FECTA"
+    },
+    "min_loglevel": 300,
+    "physical_tag": {
+      "asset": {
+        "guid": "drw://TBB",
+        "name": "GAT-72",
+        "site": "ZZ-TRI-FECTA"
+      }
+    }
+  },
+  "timestamp": "2020-05-01T13:39:07Z",
+  "version": "1.5.2"
+}

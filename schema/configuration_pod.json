@@ -1,0 +1,66 @@
+{
+  "$udmi_version": "1.5.2",
+  "title": "Pod Configuration",
+  "description": "Parameters for configuring the execution run of a UDMIS pod",
+  "$section": "Tool Configuration",
+  "type": "object",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+    "include": {
+      "type": "string"
+    },
+    "base": {
+      "$ref": "file:configuration_pod_base.json"
+    },
+    "flow_defaults": {
+      "$ref": "file:configuration_endpoint.json"
+    },
+    "crons": {
+      "existingJavaType": "java.util.HashMap<String, EndpointConfiguration>",
+      "patternProperties": {
+        "^[a-z][a-z0-9]*(_[a-z0-9]+)*$": {
+          "$ref": "file:configuration_endpoint.json"
+        }
+      }
+    },
+    "flows": {
+      "existingJavaType": "java.util.HashMap<String, EndpointConfiguration>",
+      "patternProperties": {
+        "^[a-z][a-z0-9]*(_[a-z0-9]+)*$": {
+          "$ref": "file:configuration_endpoint.json"
+        }
+      }
+    },
+    "bridges": {
+      "existingJavaType": "java.util.HashMap<String, BridgePodConfiguration>",
+      "patternProperties": {
+        "^[a-z][a-z0-9]*(_[a-z0-9]+)*$": {
+          "$ref": "file:configuration_pod_bridge.json"
+        }
+      }
+    },
+    "iot_access": {
+      "type": "object",
+      "title": "Iot Access Providers",
+      "additionalProperties": false,
+      "existingJavaType": "java.util.HashMap<String, IotAccess>",
+      "patternProperties": {
+        "^[a-z]+$": {
+          "$ref": "file:access_iot.json"
+        }
+      }
+    },
+    "iot_data": {
+      "type": "object",
+      "title": "Iot Data Provider",
+      "additionalProperties": false,
+      "existingJavaType": "java.util.HashMap<String, IotAccess>",
+      "patternProperties": {
+        "^[a-z]+$": {
+          "$ref": "file:access_iot.json"
+        }
+      }
+    }
+  }
+}

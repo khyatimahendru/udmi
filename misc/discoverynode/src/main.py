@@ -1,0 +1,112 @@
+"""Client"""
+# pylint: disable=wrong-import-position
+import argparse
+import logging
+import sys
+import time
+import json
+import warnings
+import os
+# filter deprecation notice from SCAPY import
+warnings.filterwarnings(action="ignore", module=".*ipsec.*")
+
+import local_config
+import udmi.core
+import udmi.publishers.mqtt
+
+import typing
+from typing import TypedDict, Any
+
+def or_required_from_env(key: str) -> dict[str, str | int | bool]:
+  """Used in argparse to return a non-optional value from env vars.
+
+  Unpack return value as argument for argparse.ArgumentParser.add_argument.
+
+  Args:
+    key: environmental variable name.
+
+  Returns:
+    value from env var if set or indicator that field is required.
+  """
+  try:
+    return {"default": os.environ[key]}
+  except KeyError:
+    return {"required": True}
+
+
+def get_arguments():
+  parser = argparse.ArgumentParser(description="Start UDMI Discovey Client")
+  parser.add_argument(
+      "--config_file",
+      type=str,
+      help="path to config file",
+      required=True
+  )
+  return parser.parse_args()
+
+
+def main():
+
+  args = get_arguments()
+  config = local_config.read_config(args.config_file)
+
+  log_level_str = str(config.get("log_level", "INFO")).upper()
+  log_level = getattr(logging, log_level_str, None)
+  if not isinstance(log_level, int):
+    log_level = logging.INFO
+
+  stdout = logging.StreamHandler(sys.stdout)
+  stdout.addFilter(lambda log: log.levelno < logging.WARNING)
+  stdout.setLevel(log_level)
+  stderr = logging.StreamHandler(sys.stderr)
+  stderr.setLevel(logging.WARNING)
+  logging.basicConfig(
+      format="%(asctime)s|%(levelname)s|%(module)s:%(funcName)s %(message)s",
+      handlers=[stderr, stdout],
+      level=log_level,
+  )
+  logging.root.setLevel(log_level)
+
+  logging.info("Loading config from %s", args.config_file)
+  logging.warning("Started with config: %s", config)
+
+  # TODO: Should probably set this in the config with basic templating
+  if config["mqtt"].get("authentication_mechanism", "jwt_gcp") == "jwt_gcp":
+    topic_prefix = f'/devices/{config["mqtt"]["device_id"]}'
+  else:
+    topic_prefix = f'/r/{config["mqtt"]["registry_id"]}/d/{config["mqtt"]["device_id"]}'
+
+  # Initialise (but not start) the MQTT Client
+  mclient = udmi.publishers.mqtt.MQTT(
+      device_id=config["mqtt"]["device_id"],
+      registry_id=config["mqtt"]["registry_id"],
+      region=config["mqtt"]["region"],
+      project_id=config["mqtt"]["project_id"],
+      hostname=config["mqtt"]["host"],
+      port=config["mqtt"]["port"],
+      topic_prefix=topic_prefix,
+      key_file=config["mqtt"]["key_file"],
+      public_key_file=config["mqtt"].get("public_key_file"),
+      algorithm=config["mqtt"]["algorithm"],
+      autentication_mechanism=config["mqtt"].get("authentication_mechanism", "jwt-gcp"),
+      ca_file=config["mqtt"].get("ca_file"),
+      cert_file=config["mqtt"].get("cert_file"),
+  )
+
+  udmi_client = udmi.core.UDMICore(
+      publisher=mclient,
+      topic_prefix=topic_prefix,
+      # TODO: Needs to be a different config, because reusing this
+      # violates the assumption that "udmi" module is independent.
+      config=config,
+  )
+
+  mclient.set_config_callback(udmi_client.config_handler)
+  mclient.start_client()
+
+  while True:
+    time.sleep(0.1)
+
+
+if __name__ == "__main__":
+  main()

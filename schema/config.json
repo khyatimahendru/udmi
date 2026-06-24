@@ -1,0 +1,50 @@
+{
+  "$udmi_version": "1.5.2",
+  "title": "Config",
+  "description": "The config block controls a device's intended behavior. [Config Documentation](../docs/messages/config.md)",
+  "$section": "Messages",
+  "type": "object",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "required": [
+    "timestamp",
+    "version"
+  ],
+  "properties": {
+    "timestamp": {
+      "description": "RFC 3339 UTC timestamp the configuration was generated",
+      "type": "string",
+      "format": "date-time",
+      "examples": ["2019-01-17T14:02:29.364Z"]
+    },
+    "version": {
+      "description": "Version of the UDMI schema",
+      "type": "string"
+    },
+    "downgraded_from": {
+      "description": "Original version of schema pre-downgrade",
+      "type": "string"
+    },
+    "system": {
+      "$ref": "file:config_system.json#"
+    },
+    "gateway": {
+      "$ref": "file:config_gateway.json#"
+    },
+    "discovery": {
+      "$ref": "file:config_discovery.json#"
+    },
+    "localnet": {
+      "$ref": "file:config_localnet.json#"
+    },
+    "blobset": {
+      "$ref": "file:config_blobset.json#"
+    },
+    "alarmset": {
+      "$ref": "file:config_alarmset.json#"
+    },
+    "pointset": {
+      "$ref": "file:config_pointset.json#"
+    }
+  }
+}

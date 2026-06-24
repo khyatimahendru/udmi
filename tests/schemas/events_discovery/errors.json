@@ -1,0 +1,28 @@
+{
+  "version": "1.5.2",
+  "timestamp": "2018-08-26T21:39:29.364Z",
+  "id": "sneakyCASE",
+  "scan_addr": "whitehouse",
+  "families": {
+    "bacnet": {
+      "id": "92E*A09"
+    },
+    "ip_v4": {
+      "addr": "192.168.1.2"
+    },
+    "mac": {
+      "group": "vlan182",
+      "addr": "0E:93:32:11:04:82"
+    }
+  },
+  "uniqs": {
+    "bad_entity_name_": {
+      "present_value": 21.30108642578125
+    }
+  },
+  "rabbits": {
+    "bad_entity_name_": {
+      "present_value": 21.30108642578125
+    }
+  }
+}

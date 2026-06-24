@@ -1,0 +1,73 @@
+{
+  "$udmi_version": "1.5.2",
+  "title": "System State",
+  "description": "[System State Documentation](../docs/messages/system.md#state)",
+  "type": "object",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+    "timestamp": {
+      "description": "Not included in messages published by devices. Part of message subblocks within cloud pipeline. RFC 3339 Timestamp the payload was generated",
+      "type": "string",
+      "format": "date-time",
+      "examples": ["2019-01-17T14:02:29.364Z"]
+    },
+    "version": {
+      "description": "Version of the UDMI schema",
+      "type": "string"
+    },
+    "last_config": {
+      "description": "Time from the `timestamp` field of the last successfully parsed `config` message (not the timestamp the message was received/processed). Part of the [config state sequence](../docs/specs/sequences/config.md)",
+      "type": "string",
+      "format": "date-time",
+      "examples": ["2019-01-17T14:02:29.364Z"]
+    },
+    "operation": {
+      "$ref": "file:state_system_operation.json"
+    },
+    "serial_no": {
+      "description": "The serial number of the physical device",
+      "type": "string",
+      "examples": ["A1B2C3D4", "00001"]
+    },
+    "hardware": {
+      "$ref": "file:state_system_hardware.json"
+    },
+    "software": {
+      "additionalProperties": false,
+      "description": "A collection of items which can be used to describe version of software running on a device",
+      "examples": ["firmware", "os", "driver"],
+      "type": "object",
+      "existingJavaType": "java.util.Map<String, String>",
+      "patternProperties": {
+        "^[a-z_]+$": {
+          "type": "string"
+        }
+      }
+    },
+    "params": {
+      "additionalProperties": false,
+      "type": "object",
+      "existingJavaType": "java.util.Map<String, String>",
+      "patternProperties": {
+        "^[a-z_]+$": {
+          "type": "string"
+        }
+      }
+    },
+    "status": {
+      "$ref": "file:entry.json"
+    },
+    "upgraded_from": {
+      "description": "Original version of schema pre-upgrade",
+      "type": "string"
+    }
+  },
+  "required": [
+    "serial_no",
+    "last_config",
+    "hardware",
+    "software",
+    "operation"
+  ]
+}

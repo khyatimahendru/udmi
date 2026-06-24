@@ -1,0 +1,72 @@
+{
+  "$udmi_version": "1.5.2",
+  "title": "Udmi Config",
+  "description": "Config for a UDMI reflector client",
+  "type": "object",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+    "timestamp": {
+      "description": "RFC 3339 UTC timestamp the configuration was generated",
+      "type": "string",
+      "format": "date-time",
+      "examples": ["2019-01-17T14:02:29.364Z"]
+    },
+    "version": {
+      "description": "Version of the UDMI schema",
+      "type": "string"
+    },
+    "last_state": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "reply": {
+      "$ref": "file:state_udmi.json#/properties/setup"
+    },
+    "setup": {
+      "title": "Setup Udmi Config",
+      "type": "object",
+      "properties": {
+        "hostname": {
+          "type": "string"
+        },
+        "functions_min": {
+          "type": "integer"
+        },
+        "functions_max": {
+          "type": "integer"
+        },
+        "udmi_version": {
+          "type": "string",
+          "description": "Semantic tagged version of udmis install"
+        },
+        "udmi_commit": {
+          "type": "string",
+          "description": "Commit hash of this udmis install"
+        },
+        "udmi_ref": {
+          "type": "string",
+          "description": "Complete reference of udmis install"
+        },
+        "udmi_timever": {
+          "type": "string",
+          "description": "Timestamp version id of udmis install"
+        },
+        "built_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "built_by": {
+          "type": "string"
+        },
+        "deployed_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "deployed_by": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

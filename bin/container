@@ -1,0 +1,172 @@
+#!/bin/bash -e
+
+UDMI_ROOT=$(dirname $0)/..
+source ${UDMI_ROOT}/etc/shell_common.sh
+
+if [[ $# -lt 2 ]]; then
+    usage target { prep, build, push, apply } [--no-check] [repo]
+fi
+
+target=$1
+cmd=$2
+shift 2
+target_tag=${target}
+
+if [[ "$target" == *.* ]]; then
+  sub_target=${target#*.}
+  target=${target%%.*}
+  dockerfile="Dockerfile.${target}_${sub_target}"
+  template_folder="etc/${sub_target}"
+else
+  sub_target=""
+  dockerfile="Dockerfile.${target}"
+  template_folder="etc"
+fi
+echo Processing TARGET "${target}", SUB_TARGET "${sub_target:-none}"
+echo Processing Dockerfile "${dockerfile}"
+
+cd ${UDMI_ROOT}/${target}
+
+git_branch=$(git rev-parse --abbrev-ref HEAD)
+git_remote=$(git config --get branch.$git_branch.remote) || echo missing git remote
+git_url=$(git config --get remote.$git_remote.url) || git_url=unknown
+git_prefix=${git_url%.*}
+git_prefix=${git_prefix#*.com/}
+git_repo=${git_prefix#*.com:}
+
+GCP_PROJECT=$(gcloud config get project) || true
+REPOSITORY=ghcr.io/${git_repo}
+TEMPLATES=$(cd ${template_folder}; ls k8s_*.yaml) || true
+
+echo Processing templates from ${template_folder}: ${TEMPLATES}
+
+NOCHECK=
+[[ ${1:-} == "--no-check" ]] && NOCHECK=1 && shift
+
+PUSH_TAG=
+[[ -n ${1:-} ]] && PUSH_TAG=$1 && shift
+
+if [[ $# != 0 ]]; then
+    echo unknown arguments: $*
+    usage
+fi
+
+if [[ -z $NOCHECK ]]; then
+    CONTEXT=`kubectl config current-context`
+    k8s_parts=$(tr '_' ' ' <<<$CONTEXT)
+    echo k8s context is $k8s_parts
+
+    CONTEXT_ARGS=(${CONTEXT//_/ })
+    KPROJECT=${CONTEXT_ARGS[1]}
+    if [[ $KPROJECT != $GCP_PROJECT ]]; then
+        echo Kubernetes context $CONTEXT does not match gcloud project $GCP_PROJECT
+        false
+    fi
+    UDMI_NAMESPACE=${CONTEXT_ARGS[4]:-}
+fi
+
+echo Using GCP project $GCP_PROJECT
+
+if [[ -n ${UDMI_NAMESPACE:-} ]]; then
+    echo Using udmi namespace $UDMI_NAMESPACE
+else
+    echo Using udmi namespace [none]
+    UDMI_NAMESPACE=
+fi
+
+current_user=$USER@$HOSTNAME
+
+revparse=`git rev-parse HEAD`
+
+udmi_commit=${revparse:0:9}
+udmi_ver=g${udmi_commit}
+udmi_tag=${target_tag}-$udmi_ver
+udmi_timever=$(TZ=UTC git log --date=iso-strict-local -1 --pretty=format:"%cd" ${udmi_commit})
+
+if [[ -n $PUSH_TAG ]]; then
+    udmi_ref=$PUSH_TAG
+else
+    udmi_ref=$REPOSITORY:$udmi_tag
+fi
+
+RUNARGS="--rm -ti -v $PWD/var:/udmi -v $HOME/.config:/root/.config --tmpfs /tmp"
+
+prep=
+build=
+push=
+apply=
+
+[[ $cmd == apply ]] && apply=y
+[[ $cmd == push || -n $apply ]] && push=y
+[[ $cmd == build || -n $push ]] && build=y
+[[ $cmd == prep || -n $build ]] && prep=y
+
+if [[ -z $prep ]]; then
+    usage Unknown command $cmd
+fi
+
+if [[ -n $prep ]]; then
+    rm -rf var tmp && mkdir -p var tmp
+    mkdir -p build/schema
+
+    cp -f etc/*.json var/ || true
+    cp -a ../schema build/schema
+
+    bin/build
+
+    LIBFILE=build/libs/*-1.0-SNAPSHOT-all.jar
+    build_time=`date --utc -Imin -r $LIBFILE` || true
+    [[ -n $build_time ]] || build_time="1970-01-01T00:00:00Z"
+
+    cat <<EOF > var/deployed_version.json
+{
+  "udmi_version": "$udmi_version",
+  "udmi_ref": "$udmi_ref",
+  "udmi_commit": "$udmi_commit",
+  "udmi_timever": "$udmi_timever",
+  "built_at": "$build_time",
+  "built_by": "$current_user"
+}
+EOF
+    jq . var/deployed_version.json
+fi
+
+if [[ -n $build ]]; then
+    echo Building ${dockerfile}
+    echo docker build -f ${dockerfile} -t $udmi_ref .
+    docker build -f ${dockerfile} -t $udmi_ref -t "$target_tag" .
+fi
+
+if [[ -n $push ]]; then
+    docker push $udmi_ref
+    docker images
+    docker images --digests ${udmi_ref%:*} || true
+    hash=$(docker images --digests ${udmi_ref%:*} | fgrep $udmi_tag | awk '{print $3}') || true
+    ihash=$udmi_ref@$hash
+    for file in $TEMPLATES; do
+        out_file=tmp/$file
+        src_file=${template_folder}/$file
+        alt_file=${template_folder}/${UDMI_NAMESPACE}~$file
+        [[ -f $alt_file ]] && src_file=$alt_file
+        sed < $src_file > $out_file \
+            -e "s^@IMAGE@^$ihash^" \
+            -e "s^@TARGET@^$target^" \
+            -e "s^@UDMI_NAMESPACE@^$UDMI_NAMESPACE^" \
+            -e "s^@GCP_PROJECT@^$GCP_PROJECT^"
+        if diff $src_file $out_file; then
+            rm $out_file
+        else
+            echo Customized output in $out_file from $src_file
+        fi
+    done
+    echo Done with container build.
+    for file in tmp/k8s_*.yaml; do
+        echo "    kubectl apply -f $target/$file"
+    done
+fi
+
+if [[ -n $apply ]]; then
+    for file in tmp/k8s_*.yaml; do
+        kubectl apply -f ../$target/$file
+    done
+fi

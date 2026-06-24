@@ -1,0 +1,9 @@
+{
+  "deviceId" : "AHU-1",
+  "deviceNumId" : "00000062256946",
+  "deviceRegistryId" : "ZZ-TRI-FECTA",
+  "msgSource" : "002_state_system.json",
+  "projectId" : "playback-project",
+  "subFolder" : "system",
+  "subType" : "state"
+}

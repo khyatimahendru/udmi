@@ -1,0 +1,16 @@
+{
+  "cloud": {
+    "auth_type": "ES256",
+    "resource_type": "GATEWAY"
+  },
+  "gateway": {
+    "proxy_ids": [
+      "EM-1"
+    ]
+  },
+  "system": {
+    "min_loglevel": 300
+  },
+  "timestamp": "2020-05-01T13:39:07Z",
+  "version": "1.5.3"
+}

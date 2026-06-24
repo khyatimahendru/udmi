@@ -1,0 +1,5383 @@
+--- File: clientlib/python/src/udmi/core/messaging/mqtt_messaging_client.py ---
+"""
+A concrete implementation of the AbstractMessagingClient for the MQTT protocol.
+"""
+
+import logging
+import socket
+import ssl
+from dataclasses import dataclass
+from typing import Callable
+from typing import Optional
+
+import paho.mqtt.client as mqtt
+from jwt.exceptions import PyJWTError
+
+from udmi.core.auth import AuthProvider
+from udmi.core.messaging.abstract_client import AbstractMessagingClient
+from udmi.schema import EndpointConfiguration
+
+LOGGER = logging.getLogger(__name__)
+
+
+@dataclass
+class TlsConfig:
+    """TLS configuration parameters."""
+    ca_certs: Optional[str] = None
+    cert_file: Optional[str] = None
+    key_file: Optional[str] = None
+    enable_tls: Optional[bool] = None
+
+
+@dataclass
+class ReconnectConfig:
+    """Reconnection backoff parameters."""
+    min_delay_sec: int = 1
+    max_delay_sec: int = 60
+
+
+@dataclass
+class MqttClientCallbacks:
+    """Dataclass to hold external callbacks for the MQTT client."""
+    on_message: Optional[Callable[[str, str, str], None]] = None
+    on_connect: Optional[Callable[[], None]] = None
+    on_disconnect: Optional[Callable[[int], None]] = None
+
+
+class MqttMessagingClient(AbstractMessagingClient):
+    """
+    Manages the connection to an MQTT broker using the paho-mqtt library.
+    """
+    _callbacks: MqttClientCallbacks
+
+    def __init__(self, endpoint_config: EndpointConfiguration,
+                 auth_provider: Optional[AuthProvider] = None,
+                 tls_config: TlsConfig = None,
+                 reconnect_config: ReconnectConfig = None):
+        """
+        Initializes the MQTT Client.
+
+        Args:
+            endpoint_config: The EndpointConfiguration dataclass
+                             containing all connection
+                             parameters (host, port, certs, etc.)
+            auth_provider: The authentication provider (e.g., JWT or
+                             basic). This is used if mTLS is not.
+            tls_config: TLS configuration parameters.
+            reconnect_config: Reconnection backoff parameters.
+        """
+        super().__init__()
+        self._config = endpoint_config
+        self._auth_provider = auth_provider
+        self._tls_config = tls_config or TlsConfig()
+        self._reconnect_config = reconnect_config or ReconnectConfig()
+
+        # --- Callbacks ---
+        self._callbacks = MqttClientCallbacks()
+
+        # --- Initialize Paho Client ---
+        self._mqtt_client = mqtt.Client(client_id=self._config.client_id)
+        self._mqtt_client.on_connect = self._on_connect
+        self._mqtt_client.on_message = self._on_message
+        self._mqtt_client.on_disconnect = self._on_disconnect
+        self._subscribed_channels = set()
+
+    # --- Properties to derive values from config ---
+
+    @property
+    def _topic_prefix(self) -> str:
+        """Returns the fully-qualified topic prefix."""
+        return (self._config.topic_prefix or "/devices/").rstrip("/")
+
+    @property
+    def _device_id(self) -> str:
+        """Returns the device ID, extracted from the client ID."""
+        return self._config.client_id.split('/')[-1]
+
+    @property
+    def _prefix_segments(self) -> int:
+        """Returns the number of segments in the topic prefix."""
+        return len(self._topic_prefix.strip("/").split('/'))
+
+    @property
+    def _enable_tls(self) -> bool:
+        """Infers the TLS setting based on config and port."""
+        if self._tls_config.enable_tls:
+            LOGGER.debug("TLS explicitly enabled by user.")
+            return True
+        if self._tls_config.enable_tls is False:
+            LOGGER.debug("TLS explicitly disabled by user.")
+            return False
+
+        LOGGER.debug("TLS not specified, inferring based on port/certs...")
+        is_secure_port = self._config.port == 8883
+        certs_provided = (self._tls_config.ca_certs or
+                          self._tls_config.cert_file or
+                          self._tls_config.key_file) is not None
+        return is_secure_port or certs_provided
+
+    # --- Public API Methods ---
+
+    def connect(self) -> None:
+        """
+        Sets credentials, configures TLS/reconnection, and connects to the
+        broker.
+        """
+        LOGGER.info("Connecting to MQTT broker at %s:%s",
+                    self._config.hostname, self._config.port)
+
+        if self._enable_tls:
+            self._configure_tls()
+
+        self._configure_auth()
+
+        self._mqtt_client.reconnect_delay_set(
+            min_delay=self._reconnect_config.min_delay_sec,
+            max_delay=self._reconnect_config.max_delay_sec
+        )
+
+        self._mqtt_client.connect(self._config.hostname, self._config.port)
+
+    def check_authentication(self) -> None:
+        """
+        Checks if the auth token needs to be refreshed.
+
+        If so, updates the client and triggers a reconnect to apply the
+        new credentials. This should be called periodically by the **main
+        device loop.** This Client does not manage its own timer for this.
+        """
+        if self._auth_provider and self._auth_provider.needs_refresh():
+            LOGGER.info(
+                "Authentication token is expiring. "
+                "Updating credentials and reconnecting..."
+            )
+            try:
+                username = self._auth_provider.get_username()
+                password = self._auth_provider.get_password()
+
+                self._mqtt_client.username_pw_set(username=username,
+                                                  password=password)
+
+                self._mqtt_client.reconnect()
+            except (PyJWTError, TypeError, ValueError, socket.error) as e:
+                LOGGER.error("Failed during auth token refresh: %s", e)
+
+    def publish(self, channel: str, payload: str, device_id: Optional[str] = None) -> None:
+        """
+        Publishes a payload to a UDMI channel.
+
+        Maps the channel (e.g., "state") to a full MQTT topic
+        (e.g., "/devices/my-device/state") and publishes.
+
+        Args:
+            channel: The UDMI channel.
+            payload: The JSON string payload to send.
+            device_id: (Optional) The specific device ID to publish for.
+                       If None, uses the primary device ID.
+        """
+        target_id = device_id if device_id else self._device_id
+        topic = f"{self._topic_prefix}/{target_id}/{channel}"
+
+        LOGGER.debug("Publishing %d bytes to MQTT topic %s", len(payload),
+                     topic)
+        self._mqtt_client.publish(topic, payload, qos=1)
+
+    def run(self) -> None:
+        """Starts the non-blocking network loop in a background thread."""
+        LOGGER.debug("Starting MQTT network loop...")
+        self._mqtt_client.loop_start()
+
+    def close(self) -> None:
+        """Stops the network loop and disconnects the MQTT client."""
+        LOGGER.info("Stopping MQTT network loop and disconnecting...")
+        self._mqtt_client.loop_stop()
+        self._mqtt_client.disconnect()
+        LOGGER.info("MQTT client disconnected.")
+
+    def register_channel_subscription(self, channel: str, device_id: Optional[str] = None) -> None:
+        """
+        Implements the abstract method.
+        Stores the channel interest to be acted upon during connection.
+        """
+        target_id = device_id if device_id else self._device_id
+        interest = f"{target_id}/{channel}"
+
+        LOGGER.debug("Registering channel subscription interest for: %s",
+                     interest)
+        self._subscribed_channels.add(interest)
+
+        # If already running, subscribe immediately
+        if self._mqtt_client.is_connected():
+            topic = f"{self._topic_prefix}/{interest}"
+            LOGGER.debug(
+                "Client already connected, subscribing immediately to %s",
+                topic)
+            self._mqtt_client.subscribe(topic, qos=1)
+
+    # --- Public Callback Setters ---
+
+    def set_on_message_handler(self,
+                               handler: Callable[[str, str, str], None]) -> None:
+        """
+        Sets the external callback for incoming messages.
+        This is typically called by the MessageDispatcher.
+
+        Args:
+            handler: A callable that accepts (device_id: str, channel: str, payload: str)
+        """
+        LOGGER.debug("Setting on_message handler")
+        self._callbacks.on_message = handler
+
+    def set_on_connect_handler(self, handler: Callable[[], None]) -> None:
+        """
+        Sets the external callback for successful connection events.
+
+        Args:
+            handler: A callable that takes no arguments.
+        """
+        LOGGER.debug("Setting on_connect handler")
+        self._callbacks.on_connect = handler
+
+    def set_on_disconnect_handler(self, handler: Callable[[int], None]) -> None:
+        """
+        Sets the external callback for disconnect events.
+
+        Args:
+            handler: A callable that accepts (rc: int)
+        """
+        LOGGER.debug("Setting on_disconnect handler")
+        self._callbacks.on_disconnect = handler
+
+    # --- Private Helper Methods ---
+
+    def _configure_tls(self) -> None:
+        """Sets the TLS context on the Paho client."""
+        LOGGER.debug("Enabling TLS connection.")
+        try:
+            self._mqtt_client.tls_set(
+                ca_certs=self._tls_config.ca_certs,
+                certfile=self._tls_config.cert_file,
+                keyfile=self._tls_config.key_file
+            )
+            LOGGER.debug("TLS context set. ca_certs=%s, cert_file=%s",
+                         self._tls_config.ca_certs, self._tls_config.cert_file)
+        except FileNotFoundError as e:
+            LOGGER.error("A certificate file was not found: %s", e)
+            raise
+        except (ssl.SSLError, ValueError) as e:
+            LOGGER.error("Failed to set TLS: %s", e)
+            raise
+
+    def _configure_auth(self) -> None:
+        """Sets the authentication method on the Paho client."""
+        if self._tls_config.cert_file and self._tls_config.key_file:
+            LOGGER.info("Using client certificate (mTLS) for authentication.")
+        elif self._auth_provider:
+            LOGGER.info("Using %s for authentication.",
+                        self._auth_provider.__class__.__name__)
+            username = self._auth_provider.get_username()
+            password = self._auth_provider.get_password()
+            self._mqtt_client.username_pw_set(username=username,
+                                              password=password)
+        else:
+            LOGGER.warning(
+                "No authentication method provided (mTLS or AuthProvider).")
+
+    # --- Internal Paho Callbacks ---
+
+    def _on_connect(self, client, _userdata, _flags, rc):
+        """
+        Internal Paho callback for connection events.
+        Calls the external on_connect_callback.
+        """
+        if rc == 0:
+            LOGGER.info("Subscribing to registered channels...")
+            for interest in self._subscribed_channels:
+                topic = f"{self._topic_prefix}/{interest}"
+                try:
+                    client.subscribe(topic, 1)
+                    LOGGER.debug("Subscribed to topic: %s", topic)
+                except (ValueError, socket.error) as e:
+                    LOGGER.error("Failed to subscribe to topic %s: %s",
+                                 topic, e)
+            if self._callbacks.on_connect:
+                self._callbacks.on_connect()
+        else:
+            LOGGER.error("MQTT connection failed with code: %s", rc)
+
+    def _on_message(self, _client, _userdata, msg):
+        """
+        Internal Paho callback for message events.
+        Parses the topic into a channel and calls the external on_message
+        handler.
+        """
+        topic_parts = msg.topic.strip("/").split('/')
+
+        expected_index = self._prefix_segments
+        if len(topic_parts) <= expected_index + 1:
+            LOGGER.warning(
+                "Received message on topic '%s' which does not match expected depth.",
+                msg.topic)
+            return
+
+        target_device_id = topic_parts[self._prefix_segments]
+        channel_start_index = self._prefix_segments + 1
+        channel = '/'.join(topic_parts[channel_start_index:])
+
+        try:
+            payload = msg.payload.decode('utf-8')
+
+            if self._callbacks.on_message:
+                self._callbacks.on_message(target_device_id, channel, payload)
+        except UnicodeDecodeError as e:
+            LOGGER.error("Failed to decode message: %s", e)
+
+    def _on_disconnect(self, _client, _userdata, rc):
+        """
+        Internal Paho callback for disconnect events.
+        Calls the external on_disconnect handler.
+        Paho's loop will handle the reconnection automatically.
+        """
+        if rc != 0:
+            LOGGER.warning(
+                "Unexpectedly disconnected from MQTT broker (rc: %s). "
+                "Attempting to reconnect automatically...", rc
+            )
+        else:
+            LOGGER.info("Cleanly disconnected from MQTT broker.")
+
+        if self._callbacks.on_disconnect:
+            self._callbacks.on_disconnect(rc)
+
+--- File: clientlib/python/src/udmi/core/messaging/abstract_dispatcher.py ---
+"""
+Defines the abstract base class (ABC) for a message dispatcher.
+
+This module provides the core `AbstractMessageDispatcher` interface
+and defines the `MessageHandler` type alias. This abstract class
+defines the contract that the main Device class uses to interact with
+a concrete dispatcher implementation.
+"""
+
+import logging
+from abc import ABC
+from abc import abstractmethod
+from typing import Any
+from typing import Callable
+from typing import Dict
+from typing import Optional
+
+from udmi.core.messaging.abstract_client import AbstractMessagingClient
+from udmi.schema import DataModel
+
+LOGGER = logging.getLogger(__name__)
+
+# (device_id: str, channel: str, payload: Dict[str, Any]) -> None
+MessageHandler = Callable[[str, str, Dict[str, Any]], None]
+
+
+class AbstractMessageDispatcher(ABC):
+    """
+    Abstract interface for a UDMI message dispatcher.
+    Defines the contract for the Device class.
+    """
+
+    client: Optional[AbstractMessagingClient] = None
+
+    @abstractmethod
+    def register_handler(self, channel: str, handler: MessageHandler, device_id: Optional[str]) -> None:
+        """Register a handler for a specific channel."""
+
+    @abstractmethod
+    def publish_state(self, state: DataModel) -> None:
+        """Serializes and publishes the device State message."""
+
+    @abstractmethod
+    def publish_event(self, channel: str, event: DataModel) -> None:
+        """Serializes and publishes a device Event message."""
+
+    @abstractmethod
+    def connect(self) -> None:
+        """Connects the underlying messaging client."""
+
+    @abstractmethod
+    def start_loop(self) -> None:
+        """Starts the client's non-blocking network loop."""
+
+    @abstractmethod
+    def check_authentication(self) -> None:
+        """
+        Checks if the client's authentication needs to be refreshed
+        and triggers the refresh if necessary.
+        """
+
+    @abstractmethod
+    def close(self) -> None:
+        """Shuts down the connection."""
+
+--- File: clientlib/python/src/udmi/core/messaging/__init__.py ---
+"""
+Messaging package for the UDMI device.
+
+This package defines the core abstract interfaces for messaging:
+- AbstractMessagingClient: Defines the contract for a protocol-specific client (e.G., MQTT).
+- AbstractMessageDispatcher: Defines the contract for routing and serializing messages.
+
+It also provides concrete implementations:
+- MqttMessagingClient: A client for the MQTT protocol.
+- MessageDispatcher: A dispatcher that links a client to the device logic.
+
+The imports in this file make these key classes directly available
+from the `udmi.core.messaging` namespace for easier use.
+"""
+
+from udmi.core.messaging.abstract_client import AbstractMessagingClient
+from udmi.core.messaging.abstract_dispatcher import AbstractMessageDispatcher
+from udmi.core.messaging.message_dispatcher import MessageDispatcher
+from udmi.core.messaging.mqtt_messaging_client import MqttMessagingClient
+
+--- File: clientlib/python/src/udmi/core/messaging/abstract_client.py ---
+"""
+Abstract interface for a generic, protocol-agnostic messaging client.
+"""
+
+from abc import ABC
+from abc import abstractmethod
+from typing import Callable
+from typing import Optional
+
+# Type Alias: (device_id, channel, payload) -> None
+MessageHandler = Callable[[str, str, str], None]
+
+class AbstractMessagingClient(ABC):
+    """
+    An abstract base class for a generic messaging client.
+
+    Its only job is to send and receive string payloads on named channels.
+    It has no knowledge of UDMI, JSON, or specific message models.
+    """
+
+    @abstractmethod
+    def connect(self) -> None:
+        """
+        Configures and initiates the connection to the message broker.
+
+        This method should be non-blocking. The connection process
+        happens in the background, and the 'on_connect' or 'on_disconnect'
+        callback will be triggered upon completion.
+        """
+
+    @abstractmethod
+    def publish(self, channel: str, payload: str,
+        device_id: Optional[str] = None) -> None:
+        """
+        Publishes a raw string payload to a generic channel.
+
+        Args:
+            channel: The logical channel to publish to.
+            payload: The raw string data to send.
+            device_id: (Optional) The specific device ID to publish for.
+                       If None, uses the primary device ID.
+        """
+
+    @abstractmethod
+    def register_channel_subscription(self, channel: str,
+        device_id: Optional[str] = None) -> None:
+        """
+        Registers interest in a generic channel.
+        The client will handle the protocol-specific subscription.
+        Args:
+            channel: The logical channel.
+            device_id: (Optional) Specific device ID. If None, uses the primary device ID.
+        """
+
+    @abstractmethod
+    def run(self) -> None:
+        """
+        Starts the client's non-blocking network loop.
+
+        This should typically start a background thread to handle
+        network I/O, allowing the main application thread to continue.
+        """
+
+    @abstractmethod
+    def close(self) -> None:
+        """
+        Stops the network loop and gracefully disconnects the client.
+        """
+
+    @abstractmethod
+    def check_authentication(self) -> None:
+        """
+        Checks if the client's authentication (e.g., token) needs
+        to be refreshed and, if so, handles the refresh.
+
+        This is intended to be called periodically by the main application loop.
+        """
+
+    @abstractmethod
+    def set_on_message_handler(self, handler: MessageHandler) -> None:
+        """
+        Sets the external callback for incoming messages.
+
+        Args:
+            handler: A callable that accepts (device_id: str, channel: str, payload: str)
+        """
+
+    @abstractmethod
+    def set_on_connect_handler(self, handler: Callable[[], None]) -> None:
+        """
+        Sets the external callback for successful connection events.
+
+        Args:
+            handler: A callable that takes no arguments.
+        """
+
+    @abstractmethod
+    def set_on_disconnect_handler(self, handler: Callable[[int], None]) -> None:
+        """
+        Sets the external callback for disconnect events.
+
+        Args:
+            handler: A callable that accepts (rc: int), where 'rc' is
+                            the reason code for the disconnection.
+        """
+
+--- File: clientlib/python/src/udmi/core/messaging/message_dispatcher.py ---
+"""
+Provides a concrete implementation of the AbstractMessageDispatcher.
+
+This module is responsible for bridging the core Device logic with the
+messaging client. It routes incoming messages to the correct handlers
+and serializes outgoing data models for publication.
+"""
+
+import json
+import logging
+import re
+from typing import Any
+from typing import Callable
+from typing import Dict
+from typing import Optional
+
+from udmi.core.messaging.abstract_client import AbstractMessagingClient
+from udmi.core.messaging.abstract_dispatcher import AbstractMessageDispatcher
+from udmi.core.messaging.abstract_dispatcher import MessageHandler
+from udmi.schema import DataModel
+from udmi.schema import State
+
+LOGGER = logging.getLogger(__name__)
+
+
+class MessageDispatcher(AbstractMessageDispatcher):
+    """
+    Dispatches incoming messages to registered handlers based on channel
+    patterns. Also serializes and publishes outgoing messages.
+
+    This class acts as the "glue" layer between the Device (which
+    understands UDMI logic) and the AbstractMessagingClient (which
+    understands the network protocol).
+    """
+
+    def __init__(self, client: AbstractMessagingClient,
+        on_ready_callback: Callable[[], None],
+        on_disconnect_callback: Callable[[int], None], ):
+        """
+        Initializes the MessageDispatcher.
+
+        Args:
+            client: A concrete instance of AbstractMessagingClient (e.g.,
+                   MqttMessagingClient). The dispatcher will set the
+                   client's message handler to its own internal router.
+            on_ready_callback: The function to call when the client is connected.
+            on_disconnect_callback: The function to call when the client
+                                     disconnects.
+        """
+        self.client = client
+        self._handlers: Dict[str, MessageHandler] = {}
+        self._proxy_handlers: Dict[str, Dict[str, MessageHandler]] = {}
+        self._wildcard_handlers: Dict[re.Pattern, MessageHandler] = {}
+
+        self._on_ready_callback = on_ready_callback
+        self._on_disconnect_callback = on_disconnect_callback
+
+        self.client.set_on_message_handler(self._on_message)
+        self.client.set_on_connect_handler(self._on_connect)
+        self.client.set_on_disconnect_handler(self._on_disconnect)
+
+    def register_handler(self, channel: str, handler: MessageHandler,
+        device_id: Optional[str] = None) -> None:
+        """
+        Registers a handler function for a specific message channel.
+
+        Supports MQTT-style wildcards:
+        - '+' (single-level): e.g., 'commands/+/sub'
+        - '#' (multi-level): e.g., 'commands/#'
+
+        Args:
+            channel: The channel to subscribe to (e.g., 'config',
+                            'commands/#').
+            handler: The function to call when a message arrives on that
+                            channel. The function must accept (channel,
+                            payload_dict).
+            device_id(Optional): The device to subscribe to.
+        """
+        self.client.register_channel_subscription(channel, device_id)
+        if device_id:
+            if device_id not in self._proxy_handlers:
+                self._proxy_handlers[device_id] = {}
+            self._proxy_handlers[device_id][channel] = handler
+            LOGGER.debug("Registered handler for proxy %s on %s", device_id,
+                         channel)
+        else:
+            if '#' in channel or '+' in channel:
+                safe_channel = re.escape(channel)
+                pattern_str = safe_channel.replace(r'\+', '[^/]+').replace(r'/\#', '/.+')
+                if pattern_str.endswith(r'\#'):
+                    pattern_str = pattern_str[:-2] + '.+'
+
+                pattern = re.compile(f"^{pattern_str}$")
+                self._wildcard_handlers[pattern] = handler
+                LOGGER.debug("Registered wildcard handler for %s", channel)
+            else:
+                self._handlers[channel] = handler
+                LOGGER.debug("Registered handler for %s", channel)
+
+    def _on_message(self, device_id: Optional[str], channel: str, payload: str) -> None:
+        """
+        Internal callback given to the MessagingClient.
+
+        This method is the single entry point for all messages from the client.
+        It deserializes the JSON payload and routes it to the correct handler.
+
+        Args:
+            device_id: The device to subscribe to.
+            channel: The raw channel the message arrived on.
+            payload: The raw string payload (expected to be JSON).
+        """
+        try:
+            payload_dict: Dict[str, Any] = json.loads(payload)
+        except json.JSONDecodeError as e:
+            LOGGER.error("Failed to decode JSON payload %s on channel %s: %s",
+                         payload, channel, e)
+            return
+
+        if device_id and device_id in self._proxy_handlers:
+            proxy_map = self._proxy_handlers[device_id]
+            if channel in proxy_map:
+                proxy_map[channel](device_id, channel, payload_dict)
+                return
+
+        handler = self._handlers.get(channel)
+        if handler:
+            try:
+                handler(device_id, channel, payload_dict)
+            except (TypeError, KeyError, AttributeError) as e:
+                LOGGER.error("Handler for channel %s failed: %s", channel, e)
+            return
+
+        for pattern, wildcard_handler in self._wildcard_handlers.items():
+            if pattern.match(channel):
+                try:
+                    wildcard_handler(device_id, channel, payload_dict)
+                except (TypeError, KeyError, AttributeError) as e:
+                    LOGGER.error("Wildcard handler for %s failed: %s",
+                                 channel, e)
+                return
+
+        LOGGER.warning("No handler found for message on channel: %s", channel)
+
+    def publish_state(self, state: State) -> None:
+        """
+        Serializes and publishes the device State message.
+
+        Args:
+            state: The State data model instance to publish.
+        """
+        LOGGER.debug("Publishing 'state' message...")
+        try:
+            payload = state.to_json()
+            self.client.publish("state", payload)
+        except (TypeError, AttributeError) as e:
+            LOGGER.error("Failed to serialize and publish state: %s", e)
+
+    def publish_event(self, channel: str, event: DataModel) -> None:
+        """
+        Serializes and publishes a device Event message to a sub-channel.
+
+        Args:
+            channel: The event sub-channel (e.g., 'pointset', 'system').
+            event: The event data model instance to publish.
+        """
+        LOGGER.debug("Publishing event to '%s' channel...", channel)
+        try:
+            payload = event.to_json()
+            self.client.publish(channel, payload)
+        except (TypeError, AttributeError) as e:
+            LOGGER.error("Failed to serialize and publish event %s: %s",
+                         channel, e)
+
+    # --- Lifecycle Methods ---
+
+    def connect(self) -> None:
+        """Connects the underlying client. (Helper for Device class)"""
+        LOGGER.debug("Dispatcher telling client to connect...")
+        self.client.connect()
+
+    def start_loop(self) -> None:
+        """Starts the client's non-blocking loop."""
+        LOGGER.debug("Dispatcher telling client to start loop...")
+        self.client.run()
+
+    def check_authentication(self) -> None:
+        """
+        Triggers the client's auth check.
+
+        This is used for periodic JWT refresh.
+        """
+        LOGGER.debug("Dispatcher telling client to check authentication...")
+        self.client.check_authentication()
+
+    def close(self) -> None:
+        """
+        Shuts down the underlying client connection.
+
+        Implements the abstract method.
+        """
+        LOGGER.debug("Dispatcher telling client to close...")
+        self.client.close()
+
+    def _on_connect(self) -> None:
+        """
+        Callback for when the client connects and has subscribed.
+        Notifies the device that it is ready.
+        """
+        LOGGER.info(
+            "Dispatcher: Client connected and subscriptions are active.")
+        self._on_ready_callback()
+
+    def _on_disconnect(self, rc: int) -> None:
+        """Callback for when the client disconnects."""
+        LOGGER.warning("Dispatcher: Client disconnected (rc: %s)", rc)
+        self._on_disconnect_callback(rc)
+
+--- File: clientlib/python/src/udmi/core/__init__.py ---
+"""
+UDMI Core Package.
+
+This package brings key classes and factory functions to the top-level
+`udmi.core` namespace for convenient access.
+"""
+
+from udmi.core.device import Device
+from udmi.core.factory import create_device_with_basic_auth
+from udmi.core.factory import create_device_with_jwt
+from udmi.core.factory import create_mqtt_device_instance
+
+--- File: clientlib/python/src/udmi/core/device.py ---
+"""
+Defines the core UDMI Device class.
+
+This module contains the central Device object that manages the
+application's lifecycle, state, and message handling logic.
+"""
+
+import datetime
+import logging
+import time
+from dataclasses import dataclass
+from dataclasses import field
+from threading import Event
+from typing import Any
+from typing import Dict
+from typing import List
+from typing import Optional
+from typing import Type
+from typing import TypeVar
+
+from udmi.constants import UDMI_VERSION
+from udmi.core.managers import BaseManager
+from udmi.core.messaging import AbstractMessageDispatcher
+from udmi.schema import Config
+from udmi.schema import State
+from udmi.schema import SystemState
+
+LOGGER = logging.getLogger(__name__)
+T = TypeVar("T", bound=BaseManager)
+
+
+@dataclass
+class _LoopConfig:
+    """Configuration for the device's main loop timing."""
+    auth_check_interval_sec: int = 15 * 60  # 15 minutes
+    publish_state_interval_sec: int = 600   # 10 minutes
+
+
+@dataclass
+class _LoopState:
+    """Holds the dynamic state of the device's main loop."""
+    stop_event: Event = field(default_factory=Event)
+    last_auth_check: float = 0.0
+    last_state_publish_time: float = 0.0
+
+
+class Device:
+    """
+    Core Device Orchestrator.
+
+    This class composes all services (dispatcher, managers) and runs
+    the main device loop. It delegates all UDMI logic (Config, State, Command)
+    to a list of registered managers.
+
+    This class is NOT intended to be subclassed.
+    """
+
+    def __init__(self, managers: List[BaseManager]):
+        """
+        Initializes the Device.
+
+        Args:
+              managers: A list of initialized BaseManager subclasses.
+        """
+        LOGGER.info("Initializing device...")
+        self.managers = managers
+        self.dispatcher: Optional[AbstractMessageDispatcher] = None
+
+        self._loop_config = _LoopConfig()
+        self._loop_state = _LoopState()
+
+        self.state: State = State(
+            timestamp=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            version=UDMI_VERSION,
+            system=SystemState(last_config=None)
+        )
+        self.config: Config = Config()
+        LOGGER.info("Device initialized with %s managers.", len(self.managers))
+
+    def wire_up_dispatcher(self, dispatcher: AbstractMessageDispatcher) -> None:
+        """
+        Connects the device to its message dispatcher and finalizes setup.
+        This must be called before .run()
+        """
+        LOGGER.debug("Wiring up dispatcher...")
+        if self.dispatcher is not None:
+            LOGGER.warning("Dispatcher already wired. Overwriting.")
+        self.dispatcher = dispatcher
+        for manager in self.managers:
+            manager.set_device_context(self, self.dispatcher)
+        self._setup_message_handlers()
+
+    def _setup_message_handlers(self) -> None:
+        """Registers handlers with the message dispatcher."""
+        if not self.dispatcher:
+            LOGGER.error("Cannot set up handlers; dispatcher is not wired.")
+            return
+        self.dispatcher.register_handler("config", self.handle_config)
+        self.dispatcher.register_handler("commands/#", self.handle_command)
+        LOGGER.debug("Registered config and command handlers.")
+
+    # --- Connection Callbacks ---
+
+    def on_ready(self) -> None:
+        """
+        Callback for when the dispatcher confirms connection and subscriptions.
+        """
+        LOGGER.info("Connection successful. Publishing initial state.")
+        self._publish_state()
+
+    def on_disconnect(self, rc: int) -> None:
+        """
+        Callback for when the client disconnects.
+        Args:
+              rc: The reason code for the disconnection.
+        """
+        LOGGER.warning("Client disconnected with code: %s", rc)
+
+    # --- Message Handlers ---
+
+    def handle_config(self, device_id: str, _channel: str, payload: Dict) -> None:
+        """
+        Orchestration method to handle a new config.
+        Deserializes the config and delegates to all managers.
+
+        Args:
+            device_id: The specific device ID (main or proxy) this config targets.
+            _channel: The channel the message came from (e.g., 'config').
+            payload: The pre-parsed dictionary of the JSON payload.
+        """
+        LOGGER.info("New config received for device '%s', deserializing...", device_id)
+        try:
+            # Note: We parse the config here.
+            # If this is a Proxy config, this updates the Orchestrator's 'last known config'
+            # which might be confusing if the Orchestrator is only supposed to hold Gateway config.
+            # However, for the Manager delegation, this is fine.
+            config_obj = Config.from_dict(payload)
+
+            # Only update self.config if it is for the Main Device (optional check,
+            # depends on if Device knows its own ID. If not, we can skip this optimization).
+            # self.config = config_obj
+        except (TypeError, ValueError) as e:
+            LOGGER.error("Failed to parse config message: %s", e)
+            return
+
+        for manager in self.managers:
+            try:
+                manager.handle_config(device_id, config_obj)
+            except (AttributeError, TypeError, KeyError, ValueError) as e:
+                LOGGER.error(
+                    "Error in %s.handle_config: %s",
+                    manager.__class__.__name__, e)
+
+        self._publish_state()
+
+    def handle_command(self, device_id: str, channel: str, payload: Dict[str, Any]) -> None:
+        """
+        Orchestration method to handle a new command.
+        Delegates to all managers.
+
+        Args:
+            device_id: The specific device ID this command targets.
+            channel: The full command channel (e.g., 'commands/reboot').
+            payload: The pre-parsed dictionary of the JSON payload.
+        """
+        command_name = channel.split('/')[-1]
+        LOGGER.info("Command '%s' received, delegating to managers...",
+                     command_name)
+        for manager in self.managers:
+            try:
+                manager.handle_command(device_id, command_name, payload)
+            except (AttributeError, TypeError, KeyError, ValueError) as e:
+                LOGGER.error("Error in %s.handle_command: %s",
+                             manager.__class__.__name__, e)
+
+    # --- Public API Methods & Main Loop ---
+
+    def _publish_state(self) -> None:
+        """
+        Orchestration method to build and publish the State message.
+        Gathers contributions from all managers.
+        """
+        LOGGER.debug("Assembling state message...")
+        # initialize state before assembling
+        self.state = State(
+            timestamp=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            version=UDMI_VERSION,
+            system=self.state.system
+        )
+        for manager in self.managers:
+            try:
+                manager.update_state(self.state)
+            except (AttributeError, TypeError, KeyError, ValueError) as e:
+                LOGGER.error("Error in %s.update_state: %s",
+                             manager.__class__.__name__, e)
+
+        self.dispatcher.publish_state(self.state)
+        self._loop_state.last_state_publish_time = time.time()
+        LOGGER.debug("State message published.")
+
+    def run(self) -> None:
+        """
+        Starts the device and enters the main blocking application loop.
+        """
+        LOGGER.info("Connecting and starting device run loop...")
+        self._loop_state.stop_event.clear()
+
+        try:
+            self.dispatcher.connect()
+            self.dispatcher.start_loop()
+            self._loop_state.last_auth_check = time.time()
+
+            for manager in self.managers:
+                manager.start()
+
+            LOGGER.info("Device is running. Waiting for events...")
+            while not self._loop_state.stop_event.is_set():
+                now = time.time()
+
+                # publish state periodically
+                if (now - self._loop_state.last_state_publish_time >
+                    self._loop_config.publish_state_interval_sec):
+                    self._publish_state()
+
+                # check for auth token refresh
+                if (now - self._loop_state.last_auth_check >
+                    self._loop_config.auth_check_interval_sec):
+                    LOGGER.debug("Checking for auth token refresh...")
+                    self.dispatcher.check_authentication()
+                    self._loop_state.last_auth_check = now
+
+                time.sleep(1)
+        except KeyboardInterrupt:
+            LOGGER.info("Keyboard interrupt received.")
+        finally:
+            self.stop()
+
+    def stop(self) -> None:
+        """Stops the device loop and disconnects."""
+        if not self._loop_state.stop_event.is_set():
+            LOGGER.info("Stopping device...")
+            self._loop_state.stop_event.set()
+
+            LOGGER.debug("Stopping all managers...")
+            for manager in self.managers:
+                try:
+                    manager.stop()
+                except (AttributeError, TypeError, KeyError, ValueError) as e:
+                    LOGGER.error("Error stopping %s: %s",
+                                 manager.__class__.__name__, e)
+
+            self.dispatcher.close()
+            LOGGER.info("Device stopped.")
+
+    def get_manager(self, manager_type: Type[T]) -> Optional[T]:
+        """
+        Retrieves the first registered manager of the specified type.
+
+        Args:
+            manager_type: The class type of the manager to retrieve.
+
+        Returns:
+            The manager instance if found, otherwise None.
+        """
+        for manager in self.managers:
+            if isinstance(manager, manager_type):
+                return manager
+        return None
+
+--- File: clientlib/python/src/udmi/core/managers/system_manager.py ---
+"""
+Provides the concrete implementation for the SystemManager.
+
+This manager is responsible for handling the 'system' block of the
+config and state, and for reporting system-level events like startup.
+"""
+
+import logging
+import threading
+
+import psutil
+from datetime import datetime
+from datetime import timezone
+from typing import Dict
+from typing import Optional
+
+from udmi.constants import UDMI_VERSION
+from udmi.core.managers.base_manager import BaseManager
+from udmi.core.persistence import DevicePersistence
+from udmi.schema import Config
+from udmi.schema import Entry
+from udmi.schema import Metrics
+from udmi.schema import State
+from udmi.schema import StateSystemOperation
+from udmi.schema import SystemEvents
+from udmi.schema import SystemState
+
+LOGGER = logging.getLogger(__name__)
+BYTES_PER_MEGABYTE = 1024 * 1024
+DEFAULT_METRICS_RATE_SEC = 60
+
+
+class SystemManager(BaseManager):
+    """
+    Manages the 'system' block of the config and state.
+    """
+
+    def __init__(self,
+        hardware_info: Dict = None,
+        software_info: Dict = None,
+        persistence_path: Optional[str] = ".udmi_persistence.json"):
+        """
+        Initializes the SystemManager.
+
+        Args:
+            hardware_info: A dict to populate 'state.system.hardware'
+            software_info: A dict to populate 'state.system.software'
+        """
+        super().__init__()
+        self._last_config_ts: Optional[str] = None
+        self._hardware = hardware_info or {"make": "pyudmi",
+                                           "model": "device-v1"}
+        self._software = software_info or {"firmware": "1.0.0"}
+
+        # --- Persistence Setup ---
+        self.persistence = DevicePersistence(filepath=persistence_path)
+        self._restart_count = 0
+
+        # --- Metrics Loop Setup ---
+        self._metrics_rate_sec = DEFAULT_METRICS_RATE_SEC
+        self._stop_event = threading.Event()
+        self._metrics_thread: Optional[threading.Thread] = None
+
+        LOGGER.info("SystemManager initialized.")
+
+    def start(self) -> None:
+        """
+        Called when the device starts.
+        Increments restart count and publishes startup event.
+        """
+        try:
+            saved_count = self.persistence.get("restart_count", 0)
+            self._restart_count = saved_count + 1
+            self.persistence.set("restart_count", self._restart_count)
+            LOGGER.info(
+                f"Device restart count incremented to: {self._restart_count}")
+        except Exception as e:
+            LOGGER.error(f"Failed to handle persistence: {e}")
+
+        LOGGER.info("SystemManager starting, publishing system startup event.")
+        self._publish_startup_event()
+
+        self._stop_event.clear()
+        self._metrics_thread = threading.Thread(target=self._metrics_loop,
+                                                name="SystemMetricsThread",
+                                                daemon=True)
+        self._metrics_thread.start()
+        LOGGER.info("System metrics loop started (rate: %ss).",
+                    self._metrics_rate_sec)
+
+    def stop(self) -> None:
+        """
+        Called when the device stops.
+        Stops the background metrics thread.
+        """
+        LOGGER.info("Stopping SystemManager...")
+        self._stop_event.set()
+        if self._metrics_thread and self._metrics_thread.is_alive():
+            self._metrics_thread.join(timeout=2.0)
+        LOGGER.info("SystemManager stopped.")
+
+    def handle_config(self, device_id: str, config: Config) -> None:
+        """
+        Handles the 'system' portion of a new config message.
+        """
+        if not config:
+            return
+
+        if config.timestamp:
+            self._last_config_ts = config.timestamp
+            LOGGER.debug("Captured config.timestamp: %s", self._last_config_ts)
+
+        if not config.system:
+            LOGGER.debug(
+                "No 'system' block in config, skipping system-specific config.")
+            return
+
+        if config.system.min_loglevel is not None:
+            LOGGER.info("Setting system min_loglevel to: %s",
+                        config.system.min_loglevel)
+        # Update metrics rate if provided in config
+        if config.system.metrics_rate_sec is not None:
+            new_rate = config.system.metrics_rate_sec
+            if new_rate != self._metrics_rate_sec:
+                LOGGER.info("Updating metrics rate from %s to %s",
+                            self._metrics_rate_sec, new_rate)
+                self._metrics_rate_sec = new_rate
+
+    def handle_command(self, device_id: str, command_name: str,
+        payload: dict) -> None:
+        """
+        Handles 'system' related commands.
+        (e.g., reboot, shutdown)
+        """
+        # For now, we don't implement any system commands
+        if command_name in ["reboot", "shutdown"]:
+            LOGGER.warning("Received '%s' command, but it is not implemented.",
+                           command_name)
+        # This manager doesn't handle other commands
+
+    def update_state(self, state: State) -> None:
+        """
+        Contributes the 'system' block to the state message.
+        """
+        operation_stats = StateSystemOperation(
+            operational=True,
+            restart_count=self._restart_count
+        )
+        state.system = SystemState(
+            last_config=self._last_config_ts,
+            operation=operation_stats,
+            hardware=self._hardware,
+            software=self._software
+        )
+        LOGGER.debug("Populated state.system block.")
+
+    def _publish_startup_event(self):
+        """Helper to publish the startup event."""
+        try:
+            log_entry = Entry(
+                message="Device has started",
+                level=200,  # INFO
+                timestamp=datetime.now(timezone.utc).isoformat()
+            )
+            startup_event = SystemEvents(
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                version=UDMI_VERSION,
+                logentries=[log_entry]
+            )
+            self.publish_event(startup_event, "system")
+        except (TypeError, AttributeError) as e:
+            LOGGER.error("Failed to publish startup event: %s", e)
+
+    def _metrics_loop(self) -> None:
+        """
+        Background loop that publishes metrics periodically.
+        """
+        while not self._stop_event.is_set():
+            self.publish_metrics()
+            self._stop_event.wait(timeout=self._metrics_rate_sec)
+
+    def publish_metrics(self) -> None:
+        """
+        Gathers system metrics and publishes a SystemEvent by populating the
+        'metrics' field.
+        """
+        LOGGER.debug("Collecting and publishing system metrics...")
+        try:
+            vm = psutil.virtual_memory()
+
+            mem_total_mb = vm.total / BYTES_PER_MEGABYTE
+            mem_free_mb = vm.available / BYTES_PER_MEGABYTE
+
+            metrics = Metrics(
+                mem_total_mb=round(mem_total_mb, 2),
+                mem_free_mb=round(mem_free_mb, 2),
+                store_total_mb=None
+            )
+
+            system_event = SystemEvents(
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                version=UDMI_VERSION,
+                metrics=metrics
+            )
+
+            self.publish_event(system_event, "system")
+            LOGGER.info(
+                f"Published metrics: Total={mem_total_mb:.0f}MB, Free={mem_free_mb:.0f}MB")
+
+        except ImportError:
+            LOGGER.error("psutil not installed. Cannot collect metrics.")
+        except Exception as e:
+            LOGGER.error(f"Failed to publish metrics: {e}")
+
+--- File: clientlib/python/src/udmi/core/managers/pointset_manager.py ---
+import logging
+from datetime import datetime
+from datetime import timezone
+from typing import Any
+from typing import Dict
+from typing import Optional
+
+from udmi.constants import UDMI_VERSION
+from udmi.schema import PointsetEvents
+
+from udmi.schema import PointPointsetEvents
+
+from udmi.core.managers import BaseManager
+from udmi.schema import Config
+from udmi.schema import PointPointsetState
+from udmi.schema import PointsetConfig
+from udmi.schema import PointsetState
+from udmi.schema import State
+from udmi.schema import ValueState
+
+LOGGER = logging.getLogger(__name__)
+
+
+class PointsetManager(BaseManager):
+    MESSAGE_REPORT_INTERVAL = 10
+
+    def __init__(self):
+        super().__init__()
+        self._pointset_state: Optional[PointsetState] = None
+        self._message_report_interval = self.MESSAGE_REPORT_INTERVAL
+
+    def handle_config(self, device_id: str, config: Config) -> None:
+        """
+        Handles the 'pointset' portion of a new config message.
+        """
+        if not config or not config.pointset:
+            # If config.pointset is missing, we might want to clear state or ignore.
+            # For now, ignoring is safer unless full sync is required.
+            return
+
+        pointset_config = config.pointset
+
+        if pointset_config:
+            rate = pointset_config.sample_rate_sec
+            limit = pointset_config.sample_limit_sec
+            if rate is not None and limit is not None:
+                self._message_report_interval = max(rate, limit)
+            elif rate is not None:
+                self._message_report_interval = rate
+            elif limit is not None:
+                self._message_report_interval = limit
+
+        self._update_pointset_points_config(pointset_config)
+
+    def handle_command(self, device_id: str, command_name: str, payload: dict) -> None:
+        """
+        Handle pointset commands.
+        """
+        if command_name == "pointset":
+            LOGGER.warning(
+                "Pointset command received but writeback not yet implemented.")
+        else:
+            return
+
+    def update_state(self, state: State) -> None:
+        """
+        Contributes the 'pointset' block to the device State message.
+        """
+        state.pointset = self._pointset_state
+
+    def _update_pointset_points_config(self,
+        config: Optional[PointsetConfig]) -> None:
+        """
+        Syncs the internal state with the provided config.
+        """
+        if config is None:
+            self._pointset_state = None
+            return
+
+        if self._pointset_state is None:
+            self._pointset_state = PointsetState(points={})
+
+        self._pointset_state.state_etag = config.state_etag
+
+        if config.points is not None:
+            if self._pointset_state.points is None:
+                self._pointset_state.points = {}
+            for point_name, point_config in config.points.items():
+                if point_name not in self._pointset_state.points:
+                    self._pointset_state.points[
+                        point_name] = PointPointsetState()
+
+                p_state = self._pointset_state.points[point_name]
+                p_state.value_state = ValueState.applied
+                p_state.status = None
+
+        LOGGER.info("PointsetManager: Configured points and updated state.")
+
+    def publish_telemetry(self, values: Dict[str, Any]) -> None:
+        """
+        Publishes a telemetry message (PointsetEvents) to the cloud.
+        """
+        if not values:
+            LOGGER.warning("publish_telemetry called with empty values.")
+            return
+
+        try:
+            points_map = {}
+            for point_name, value in values.items():
+                p_event = PointPointsetEvents(present_value=value)
+                points_map[point_name] = p_event
+
+            telemetry_event = PointsetEvents(
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                version=UDMI_VERSION,
+                points=points_map
+            )
+
+            self.publish_event(telemetry_event, "pointset")
+            LOGGER.info(f"Published telemetry for {len(points_map)} points.")
+
+        except Exception as e:
+            LOGGER.error(f"Failed to publish telemetry: {e}")
+
+--- File: clientlib/python/src/udmi/core/managers/__init__.py ---
+"""
+Feature managers package for the UDMI device.
+
+This package defines the core `BaseManager` abstract base class
+and provides concrete implementations for different slices of UDMI
+functionality (e.g., `SystemManager`).
+
+The imports in this file make these key classes directly available
+from the `udmi.core.managers` namespace for easier use.
+"""
+
+from udmi.core.managers.base_manager import BaseManager
+from udmi.core.managers.pointset_manager import PointsetManager
+from udmi.core.managers.system_manager import SystemManager
+
+--- File: clientlib/python/src/udmi/core/managers/gateway_manager.py ---
+"""
+Provides the concrete implementation for the GatewayManager.
+This manager is responsible for handling the 'gateway' block of the config,
+managing proxy devices (sub-devices), and reporting gateway state.
+"""
+
+import logging
+from datetime import datetime
+from datetime import timezone
+from typing import Dict
+from typing import List
+from typing import Optional
+
+from udmi.core.managers.base_manager import BaseManager
+from udmi.core.messaging import AbstractMessageDispatcher
+from udmi.schema import Config
+from udmi.schema import Entry
+from udmi.schema import GatewayConfig
+from udmi.schema import GatewayState
+from udmi.schema import State
+
+LOGGER = logging.getLogger(__name__)
+
+
+class ProxyDevice:
+    """
+    Represents a proxied device managed by the GatewayManager.
+
+    Unlike the root Device class, this does not run its own network loop.
+    It acts as a passive container that the GatewayManager orchestrates.
+    """
+
+    def __init__(self, device_id: str, dispatcher: AbstractMessageDispatcher):
+        self.device_id = device_id
+        self.active = False
+        self.dispatcher = dispatcher
+        LOGGER.info(f"Created proxy device handler for: {self.device_id}")
+
+    def start(self):
+        """Activates the proxy device."""
+        if not self.active:
+            self.active = True
+            LOGGER.info(
+                f"Starting proxy {self.device_id}: Sending attach & subscribing.")
+            # Register Config Handler for this specific Proxy
+            self.dispatcher.register_handler(
+                "config",
+                self.handle_config,
+                device_id=self.device_id
+            )
+            # Send UDMI Attach Message
+            if self.dispatcher.client:
+                self.dispatcher.client.publish("attach", "{}",
+                                               device_id=self.device_id)
+
+    def stop(self):
+        """Deactivates the proxy device."""
+        if self.active:
+            self.active = False
+            # Send UDMI detach Message
+            if self.dispatcher.client:
+                self.dispatcher.client.publish("detach", "{}",
+                                               device_id=self.device_id)
+            LOGGER.info(f"Proxy device {self.device_id} stopped.")
+
+    def handle_config(self, device_id: str, channel: str, config: dict):
+        LOGGER.info(f"Proxy {self.device_id} received config: {config}")
+
+
+class GatewayManager(BaseManager):
+    """
+    Manages the 'gateway' block of the config and state.
+    Responsible for creating, starting, and stopping proxy devices based on
+    the 'proxy_ids' list received in the configuration.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self._gateway_state = GatewayState()
+        self._proxy_devices: Dict[str, ProxyDevice] = {}
+        LOGGER.info("GatewayManager initialized.")
+
+    def start(self) -> None:
+        """
+        Lifecycle hook: Start all currently registered proxy devices.
+        """
+        LOGGER.debug("Starting GatewayManager...")
+        for proxy in self._proxy_devices.values():
+            proxy.start()
+
+    def stop(self) -> None:
+        """
+        Lifecycle hook: Stop all proxy devices.
+        """
+        LOGGER.debug("Stopping GatewayManager...")
+        for proxy in self._proxy_devices.values():
+            proxy.stop()
+
+    def handle_config(self, device_id: str, config: Config) -> None:
+        """
+        Handles the 'gateway' portion of a new config message.
+        """
+        if not config or not config.gateway:
+            # If the gateway block is missing, we generally do not clear
+            # existing state to avoid disrupting active proxies during
+            # partial config updates.
+            return
+
+        self._update_config(config.gateway)
+
+    def handle_command(self, device_id: str, command_name: str, payload: dict) -> None:
+        """
+        Handle gateway related commands.
+        """
+        # Placeholder for future gateway-specific commands
+        pass
+
+    def update_state(self, state: State) -> None:
+        """
+        Contributes the 'gateway' block to the device State message.
+        """
+        if not self._gateway_state:
+            self._gateway_state = GatewayState()
+
+        state.gateway = self._gateway_state
+        LOGGER.debug("Populated state.gateway block.")
+
+    def _update_config(self, gateway_config: GatewayConfig) -> None:
+        """
+        Internal logic to sync the proxy list based on config.
+        """
+        if gateway_config.proxy_ids is not None:
+            self._sync_devices(gateway_config.proxy_ids)
+
+        self._set_gateway_status("gateway", 200, "Configured")
+
+    def _sync_devices(self, configured_proxy_ids: List[str]) -> None:
+        """
+        Syncs the internal list of proxy devices with the configured list.
+        """
+        if not self._dispatcher:
+            LOGGER.error("Cannot sync proxy devices: Dispatcher not set.")
+            return
+
+        current_ids = set(self._proxy_devices.keys())
+        target_ids = set(configured_proxy_ids)
+
+        to_add = target_ids - current_ids
+        to_remove = current_ids - target_ids
+
+        for device_id in to_remove:
+            LOGGER.info(f"Removing proxy device: {device_id}")
+            proxy = self._proxy_devices.pop(device_id)
+            proxy.stop()
+
+        for device_id in to_add:
+            LOGGER.info(f"Adding proxy device: {device_id}")
+            new_proxy = ProxyDevice(device_id, self._dispatcher)
+            self._proxy_devices[device_id] = new_proxy
+            new_proxy.start()
+
+        if to_add or to_remove:
+            LOGGER.info(
+                f"Gateway synced. Active proxies: {list(self._proxy_devices.keys())}")
+
+    def _set_gateway_status(self, category: str, level: int,
+        message: str) -> None:
+        """
+        Helper to set the gateway status entry with a proper timestamp.
+        """
+        entry = Entry(
+            category=category,
+            level=level,
+            message=message,
+            timestamp=datetime.now(timezone.utc).isoformat()
+        )
+        self._gateway_state.status = entry
+
+--- File: clientlib/python/src/udmi/core/managers/base_manager.py ---
+"""
+Defines the abstract base class (ABC) for feature managers.
+
+This module provides the core `BaseManager` interface that all
+feature-specific managers (e.g., SystemManager, PointsetManager) must
+implement to be orchestrated by the main Device class.
+"""
+
+import abc
+import logging
+from typing import Optional
+from typing import TYPE_CHECKING
+
+from udmi.schema import Config
+from udmi.schema import DataModel
+from udmi.schema import State
+
+if TYPE_CHECKING:
+    # To avoid circular import error
+    from udmi.core import Device
+    from udmi.core.messaging import AbstractMessageDispatcher
+
+LOGGER = logging.getLogger(__name__)
+
+
+class BaseManager(abc.ABC):
+    """
+    Abstract base class for all feature Managers.
+
+    A manager implements a specific slice of UDMI logic (e.g., Pointset, Gateway).
+    The Device class will orchestrate multiple managers.
+    """
+
+    def __init__(self) -> None:
+        self._device: Optional["Device"] = None
+        self._dispatcher: Optional["AbstractMessageDispatcher"] = None
+        LOGGER.debug("Initialized manager: %s", self.__class__.__name__)
+
+    def set_device_context(self, device: Optional["Device"],
+        dispatcher: Optional["AbstractMessageDispatcher"]) -> None:
+        """
+        Provides the manager with a handle to the core device components.
+        This is called by the Device during initialization.
+        """
+        self._device = device
+        self._dispatcher = dispatcher
+
+    def publish_event(self, event_model: DataModel, subfolder: str) -> None:
+        """
+        Helper method for managers to publish events.
+        """
+        if not self._dispatcher:
+            LOGGER.error("Manager %s cannot publish event: dispatcher not set.",
+                         self.__class__.__name__)
+            return
+
+        self._dispatcher.publish_event(f"events/{subfolder}", event_model)
+
+    def start(self) -> None:
+        """
+        Called by the Device when the main loop starts.
+        Optional to implement; for managers that need an init process.
+        """
+
+    def stop(self) -> None:
+        """
+        Called by the Device when the main loop stops.
+        Optional to implement; for managers that need a cleanup process
+        (e.g., stopping threads).
+        """
+
+    @abc.abstractmethod
+    def handle_config(self, device_id: str, config: Config) -> None:
+        """
+        Handle a newly received config message.
+        The manager should only act on the parts of the config
+        it is responsible for (e.g., config.system, config.pointset).
+        """
+        raise NotImplementedError
+
+    @abc.abstractmethod
+    def handle_command(self, device_id: str, command_name: str, payload: dict) -> None:
+        """
+        Handle a newly received command.
+        The manager should check if the command_name (e.g., 'pointset.writeback')
+        is one that it should process.
+        """
+        raise NotImplementedError
+
+    @abc.abstractmethod
+    def update_state(self, state: State) -> None:
+        """
+        Contribute to the state object before it is published.
+        The manager should only modify the parts of the state
+        it is responsible for (e.g., state.pointset).
+        """
+        raise NotImplementedError
+
+--- File: clientlib/python/src/udmi/core/factory.py ---
+"""
+Factory for creating and wiring a complete UDMI Device instance.
+
+This module provides convenient helper functions to instantiate all
+core components (Device, Dispatcher, Client, Managers) and correctly
+wire them together.
+"""
+
+import logging
+from dataclasses import dataclass
+from dataclasses import field
+from typing import List
+from typing import Optional
+
+from udmi.core.auth.auth_provider import AuthProvider
+from udmi.core.auth.basic_auth_provider import BasicAuthProvider
+from udmi.core.auth.jwt_auth_provider import JwtAuthProvider
+from udmi.core.auth.jwt_auth_provider import JwtTokenConfig
+from udmi.core.device import Device
+from udmi.core.managers.base_manager import BaseManager
+from udmi.core.managers.pointset_manager import PointsetManager
+from udmi.core.managers.system_manager import SystemManager
+from udmi.core.messaging.message_dispatcher import MessageDispatcher
+from udmi.core.messaging.mqtt_messaging_client import MqttMessagingClient
+from udmi.core.messaging.mqtt_messaging_client import ReconnectConfig
+from udmi.core.messaging.mqtt_messaging_client import TlsConfig
+from udmi.schema import EndpointConfiguration
+
+LOGGER = logging.getLogger(__name__)
+
+# pylint: disable=too-many-arguments,too-many-positional-arguments
+
+@dataclass
+class ClientConfig:
+    """Groups all client-level (TLS, Reconnect) configurations."""
+    tls_config: TlsConfig = field(default_factory=TlsConfig)
+    reconnect_config: ReconnectConfig = field(default_factory=ReconnectConfig)
+
+
+@dataclass
+class JwtAuthArgs:
+    """Groups arguments specific to creating a JWT Auth Provider."""
+    project_id: str
+    key_file: str
+    algorithm: str
+
+
+# --- Internal Wiring Functions ---
+
+def _get_default_managers(
+    persistence_path: Optional[str] = ".udmi_persistence.json"
+) -> List[BaseManager]:
+    """Returns the standard set of managers for a default device."""
+    return [
+        SystemManager(persistence_path),
+        PointsetManager(),
+    ]
+
+
+def _wire_device(
+    mqtt_client: MqttMessagingClient,
+    managers: Optional[List[BaseManager]] = None,
+    additional_managers: Optional[List[BaseManager]] = None,
+    persistence_path: Optional[str] = ".udmi_persistence.json"
+) -> Device:
+    """Internal private function to handle the final wiring of components."""
+    LOGGER.debug("Wiring device components...")
+
+    # 1. Determine the base list of managers
+    if managers is not None:
+        # User provided an explicit list, overriding defaults entirely.
+        final_managers = managers
+    else:
+        final_managers = _get_default_managers(persistence_path)
+
+    # 2. Add any additional managers
+    if additional_managers:
+        LOGGER.debug("Adding %s additional managers.", len(additional_managers))
+        final_managers.extend(additional_managers)
+
+    LOGGER.info("Device configured with %s managers: %s", len(final_managers),
+                [m.__class__.__name__ for m in final_managers])
+
+    # 3. Instantiate the Device Orchestrator (in its initial state)
+    device = Device(managers=final_managers)
+
+    # 4. Instantiate the Dispatcher, giving it the client and the device
+    dispatcher = MessageDispatcher(
+        client=mqtt_client,
+        on_ready_callback=device.on_ready,
+        on_disconnect_callback=device.on_disconnect
+    )
+
+    # 5. Use the public method to finalize the device's setup
+    device.wire_up_dispatcher(dispatcher)
+
+    LOGGER.info("Device instance created and wired successfully.")
+    return device
+
+
+# --- Public Factory Functions ---
+
+def create_mqtt_device_instance(
+    endpoint_config: EndpointConfiguration,
+    auth_provider: Optional[AuthProvider],
+    managers: Optional[List[BaseManager]] = None,
+    additional_managers: Optional[List[BaseManager]] = None,
+    client_config: ClientConfig = None,
+    persistence_path: Optional[str] = ".udmi_persistence.json"
+) -> Device:
+    """Creates a UDMI device with a user-provided AuthProvider instance.
+
+    Use this function when you have a custom or pre-configured AuthProvider.
+
+    Args:
+        endpoint_config: The EndpointConfiguration dataclass.
+        auth_provider: A pre-initialized AuthProvider instance.
+        managers: (Optional) A completely custom list of managers. If provided,
+            this list REPLACES the default managers (e.g., SystemManager).
+            Use this only if you need full control over the device's internal
+            logic and want to omit standard UDMI behaviors.
+        additional_managers: (Optional) A list of extra managers to add to
+            the device. These are appended to the standard defaults (or
+            to the custom `managers` list if one is provided). This is the
+            recommended way to add custom application logic while keeping
+            standard UDMI functionality.
+        client_config: (Optional) Configuration for TLS and reconnection.
+        persistence_path: (Optional) Path to the persistence file. Use None
+            explicitly for in-memory persistence.
+
+    Returns:
+        A fully wired, ready-to-run Device instance.
+    """
+    LOGGER.info("Creating device with custom AuthProvider...")
+    actual_client_config = client_config or ClientConfig()
+
+    client = MqttMessagingClient(
+        endpoint_config=endpoint_config,
+        auth_provider=auth_provider,
+        tls_config=actual_client_config.tls_config,
+        reconnect_config=client_config.reconnect_config
+    )
+
+    return _wire_device(
+        mqtt_client=client,
+        managers=managers,
+        additional_managers=additional_managers,
+        persistence_path=persistence_path
+    )
+
+
+def create_device_with_jwt(
+    endpoint_config: EndpointConfiguration,
+    jwt_auth_args: JwtAuthArgs,
+    managers: Optional[List[BaseManager]] = None,
+    additional_managers: Optional[List[BaseManager]] = None,
+    token_config: JwtTokenConfig = None,
+    client_config: ClientConfig = None,
+    persistence_path: Optional[str] = ".udmi_persistence.json"
+) -> Device:
+    """Convenience factory to create a device using JWT authentication.
+
+    This is the typical method for connecting to cloud platforms
+    like GCP IoT Core.
+
+    Args:
+        endpoint_config: The EndpointConfiguration dataclass.
+        jwt_auth_args: Dataclass with project_id, key_file, and algorithm.
+        managers: (Optional) A completely custom list of managers. If provided,
+            this list REPLACES the default managers (e.g., SystemManager).
+            Use this only if you need full control over the device's internal
+            logic and want to omit standard UDMI behaviors.
+        additional_managers: (Optional) A list of extra managers to add to
+            the device. These are appended to the standard defaults (or
+            to the custom `managers` list if one is provided). This is the
+            recommended way to add custom application logic while keeping
+            standard UDMI functionality.
+        token_config: (Optional) Configuration for JWT lifetime/refresh.
+        client_config: (Optional) Configuration for TLS and reconnection.
+        persistence_path: (Optional) Path to the persistence file. Use None
+            explicitly for in-memory persistence.
+
+    Returns:
+        A fully wired, ready-to-run Device instance.
+    """
+    LOGGER.info("Creating device with JWT authentication...")
+    actual_token_config = token_config or JwtTokenConfig()
+
+    auth_provider = JwtAuthProvider(
+        project_id=jwt_auth_args.project_id,
+        private_key_file=jwt_auth_args.key_file,
+        algorithm=jwt_auth_args.algorithm,
+        token_config=actual_token_config
+    )
+
+    return create_mqtt_device_instance(
+        endpoint_config=endpoint_config,
+        auth_provider=auth_provider,
+        managers=managers,
+        additional_managers=additional_managers,
+        client_config=client_config,
+        persistence_path=persistence_path
+    )
+
+
+def create_device_with_basic_auth(
+    endpoint_config: EndpointConfiguration,
+    username: str,
+    password: str,
+    managers: Optional[List[BaseManager]] = None,
+    additional_managers: Optional[List[BaseManager]] = None,
+    client_config: ClientConfig = ClientConfig(),
+    persistence_path: Optional[str] = ".udmi_persistence.json"
+) -> Device:
+    """Convenience factory to create a device using Basic (username/password) auth.
+
+    Args:
+        endpoint_config: The EndpointConfiguration dataclass.
+        username: The MQTT username.
+        password: The MQTT password.
+        managers: (Optional) A completely custom list of managers. If provided,
+            this list REPLACES the default managers (e.g., SystemManager).
+            Use this only if you need full control over the device's internal
+            logic and want to omit standard UDMI behaviors.
+        additional_managers: (Optional) A list of extra managers to add to
+            the device. These are appended to the standard defaults (or
+            to the custom `managers` list if one is provided). This is the
+            recommended way to add custom application logic while keeping
+            standard UDMI functionality.
+        client_config: (Optional) Configuration for TLS and reconnection.
+        persistence_path: (Optional) Path to the persistence file. Use None
+            explicitly for in-memory persistence.
+
+    Returns:
+        A fully wired, ready-to-run Device instance.
+    """
+    LOGGER.info(
+        "Creating device with Basic (username/password) authentication...")
+
+    auth_provider = BasicAuthProvider(username=username, password=password)
+
+    return create_mqtt_device_instance(
+        endpoint_config=endpoint_config,
+        auth_provider=auth_provider,
+        managers=managers,
+        additional_managers=additional_managers,
+        client_config=client_config,
+        persistence_path=persistence_path
+    )
+
+--- File: clientlib/python/src/udmi/core/auth/auth_provider.py ---
+"""
+Defines the abstract base class (ABC) for authentication providers.
+
+This module provides the core `AuthProvider` interface that all
+authentication strategies (e.g., Basic Auth, JWT) must implement
+to be used by messaging clients.
+"""
+
+from abc import ABC
+from abc import abstractmethod
+
+
+class AuthProvider(ABC):
+    """
+    Abstract base class for all authentication providers.
+    Defines an interface for message clients to retrieve credentials.
+    """
+
+    @abstractmethod
+    def get_username(self) -> str:
+        """Returns the username for the MQTT connection."""
+
+    @abstractmethod
+    def get_password(self) -> str:
+        """Returns the password for the MQTT connection."""
+
+    @abstractmethod
+    def needs_refresh(self) -> bool:
+        """
+        Returns True if the auth credentials (e.g., token) are
+        expired or will expire soon and require a client refresh.
+        """
+
+--- File: clientlib/python/src/udmi/core/auth/__init__.py ---
+"""
+Authentication provider package for the UDMI device.
+
+This package defines the core `AuthProvider` abstract base class
+and provides concrete implementations for different auth strategies,
+such as `BasicAuthProvider` (username/password) and `JwtAuthProvider` (JWT).
+
+The imports in this file make these key classes directly available
+from the `udmi.core.auth` namespace for easier use.
+"""
+
+from udmi.core.auth.auth_provider import AuthProvider
+from udmi.core.auth.basic_auth_provider import BasicAuthProvider
+from udmi.core.auth.jwt_auth_provider import JwtAuthProvider
+
+--- File: clientlib/python/src/udmi/core/auth/basic_auth_provider.py ---
+"""
+Provides a username/password based authentication provider.
+"""
+
+from udmi.core.auth.auth_provider import AuthProvider
+
+
+class BasicAuthProvider(AuthProvider):
+    """
+    An AuthProvider for basic username and password authentication.
+    """
+
+    def __init__(self, username: str, password: str):
+        self._username = username
+        self._password = password
+
+    def get_username(self) -> str:
+        return self._username
+
+    def get_password(self) -> str:
+        return self._password
+
+    def needs_refresh(self) -> bool:
+        return False
+
+--- File: clientlib/python/src/udmi/core/auth/jwt_auth_provider.py ---
+"""
+Provides a JWT (JSON Web Token) based authentication provider.
+"""
+
+import logging
+from dataclasses import dataclass
+from datetime import datetime
+from datetime import timedelta
+from datetime import timezone
+from typing import Optional
+
+import jwt
+from jwt.exceptions import PyJWTError
+
+from udmi.core.auth.auth_provider import AuthProvider
+
+LOGGER = logging.getLogger(__name__)
+DEFAULT_TOKEN_LIFETIME_MINUTES = 60
+DEFAULT_TOKEN_REFRESH_BUFFER_MINUTES = 5
+
+
+@dataclass
+class JwtTokenConfig:
+    """Configuration for JWT token lifetime and refresh."""
+    lifetime_minutes: int = DEFAULT_TOKEN_LIFETIME_MINUTES
+    refresh_buffer_minutes: int = DEFAULT_TOKEN_REFRESH_BUFFER_MINUTES
+
+
+class JwtAuthProvider(AuthProvider):
+    """
+    An AuthProvider for JWT-based authentication, common for cloud platforms.
+    Caches the token and handles proactive refresh.
+    """
+
+    def __init__(
+        self,
+        project_id: str,
+        private_key_file: str,
+        algorithm: str,
+        token_config: JwtTokenConfig = JwtTokenConfig()
+    ):
+        self.audience = project_id
+        self.algorithm = algorithm
+        self.token_lifetime_minutes = token_config.lifetime_minutes
+        self.token_refresh_buffer_minutes = token_config.refresh_buffer_minutes
+        self._cached_token: Optional[str] = None
+        self._token_expiry: Optional[datetime] = None
+        try:
+            with open(private_key_file, "r", encoding="utf-8") as f:
+                self._private_key = f.read()
+        except FileNotFoundError:
+            LOGGER.error("Private key file not found at: %s", private_key_file)
+            raise
+
+    def get_username(self) -> str:
+        """For JWT auth, the username field is typically not used."""
+        return "unused"
+
+    def _is_token_expiring_soon(self) -> bool:
+        """Checks if the cached token is expired or expiring soon."""
+        if not self._token_expiry:
+            return True
+
+        now_utc = datetime.now(tz=timezone.utc)
+        refresh_threshold = self._token_expiry - timedelta(
+            minutes=self.token_refresh_buffer_minutes
+        )
+
+        return now_utc >= refresh_threshold
+
+    def get_password(self) -> str:
+        """
+        Generates a new, time-limited JWT if the cached one is expiring soon,
+        otherwise returns the cached token.
+        """
+        if self._is_token_expiring_soon():
+            LOGGER.info("Generating new JWT...")
+            try:
+                token_iat = datetime.now(tz=timezone.utc)
+                token_exp = token_iat + timedelta(
+                    minutes=self.token_lifetime_minutes
+                )
+                payload = {"iat": token_iat, "exp": token_exp,
+                           "aud": self.audience}
+
+                self._cached_token = jwt.encode(
+                    payload, self._private_key, algorithm=self.algorithm
+                )
+                self._token_expiry = token_exp
+                LOGGER.info("Generated new JWT, valid until %s UTC", token_exp)
+            except (PyJWTError, TypeError) as e:
+                LOGGER.error("Failed to generate new JWT: %s", e)
+        else:
+            LOGGER.debug("Reusing cached JWT.")
+
+        if self._cached_token is None:
+            LOGGER.error("No valid JWT token available to return.")
+            return ""
+
+        return self._cached_token
+
+    def needs_refresh(self) -> bool:
+        """
+        Returns True if the auth token is expired or will expire soon.
+        """
+        return self._is_token_expiring_soon()
+
+--- File: clientlib/python/src/udmi/core/persistence.py ---
+import json
+import logging
+import os
+import tempfile
+import threading
+from typing import Any, Dict, Optional
+
+LOGGER = logging.getLogger(__name__)
+
+
+class DevicePersistence:
+    """
+    Manages persistent data storage with thread safety and atomic writes.
+    If filepath is provided, saves to disk.
+    If filepath is None, operates in-memory only (for testing/read-only).
+    """
+
+    def __init__(self, filepath: Optional[str] = ".udmi_persistence.json"):
+        self.filepath = filepath
+        self._data: Dict[str, Any] = {}
+        self._lock = threading.RLock()  # Reentrant lock for thread safety
+
+        if self.filepath:
+            self.load()
+        else:
+            LOGGER.info(
+                "Persistence initialized in-memory only (no file storage).")
+
+    def load(self) -> None:
+        """Loads data from the persistence file."""
+        if not self.filepath:
+            return
+
+        # Lock during load to ensure no one reads/writes while loading
+        with self._lock:
+            if not os.path.exists(self.filepath):
+                LOGGER.debug(
+                    f"No persistence file found at {self.filepath}. Starting fresh.")
+                self._data = {}
+                return
+
+            try:
+                with open(self.filepath, 'r', encoding='utf-8') as f:
+                    self._data = json.load(f)
+                LOGGER.debug(f"Persistence data loaded from {self.filepath}.")
+            except (json.JSONDecodeError, IOError) as e:
+                LOGGER.error(f"Failed to load persistence file: {e}")
+                self._data = {}
+
+    def save(self) -> None:
+        """Saves current data to the persistence file atomically."""
+        if not self.filepath:
+            return
+
+        with self._lock:
+            try:
+                # Atomic Write Pattern:
+                # 1. Write to a temp file in the same directory (ensures same filesystem)
+                # 2. Rename temp file to target file (atomic operation)
+                dirname = os.path.dirname(self.filepath) or "."
+
+                # Create a temp file
+                fd, temp_path = tempfile.mkstemp(dir=dirname, text=True)
+
+                try:
+                    with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                        json.dump(self._data, f, indent=2)
+                        f.flush()
+                        os.fsync(f.fileno())  # Ensure data hits the disk
+
+                    # Atomic replacement
+                    os.replace(temp_path, self.filepath)
+                    LOGGER.debug(f"Persistence data saved to {self.filepath}.")
+
+                except Exception:
+                    # Clean up temp file if write failed
+                    if os.path.exists(temp_path):
+                        os.remove(temp_path)
+                    raise
+
+            except (IOError, OSError) as e:
+                LOGGER.error(f"Failed to save persistence file: {e}")
+
+    def get(self, key: str, default: Any = None) -> Any:
+        """Retrieves a value by key."""
+        with self._lock:
+            return self._data.get(key, default)
+
+    def set(self, key: str, value: Any) -> None:
+        """Sets a value and immediately triggers a save."""
+        with self._lock:
+            self._data[key] = value
+            self.save()
+--- File: clientlib/python/src/udmi/core/logging/mqtt_handler.py ---
+import logging
+from datetime import datetime
+from datetime import timezone
+from typing import TYPE_CHECKING
+
+from udmi.constants import UDMI_VERSION
+from udmi.schema import Entry
+from udmi.schema import SystemEvents
+
+if TYPE_CHECKING:
+    from udmi.core.managers import SystemManager
+
+
+class UDMIMqttLogHandler(logging.Handler):
+    """
+    A custom logging handler that publishes Python log records as UDMI
+    SystemEvents.
+    """
+
+    def __init__(self, system_manager: "SystemManager"):
+        """
+        Initializes the handler.
+
+        Args:
+            system_manager: The instance of SystemManager used to publish events.
+        """
+        super().__init__()
+        self.system_manager = system_manager
+
+    def emit(self, record: logging.LogRecord) -> None:
+        """
+        Captures a log record, formats it as a UDMI Entry, and publishes it.
+        """
+        try:
+            message = self.format(record)
+
+            # Map Python level to UDMI level (approximate mapping: x10)
+            # DEBUG(10)->100, INFO(20)->200, WARNING(30)->300, ERROR(40)->400,
+            # CRITICAL(50)->500
+            udmi_level = record.levelno * 10
+
+            timestamp = datetime.fromtimestamp(record.created,
+                                               tz=timezone.utc).isoformat()
+
+            log_entry = Entry(
+                message=message,
+                level=udmi_level,
+                timestamp=timestamp
+            )
+
+            system_event = SystemEvents(
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                version=UDMI_VERSION,
+                logentries=[log_entry]
+            )
+
+            # This publishes to the 'events/system' subfolder
+            self.system_manager.publish_event(system_event, "system")
+        except Exception:  # pylint: disable=broad-except
+            self.handleError(record)
+
+--- File: clientlib/python/src/udmi/core/logging/__init__.py ---
+
+--- File: clientlib/python/src/udmi/constants.py ---
+"""
+Global constants for the pyudmi library.
+"""
+
+# The UDMI schema version this library is built to support.
+# This is used in State and Event message headers.
+UDMI_VERSION = "1.5.2"
+
+--- File: clientlib/python/bin/build ---
+#!/bin/bash -e
+#
+# This script builds the Python client library.
+#
+# It performs the following steps:
+# 1. Sets up path variables.
+# 2. Ensures Python 3 and pyproject.toml are present.
+# 3. Creates or updates a Python virtual environment (venv).
+# 4. Installs Poetry.
+# 5. Installs project dependencies via Poetry.
+# 6. Builds the final package (wheel and sdist).
+#
+
+set -euo pipefail
+
+# --- Variable Definitions ---
+echo "Setting up script variables..."
+SCRIPT_ROOT=$(realpath "$(dirname "$0")")
+LIB_ROOT=$(realpath "$SCRIPT_ROOT/..")
+UDMI_ROOT=$(realpath "$SCRIPT_ROOT/../../..")
+VENV_DIR="$LIB_ROOT/venv"
+PYPROJECT_FILE="$UDMI_ROOT/pyproject.toml"
+POETRY_VERSION="2.0.1"
+
+# Source the common shell functions
+source "$UDMI_ROOT/etc/shell_common.sh"
+
+# --- Prerequisite Checks ---
+echo "Checking prerequisites..."
+
+# 1. Check for python3
+if ! command -v python3 &> /dev/null; then
+    fail "python3 could not be found. Please install Python 3."
+fi
+echo "  - python3 found."
+
+# 2. Check for pyproject.toml
+if [ ! -f "$PYPROJECT_FILE" ]; then
+    fail "pyproject.toml not found at $PYPROJECT_FILE. This script must be run from within a valid Poetry project."
+fi
+echo "  - pyproject.toml found."
+
+# --- Main Logic ---
+# 1. Setup python environment
+if [ -d "$VENV_DIR" ]; then
+    echo "Virtual environment already exists. Activating."
+else
+    echo "Creating new virtual environment at $VENV_DIR..."
+    python3 -m venv "$VENV_DIR"
+fi
+source "$VENV_DIR/bin/activate"
+echo "Virtual environment activated."
+
+# 2. Install/Upgrade Poetry
+echo "Installing Poetry v$POETRY_VERSION..."
+pip install "poetry==$POETRY_VERSION"
+echo "Poetry installed."
+
+# 3. Install dependencies
+echo "Installing project dependencies with Poetry..."
+"$VENV_DIR/bin/poetry" install
+echo "Dependencies installed."
+
+# 4. Build the package
+echo "Building the package..."
+"$VENV_DIR/bin/poetry" build
+echo "Package built successfully."
+
+# --- Success ---
+echo "--------------------------------------------------------------"
+echo "Build complete. Artifacts are in $UDMI_ROOT/dist/"
+echo "--------------------------------------------------------------"
+--- File: clientlib/python/samples/connect_to_local_broker_basic_auth.py ---
+"""
+Example script for connecting a UDMI device to a generic MQTT broker
+using username and password authentication.
+
+This script demonstrates how to use the `create_device_with_basic_auth` factory
+to instantiate a device. This is useful for testing with local MQTT brokers
+like Mosquitto or for connecting to non-GCP platforms that use basic auth.
+"""
+
+import logging
+import sys
+
+from udmi.core.factory import create_device_with_basic_auth
+from udmi.schema import EndpointConfiguration
+
+# --- Configuration Constants ---
+# CONFIGURE THESE VALUES for your local or custom MQTT broker
+DEVICE_ID = "AHU-1"
+MQTT_HOSTNAME = "localhost"  # e.g., "localhost" or "test.mosquitto.org"
+MQTT_PORT = 1883  # 1883 is the standard non-secure MQTT port
+
+# Credentials for the MQTT broker
+BROKER_USERNAME = "pyudmi-device"
+BROKER_PASSWORD = "somesecurepassword"
+
+if __name__ == "__main__":
+    # Set up basic logging to see device activity in the console
+    logging.basicConfig(level=logging.DEBUG,
+                        format='%(asctime)s - %(levelname)s - %(message)s')
+
+    try:
+        # Define a custom topic prefix. For Iot Core, this is locked, but for
+        # other brokers, you can define your own.
+        topic_prefix = "/r/ZZ-TRI-FECTA/d/"
+
+        # The client_id is often used by the broker for identifying the
+        # connection. Here we make it the same as the full device topic path.
+        client_id = f"{topic_prefix}{DEVICE_ID}"
+
+        # 1. Create the UDMI EndpointConfiguration object
+        # This tells the client where to connect and what topic prefix
+        # to use when building full MQTT topics (e.g., for 'state').
+        endpoint_config = EndpointConfiguration(
+            client_id=client_id,
+            hostname=MQTT_HOSTNAME,
+            port=MQTT_PORT,
+            topic_prefix=topic_prefix  # Pass the custom prefix
+        )
+
+        logging.info("Creating device instance using the basic auth factory...")
+
+        # 2. Use the factory to create the device instance.
+        # This factory wires up:
+        # - MqttMessagingClient: Handles the Paho MQTT connection
+        # - BasicAuthProvider: Stores the static username/password
+        # - All other standard device components
+        device = create_device_with_basic_auth(
+            endpoint_config=endpoint_config,
+            username=BROKER_USERNAME,
+            password=BROKER_PASSWORD
+        )
+
+        # 3. Start the device's main loop.
+        # This will connect, authenticate, subscribe, and publish.
+        device.run()
+    except Exception as e:
+        # Catch-all for critical errors (e.g., connection refused)
+        logging.error(f"A critical error occurred: {e}", exc_info=True)
+        sys.exit(1)
+
+    logging.info("Device shut down gracefully. Exiting.")
+
+--- File: clientlib/python/samples/basic_state_injection.py ---
+"""
+This sample demonstrates how to inject static device information (Make, Model,
+Firmware, etc.) into the UDMI State message using the standard SystemManager.
+
+No custom manager classes are required for this common task.
+"""
+
+import logging
+import sys
+
+from udmi.core.factory import create_device_with_basic_auth
+from udmi.core.managers import SystemManager
+from udmi.schema import EndpointConfiguration
+
+# --- Configuration ---
+DEVICE_ID = "AHU-1"
+MQTT_HOSTNAME = "localhost"
+MQTT_PORT = 1883
+BROKER_USERNAME = "pyudmi-device"
+BROKER_PASSWORD = "somesecureword"
+
+logging.basicConfig(level=logging.INFO,
+                    format='%(asctime)s - %(name)s - %(message)s')
+LOGGER = logging.getLogger(__name__)
+
+if __name__ == "__main__":
+    try:
+        # 1. Configure Connection
+        topic_prefix = "/r/ZZ-TRI-FECTA/d/"
+        endpoint = EndpointConfiguration(
+            client_id=f"{topic_prefix}{DEVICE_ID}",
+            hostname=MQTT_HOSTNAME,
+            port=MQTT_PORT,
+            topic_prefix=topic_prefix
+        )
+
+        # 2. CONFIGURE SYSTEM MANAGER
+        # We pre-configure the standard SystemManager with our device's details.
+        # These will automatically appear in the 'system.hardware' and
+        # 'system.software' sections of the published State message.
+        my_system_manager = SystemManager(
+            hardware_info={"make": "GenericDevice", "model": "SomeModel"},
+            software_info={"firmware": "v2.4.5-stable", "os": "Linux"}
+        )
+
+        # 3. Create Device
+        # We pass our configured manager to the 'managers' argument, which
+        # replaces the default empty SystemManager.
+        device = create_device_with_basic_auth(
+            endpoint_config=endpoint,
+            username=BROKER_USERNAME,
+            password=BROKER_PASSWORD,
+            managers=[my_system_manager]
+        )
+
+        device.run()
+
+    except KeyboardInterrupt:
+        LOGGER.info("Stopped by user.")
+    except Exception as e:
+        LOGGER.critical(f"Fatal error: {e}", exc_info=True)
+        sys.exit(1)
+
+--- File: clientlib/python/samples/gateway_simulation.py ---
+"""
+Gateway Simulation Sample.
+
+This sample demonstrates the GatewayManager handling a config update
+that defines a list of proxy devices.
+
+It simulates:
+1. Starting a Gateway device.
+2. Receiving a config update with 'gateway.proxy_ids'.
+3. The GatewayManager automatically creating and activating ProxyDevice instances.
+4. The ProxyDevice instances registering their own config handlers and sending 'attach' messages.
+"""
+
+import logging
+import sys
+import time
+import threading
+import json
+
+from udmi.core.factory import create_device_with_basic_auth
+from udmi.core.managers.gateway_manager import GatewayManager
+from udmi.schema import EndpointConfiguration
+
+# --- Configuration Constants ---
+DEVICE_ID = "GW-1"
+MQTT_HOSTNAME = "localhost"
+MQTT_PORT = 1883
+BROKER_USERNAME = "pyudmi-gateway"
+BROKER_PASSWORD = "somesecurepassword"
+
+# Configuration for simulated proxies
+PROXY_IDS = ["AHU-1", "VAV-101", "VAV-102"]
+
+
+def simulate_cloud_config_update(device):
+    """
+    Simulates the cloud sending a config update to the gateway.
+    In a real scenario, this message comes from the MQTT broker.
+    Here, we inject it directly into the device's handler to simulate the event.
+    """
+    logging.info("Simulating delay before cloud config arrives...")
+    time.sleep(5)
+
+    logging.info(f"Simulating incoming config with proxies: {PROXY_IDS}")
+
+    # Construct the config payload as a dictionary (simulating parsed JSON)
+    config_payload = {
+        "timestamp": "2025-01-01T12:00:00Z",
+        "gateway": {
+            "proxy_ids": PROXY_IDS
+        }
+    }
+
+    # Inject the message into the device's config handler
+    # In a real app, MqttMessagingClient calls MessageDispatcher, which calls this.
+    device.handle_config("config", config_payload)
+    logging.info("Config injected.")
+
+
+def monitor_proxies(manager: GatewayManager, stop_event: threading.Event):
+    """
+    Monitors the GatewayManager to report on active proxies.
+    """
+    last_count = -1
+    while not stop_event.is_set():
+        current_proxies = list(manager._proxy_devices.keys())
+        count = len(current_proxies)
+
+        if count != last_count:
+            logging.info(f"Active Proxies Update ({count}): {current_proxies}")
+            last_count = count
+
+            # Check if we have all expected proxies
+            if set(current_proxies) == set(PROXY_IDS):
+                logging.info("SUCCESS: All expected proxies are active!")
+                # In a real test, we might exit here, but we'll keep running to show stability
+
+        time.sleep(2)
+
+
+if __name__ == "__main__":
+    # Set up logging
+    logging.basicConfig(level=logging.INFO,
+                        format='%(asctime)s - %(levelname)s - %(message)s')
+
+    try:
+        # 1. Define Connection
+        # Note: For this simulation, we don't actually need a real MQTT broker running
+        # because we are injecting the config manually. However, we configure it
+        # as if we were connecting.
+        topic_prefix = "/r/ZZ-TRI-FECTA/d/"
+        client_id = f"{topic_prefix}{DEVICE_ID}"
+        endpoint_config = EndpointConfiguration(
+            client_id=client_id,
+            hostname=MQTT_HOSTNAME,
+            port=MQTT_PORT,
+            topic_prefix=topic_prefix
+        )
+
+        # 2. Initialize GatewayManager
+        # We keep a reference to it so we can inspect it in our monitor thread
+        gateway_manager = GatewayManager()
+
+        # 3. Create Device with the GatewayManager
+        # We append it to the default managers using additional_managers
+        logging.info("Initializing Gateway Device...")
+        device = create_device_with_basic_auth(
+            endpoint_config=endpoint_config,
+            username=BROKER_USERNAME,
+            password=BROKER_PASSWORD,
+            additional_managers=[gateway_manager]
+        )
+
+        # 4. Start Simulation Threads
+        stop_event = threading.Event()
+
+        # Thread A: Monitor the GatewayManager's internal state
+        monitor_thread = threading.Thread(
+            target=monitor_proxies,
+            args=(gateway_manager, stop_event),
+            daemon=True
+        )
+        monitor_thread.start()
+
+        # Thread B: Simulate the cloud sending a config
+        config_thread = threading.Thread(
+            target=simulate_cloud_config_update,
+            args=(device,),
+            daemon=True
+        )
+        config_thread.start()
+
+        # 5. Start the device
+        # Note: In this specific simulation sample, if you don't have a local MQTT broker,
+        # device.run() will fail to connect.
+        # Ideally, you should run this with a local broker (like Mosquitto).
+        # If you just want to test logic without a broker, you'd need to mock the client.
+        logging.info("Starting Device Run Loop (requires MQTT broker)...")
+        device.run()
+
+    except KeyboardInterrupt:
+        logging.info("Stopping...")
+        if 'stop_event' in locals():
+            stop_event.set()
+    except Exception as e:
+        logging.error(f"Critical error: {e}", exc_info=True)
+        sys.exit(1)
+--- File: clientlib/python/samples/connect_to_iot_core.py ---
+"""
+Example script for connecting a UDMI device to Cloud IoT Core.
+
+This script demonstrates how to use the `create_device_with_jwt` factory
+to instantiate a device, configure it with the necessary GCP IoT Core
+credentials (project, registry, device), and run its main loop.
+
+The device will authenticate using a JWT generated from an RS256 private key.
+"""
+
+import logging
+import sys
+
+from udmi.core.factory import JwtAuthArgs
+from udmi.core.factory import create_device_with_jwt
+from udmi.schema import EndpointConfiguration
+
+# --- Configuration Constants ---
+# CONFIGURE THESE VALUES to match your GCP IoT Core setup
+PROJECT_ID = "gcp-project-id"
+REGION = "us-central1"
+REGISTRY_ID = "ZZ-TRI-FECTA"
+DEVICE_ID = "AHU-1"
+MQTT_HOST = "mqtt.bos.goog"
+MQTT_PORT = 8883  # secure port, mqtt client will automatically use TLS
+ALGORITHM = "RS256"  # Algorithm for signing the JWT
+PRIVATE_KEY_FILE = "/path/to/ZZ-TRI-FECTA/devices/AHU-1/rsa_private.pem"
+
+# The full client ID string required by Cloud IoT Core's MQTT bridge
+CLIENT_ID = (
+    f"projects/{PROJECT_ID}/locations/{REGION}/"
+    f"registries/{REGISTRY_ID}/devices/{DEVICE_ID}"
+)
+
+if __name__ == "__main__":
+    # Set up basic logging to see device activity in the console
+    logging.basicConfig(level=logging.DEBUG,
+                        format='%(asctime)s - %(levelname)s - %(message)s')
+
+    # Main execution block with error handling
+    try:
+        # 1. Create the UDMI EndpointConfiguration object
+        # This tells the client where to connect
+        endpoint_config = EndpointConfiguration(
+            client_id=CLIENT_ID,
+            hostname=MQTT_HOST,
+            port=MQTT_PORT
+        )
+        logging.info("Creating device instance using the JWT factory...")
+
+        # 2. Use the factory to create the device instance.
+        # This factory wires up all the necessary components:
+        # - MqttMessagingClient: Handles the Paho MQTT connection
+        # - JwtAuthProvider: Generates new JWTs when needed
+        # - MessageDispatcher: Routes MQTT messages to/from the device
+        # - Device: The main orchestrator
+        # - SystemManager: The default manager for state/config
+        device = create_device_with_jwt(
+            endpoint_config=endpoint_config,
+            jwt_auth_args=JwtAuthArgs(
+                project_id=PROJECT_ID,
+                key_file=PRIVATE_KEY_FILE,
+                algorithm=ALGORITHM
+            )
+        )
+
+        # 3. Start the device's main loop.
+        # This will:
+        #   a. Connect to the MQTT bridge
+        #   b. Handle the JWT authentication
+        #   c. Subscribe to config/command topics
+        #   d. Publish the initial state
+        #   e. Enter the continuous run loop
+        device.run()
+    except FileNotFoundError:
+        # Add a specific error for this common configuration issue
+        logging.error(
+            f"Critical Error: Private key file not found at {PRIVATE_KEY_FILE}")
+        logging.error(
+            "Please update the PRIVATE_KEY_FILE constant in this script.")
+        sys.exit(1)
+    except Exception as e:
+        # Catch-all for other critical errors (e.g., network, auth failures)
+        logging.error(f"A critical error occurred: {e}", exc_info=True)
+        sys.exit(1)
+
+    logging.info("Device shut down gracefully. Exiting.")
+
+--- File: clientlib/python/samples/custom_manager_with_event_publish.py ---
+"""
+Custom Manager with event publish support.
+
+This sample demonstrates how to create a completely new, custom manager
+that runs its own background thread to publish ad-hoc UDMI events.
+"""
+
+import logging
+import sys
+import threading
+import time
+from datetime import datetime
+from datetime import timezone
+
+from udmi.constants import UDMI_VERSION
+from udmi.core.factory import create_device_with_basic_auth
+from udmi.core.managers import BaseManager
+from udmi.core.managers.base_manager import LOGGER
+from udmi.schema import Config
+from udmi.schema import EndpointConfiguration
+from udmi.schema import Entry
+from udmi.schema import State
+from udmi.schema import SystemEvents
+
+# --- Configuration Constants ---
+DEVICE_ID = "AHU-1"
+MQTT_HOSTNAME = "localhost"
+MQTT_PORT = 1883
+BROKER_USERNAME = "pyudmi-device"
+BROKER_PASSWORD = "somesecureword"
+
+
+# --- 1. Define a Custom Manager ---
+class HeartbeatManager(BaseManager):
+    """
+    A custom manager that logs a 'heartbeat' event every 60 seconds.
+    This demonstrates adding new, periodic logic to the device.
+    """
+    DEFAULT_HEARTBEAT_INTERVAL_SEC = 10
+
+    def __init__(self, interval_sec=DEFAULT_HEARTBEAT_INTERVAL_SEC):
+        super().__init__()
+        self.interval_sec = interval_sec
+        self._stop_event = threading.Event()
+        self._thread = threading.Thread(target=self.run, daemon=True)
+
+    def start(self) -> None:
+        """
+        Lifecycle hook: Called by the Device when `device.run()` is initiated.
+        This is where we start our manager's background thread.
+        """
+        LOGGER.info("HeartbeatManager starting its own thread...")
+        self._thread.start()
+
+    def stop(self) -> None:
+        """
+        Lifecycle hook: Called by the Device when `device.stop()` is initiated.
+        This signals our thread to stop and waits for it to exit.
+        """
+        LOGGER.info("HeartbeatManager stopping...")
+        self._stop_event.set()
+        self._thread.join(timeout=2)
+
+    def run(self) -> None:
+        """
+        This is the main loop for our manager, running in its own thread.
+        It will loop until the `_stop_event` is set by the `stop()` method.
+        """
+        while not self._stop_event.is_set():
+            try:
+                self._send_heartbeat()
+                self._stop_event.wait(self.interval_sec)
+            except Exception as e:
+                LOGGER.error(f"Error in HeartbeatManager loop: {e}")
+                time.sleep(self.interval_sec)
+
+    def _send_heartbeat(self):
+        """
+        Builds and publishes a UDMI SystemEvents message.
+        """
+        LOGGER.info("Sending device heartbeat event...")
+        try:
+            # Create a UDMI-compliant log entry
+            log_entry = Entry(
+                message="Heartbeat OK",
+                level=200,  # INFO
+                timestamp=datetime.now(timezone.utc).isoformat()
+            )
+            # Create the SystemEvents message
+            event = SystemEvents(
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                version=UDMI_VERSION,
+                logentries=[log_entry]
+            )
+            # Use the BaseManager's publish_event method.
+            # This handles topic formatting and JSON serialization.
+            self.publish_event(event, "system")
+        except Exception as e:
+            # Don't crash the loop if publishing fails (e.g., disconnected)
+            LOGGER.error(f"Failed to send heartbeat: {e}")
+
+    # --- Required BaseManager Methods ---
+    # We must implement these abstract methods, even if we don't use them.
+
+    def handle_config(self, config: Config) -> None:
+        """This manager doesn't act on config updates."""
+        pass
+
+    def handle_command(self, command_name: str, payload: dict) -> None:
+        """This manager doesn't handle any commands."""
+        pass
+
+    def update_state(self, state: State) -> None:
+        """This manager doesn't contribute to the device state."""
+        pass
+
+
+# --- End Custom Manager ---
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.DEBUG,
+                        format='%(asctime)s - %(levelname)s - %(message)s')
+
+    try:
+        # Standard setup for a local broker
+        topic_prefix = "/r/ZZ-TRI-FECTA/d/"
+        client_id = f"{topic_prefix}{DEVICE_ID}"
+
+        endpoint_config = EndpointConfiguration(
+            client_id=client_id,
+            hostname=MQTT_HOSTNAME,
+            port=MQTT_PORT,
+            topic_prefix=topic_prefix
+        )
+
+        logging.info("Creating device with SystemManager + HeartbeatManager...")
+
+        # --- 2. Create Manager List ---
+        custom_managers_list = [
+            HeartbeatManager(interval_sec=5)
+            # Adds our custom heartbeat event publish logic
+        ]
+        # --- End Manager List ---
+
+        # 3. Pass the list to the factory.
+        # The factory will give each manager a reference to the dispatcher
+        # and then call `start()` on each one.
+        device = create_device_with_basic_auth(
+            endpoint_config=endpoint_config,
+            username=BROKER_USERNAME,
+            password=BROKER_PASSWORD,
+            additional_managers=custom_managers_list
+            # Pass our custom list here
+        )
+
+        # 4. Start the device
+        # This will start the device's main loop, which in turn calls
+        # `start()` on both SystemManager and HeartbeatManager.
+        device.run()
+    except Exception as e:
+        logging.error(f"A critical error occurred: {e}", exc_info=True)
+        sys.exit(1)
+
+    logging.info("Device shut down gracefully. Exiting.")
+
+--- File: clientlib/python/samples/basic_telemetry.py ---
+"""
+Basic Telemetry Sample.
+
+This sample demonstrates how to use the PointsetManager to publish
+sensor readings (telemetry) to the UDMI 'events/pointset' topic.
+
+Use Case:
+  A device periodically reads local sensors (temperature, pressure, valve state)
+  and pushes these values to the cloud for monitoring and historical trending.
+"""
+
+import logging
+import random
+import sys
+import threading
+import time
+
+from udmi.core.factory import create_device_with_basic_auth
+from udmi.core.managers import PointsetManager
+from udmi.schema import EndpointConfiguration
+
+# --- Configuration Constants ---
+DEVICE_ID = "AHU-1"
+MQTT_HOSTNAME = "localhost"
+MQTT_PORT = 1883
+BROKER_USERNAME = "pyudmi-device"
+BROKER_PASSWORD = "somesecureword"
+
+
+def simulate_sensors(manager: PointsetManager, stop_event: threading.Event):
+    """
+    Simulates reading hardware sensors and publishing data.
+    """
+    logging.info("Starting sensor simulation loop...")
+
+    while not stop_event.is_set():
+        try:
+            # 1. Simulate reading hardware values
+            current_temp = round(random.uniform(20.0, 25.0), 2)
+            valve_position = random.choice([0, 50, 100])
+            fan_state = "ON" if current_temp > 22.0 else "OFF"
+
+            # 2. Construct the telemetry dictionary
+            telemetry_data = {
+                "return_air_temp": current_temp,
+                "chilled_water_valve": valve_position,
+                "supply_fan_state": fan_state
+            }
+
+            # 3. Publish to UDMI
+            manager.publish_telemetry(telemetry_data)
+
+            # Wait before next reading (e.g., 10 seconds)
+            time.sleep(10)
+
+        except Exception as e:
+            logging.error(f"Error in sensor loop: {e}")
+            time.sleep(5)
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO,
+                        format='%(asctime)s - %(levelname)s - %(message)s')
+
+    try:
+        # 1. Define Connection Configuration
+        topic_prefix = "/r/ZZ-TRI-FECTA/d/"
+        client_id = f"{topic_prefix}{DEVICE_ID}"
+
+        endpoint_config = EndpointConfiguration(
+            client_id=client_id,
+            hostname=MQTT_HOSTNAME,
+            port=MQTT_PORT,
+            topic_prefix=topic_prefix
+        )
+
+        logging.info("Initializing UDMI Device...")
+
+        # 2. Create the Device with the default managers
+        device = create_device_with_basic_auth(
+            endpoint_config=endpoint_config,
+            username=BROKER_USERNAME,
+            password=BROKER_PASSWORD
+        )
+
+        # 3. Retrieve the PointsetManager
+        pointset_manager = device.get_manager(PointsetManager)
+
+        if not pointset_manager:
+            logging.error(
+                "PointsetManager not found! Update factory.py or check initialization.")
+            sys.exit(1)
+
+        # 4. Start Sensor Loop (Background Thread)
+        stop_event = threading.Event()
+        sensor_thread = threading.Thread(
+            target=simulate_sensors,
+            args=(pointset_manager, stop_event),
+            daemon=True
+        )
+        sensor_thread.start()
+
+        # 5. Run the Device
+        device.run()
+
+    except KeyboardInterrupt:
+        logging.info("Stopping device...")
+        if 'stop_event' in locals():
+            stop_event.set()
+
+    except Exception as e:
+        logging.error(f"Critical error: {e}", exc_info=True)
+        sys.exit(1)
+
+--- File: clientlib/python/samples/system_metrics.py ---
+"""
+System Metrics Sample.
+
+This sample demonstrates how to use the SystemManager to publish
+system-level metrics (memory usage) to the UDMI 'events/system' topic.
+"""
+
+import logging
+import sys
+import threading
+import time
+
+from udmi.core.factory import create_device_with_basic_auth
+from udmi.core.managers import SystemManager
+from udmi.schema import EndpointConfiguration
+
+# --- Configuration Constants ---
+DEVICE_ID = "AHU-1"
+MQTT_HOSTNAME = "localhost"
+MQTT_PORT = 1883
+BROKER_USERNAME = "pyudmi-device"
+BROKER_PASSWORD = "somesecureword"
+METRICS_INTERVAL_SEC = 60  # Report metrics every minute
+
+
+def metrics_loop(manager: SystemManager, stop_event: threading.Event):
+    """
+    Periodically triggers the SystemManager to publish metrics.
+    """
+    logging.info(f"Starting metrics collection loop (Interval: {METRICS_INTERVAL_SEC}s)...")
+
+    while not stop_event.is_set():
+        try:
+            # 1. Trigger the manager to collect and publish metrics
+            manager.publish_metrics()
+
+            # 2. Wait for the next interval
+            stop_event.wait(METRICS_INTERVAL_SEC)
+
+        except Exception as e:
+            logging.error(f"Error in metrics loop: {e}")
+            time.sleep(5)
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO,
+                        format='%(asctime)s - %(levelname)s - %(message)s')
+
+    try:
+        # 1. Define Connection Configuration
+        topic_prefix = "/r/ZZ-TRI-FECTA/d/"
+        client_id = f"{topic_prefix}{DEVICE_ID}"
+
+        endpoint_config = EndpointConfiguration(
+            client_id=client_id,
+            hostname=MQTT_HOSTNAME,
+            port=MQTT_PORT,
+            topic_prefix=topic_prefix
+        )
+
+        logging.info("Initializing UDMI Device...")
+
+        # 2. Create the Device
+        # Note: SystemManager is included by default in the factory
+        device = create_device_with_basic_auth(
+            endpoint_config=endpoint_config,
+            username=BROKER_USERNAME,
+            password=BROKER_PASSWORD
+        )
+
+        # 3. Retrieve the SystemManager
+        system_manager = device.get_manager(SystemManager)
+
+        if not system_manager:
+            logging.error("SystemManager not found! Cannot run metrics sample.")
+            sys.exit(1)
+
+        # 4. Start Metrics Loop (Background Thread)
+        stop_event = threading.Event()
+        metrics_thread = threading.Thread(
+            target=metrics_loop,
+            args=(system_manager, stop_event),
+            daemon=True
+        )
+        metrics_thread.start()
+
+        # 5. Run the Device
+        device.run()
+
+    except KeyboardInterrupt:
+        logging.info("Stopping device...")
+        if 'stop_event' in locals():
+            stop_event.set()
+
+    except Exception as e:
+        logging.error(f"Critical error: {e}", exc_info=True)
+        sys.exit(1)
+--- File: clientlib/python/samples/connect_to_local_broker_mtls.py ---
+"""
+Example script for connecting a UDMI device to a generic MQTT broker
+using mTLS (mutual Transport Layer Security) for authentication.
+
+This script demonstrates how to use the `create_mqtt_device_instance` factory
+and configure it with the necessary client-side certificates (mTLS).
+This is a common and secure method for authenticating with local or private
+MQTT brokers that are configured to require client certificates.
+"""
+
+import logging
+import os
+import sys
+
+from udmi.core.factory import ClientConfig
+from udmi.core.factory import create_mqtt_device_instance
+from udmi.core.messaging.mqtt_messaging_client import TlsConfig
+from udmi.schema import EndpointConfiguration
+
+# --- Configuration Constants ---
+# CONFIGURE THESE VALUES for your local or custom MQTT broker
+DEVICE_ID = "AHU-1"
+MQTT_HOSTNAME = "localhost"
+MQTT_PORT = 8883  # Use the mTLS secure port (8883 is standard)
+
+# --- mTLS Certificate Configuration ---
+# Point this to the directory containing your certificates
+CERT_DIR = "/path/to/certs"
+
+# The Certificate Authority (CA) that signed the broker's and client's certs
+CA_CERT_FILE = os.path.join(CERT_DIR, "ca.crt")
+
+# The client's public certificate
+CLIENT_CERT_FILE = os.path.join(CERT_DIR, "client.crt")
+
+# The client's private key
+CLIENT_KEY_FILE = os.path.join(CERT_DIR, "client.key")
+
+
+if __name__ == "__main__":
+    # Set up basic logging to see device activity in the console
+    logging.basicConfig(level=logging.DEBUG,
+                        format='%(asctime)s - %(levelname)s - %(message)s')
+
+    # Define a custom topic prefix
+    topic_prefix = "/r/ZZ-TRI-FECTA/d/"
+    client_id = f"{topic_prefix}{DEVICE_ID}"
+
+    try:
+        # 1. Create the UDMI EndpointConfiguration object
+        endpoint_config = EndpointConfiguration(
+            client_id=client_id,
+            hostname=MQTT_HOSTNAME,
+            port=MQTT_PORT,
+            topic_prefix=topic_prefix
+        )
+
+        logging.info("Creating mTLS device instance using the factory...")
+
+        # 2. Use the base `create_mqtt_device_instance` factory.
+        # We pass `auth_provider=None` because authentication is handled
+        # by the TLS layer (mTLS), not by sending a username/password.
+        device = create_mqtt_device_instance(
+            endpoint_config=endpoint_config,
+            auth_provider=None,  # Auth is handled by mTLS
+            client_config=ClientConfig(
+                # Pass the certificate paths to the client
+                tls_config=TlsConfig(
+                    ca_certs=CA_CERT_FILE,
+                    cert_file=CLIENT_CERT_FILE,
+                    key_file=CLIENT_KEY_FILE
+                )
+            )
+        )
+
+        # 3. Start the device's main loop.
+        # This will connect, perform the mTLS handshake, subscribe, and publish.
+        device.run()
+    except FileNotFoundError as e:
+        # Add a specific error for this common configuration issue
+        logging.error(f"Critical Error: A certificate file was not found.")
+        logging.error(f"Please check your certificate paths: {e}")
+        sys.exit(1)
+    except Exception as e:
+        # Catch-all for other critical errors (e.g., connection, SSL handshake)
+        logging.error(f"A critical error occurred: {e}", exc_info=True)
+        sys.exit(1)
+
+    logging.info("Device shut down gracefully. Exiting.")
+
+--- File: clientlib/python/samples/mqtt_log_handler.py ---
+"""
+UDMI MQTT Log Handler Sample.
+
+This sample demonstrates how to wire up the UDMIMqttLogHandler to
+redirect standard Python logs to the UDMI 'events/system' topic.
+
+Use Cases Demonstrated:
+1.  Unified Logging Workflow:
+    The application uses standard Python `logging` calls (info, warning, error).
+    It does not need to know about MQTT or UDMI JSON structures.
+
+2.  Remote Diagnostics (Alerting):
+    By logging warnings or errors (e.g., "High memory usage"), the device
+    automatically notifies the cloud. Operators can see these issues on a
+    dashboard without needing SSH access to the device.
+
+3.  Audit Trails (Status Tracking):
+    By logging info-level milestones (e.g., "Processing batch #1"), the device
+    creates a timestamped history of its operations in the cloud, useful for
+    verifying behavior or debugging sequence errors.
+"""
+
+import logging
+import sys
+import threading
+import time
+import random
+
+from udmi.core.factory import create_device_with_basic_auth
+from udmi.core.managers import SystemManager
+from udmi.core.logging.mqtt_handler import UDMIMqttLogHandler
+from udmi.schema import EndpointConfiguration
+
+# --- Configuration Constants ---
+DEVICE_ID = "AHU-1"
+MQTT_HOSTNAME = "localhost"
+MQTT_PORT = 1883
+BROKER_USERNAME = "pyudmi-device"
+BROKER_PASSWORD = "somesecureword"
+
+
+def simulate_application_activity(logger, stop_event):
+    """
+    Simulates an application doing work and generating logs.
+    """
+    logger.info("Application worker thread started.")
+
+    counter = 1
+    while not stop_event.is_set():
+        # Simulate work
+        time.sleep(5)
+
+        # --- USE CASE: Audit Trail / Status Tracking ---
+        # We log a milestone. In the cloud, this becomes a permanent record
+        # that the device was alive and functioning correctly at this timestamp.
+        # UDMI Level: 200 (INFO)
+        logger.info(f"Processing batch #{counter}...")
+
+        # --- USE CASE: Remote Diagnostics / Alerting ---
+        # We simulate a random issue. In a real scenario, this might be a
+        # sensor read failure or an API timeout.
+        # By logging this as a WARNING, we flag it for operators in the cloud.
+        # UDMI Level: 300 (WARNING)
+        if random.random() > 0.7:
+            logger.warning(f"High memory usage detected in batch #{counter}!")
+
+        counter += 1
+
+    logger.info("Application worker thread stopping.")
+
+
+if __name__ == "__main__":
+    # Ensures logs still go to the console for local debugging.
+    logging.basicConfig(level=logging.INFO,
+                        format='%(asctime)s - CONSOLE - %(levelname)s - %(message)s')
+
+    # Create a specific logger for our application logic
+    app_logger = logging.getLogger("my_device_app")
+    app_logger.setLevel(logging.INFO)
+
+    try:
+        # Standard connection setup
+        topic_prefix = "/r/ZZ-TRI-FECTA/d/"
+        client_id = f"{topic_prefix}{DEVICE_ID}"
+
+        endpoint_config = EndpointConfiguration(
+            client_id=client_id,
+            hostname=MQTT_HOSTNAME,
+            port=MQTT_PORT,
+            topic_prefix=topic_prefix
+        )
+
+        logging.info("Initializing UDMI Device...")
+
+        device = create_device_with_basic_auth(
+            endpoint_config=endpoint_config,
+            username=BROKER_USERNAME,
+            password=BROKER_PASSWORD
+        )
+
+        # Retrieve the SystemManager
+        # We need this to initialize the log handler because SystemManager
+        # owns the 'events/system' topic logic.
+        system_manager = device.get_manager(SystemManager)
+
+        if not system_manager:
+            logging.error("SystemManager not found! Cannot setup MQTT logging.")
+            sys.exit(1)
+
+        logging.info("Attaching UDMI MQTT Log Handler...")
+
+        mqtt_handler = UDMIMqttLogHandler(system_manager)
+        # Optional: Set a specific format for the cloud logs
+        formatter = logging.Formatter('%(name)s: %(message)s')
+        mqtt_handler.setFormatter(formatter)
+
+        # Attach the handler to our application logger.
+        # Now, any log sent to 'app_logger' goes to:
+        #   a) The Console (via basicConfig)
+        #   b) The Cloud (via UDMIMqttLogHandler -> SystemManager -> MQTT)
+        app_logger.addHandler(mqtt_handler)
+
+        app_logger.info(
+            "This log message goes to Console AND MQTT (as a SystemEvent).")
+
+        # Start a background thread to generate logs
+        # Since device.run() blocks, we need a separate thread to make noise.
+        stop_event = threading.Event()
+        app_thread = threading.Thread(
+            target=simulate_application_activity,
+            args=(app_logger, stop_event),
+            daemon=True
+        )
+        app_thread.start()
+
+        device.run()
+
+    except KeyboardInterrupt:
+        logging.info("Stopping...")
+        if 'stop_event' in locals():
+            stop_event.set()
+
+    except Exception as e:
+        logging.error(f"Critical error: {e}", exc_info=True)
+        sys.exit(1)
+
+--- File: clientlib/python/tests/conftest.py ---
+"""
+Pytest fixtures for testing the MQTT messaging client.
+"""
+
+from unittest.mock import MagicMock
+from unittest.mock import patch
+
+import pytest
+
+from udmi.schema import EndpointConfiguration
+
+
+@pytest.fixture
+def mock_paho_client_class():
+    """
+    Fixture to mock the paho.mqtt.client.Client class.
+
+    It patches the class at its source and returns the mock class
+    itself, allowing us to inspect calls to the constructor.
+    """
+    with patch(
+        "src.udmi.core.messaging.mqtt_messaging_client.mqtt.Client") as mock_client:
+        mock_instance = MagicMock()
+        mock_client.return_value = mock_instance
+
+        mock_client.mock_instance = mock_instance
+        yield mock_client
+
+
+@pytest.fixture
+def mock_paho_client_instance(
+    mock_paho_client_class  # pylint: disable=redefined-outer-name
+):
+    """
+    A simpler fixture that just returns the mock instance
+    created by the mock_paho_client_class fixture.
+    """
+    return mock_paho_client_class.mock_instance
+
+
+@pytest.fixture
+def mock_auth_provider():
+    """
+    Mock a basic auth provider.
+    """
+    provider = MagicMock()
+    provider.get_username.return_value = "unused"
+    provider.get_password.return_value = "mock_password"
+    provider.needs_refresh.return_value = False
+    return provider
+
+
+@pytest.fixture
+def mock_endpoint_config():
+    """A mock EndpointConfiguration object."""
+    return EndpointConfiguration(
+        client_id="projects/p/l/r/d",
+        hostname="mock.host",
+        port=8883
+    )
+
+--- File: clientlib/python/tests/__init__.py ---
+
+--- File: clientlib/python/tests/core/test_factory.py ---
+"""
+Unit tests for the core device factory.
+
+This module tests the high-level factory functions responsible for
+instantiating and assembling the core device components.
+
+Key behaviors verified:
+- `create_device_with_jwt`: Ensures that the `JwtAuthProvider` and
+  `MqttMessagingClient` are correctly instantiated with the provided
+  JWT arguments and default configurations.
+- `create_device_with_basic_auth`: Ensures that the `BasicAuthProvider`
+  and `MqttMessagingClient` are correctly instantiated with the provided
+  credentials and TLS settings.
+- `_wire_device`:
+    - Verifies that default managers are created and wired
+      up when no custom managers are provided.
+    - Verifies that custom managers are used directly when they are
+      provided, and the default managers are not created.
+"""
+
+from unittest.mock import MagicMock
+from unittest.mock import patch
+
+import pytest
+
+from src.udmi.core.factory import _wire_device
+from src.udmi.core.factory import create_device_with_basic_auth
+from src.udmi.core.factory import create_device_with_jwt
+from udmi.core.auth.jwt_auth_provider import JwtTokenConfig
+from udmi.core.factory import ClientConfig
+from udmi.core.factory import JwtAuthArgs
+from udmi.core.messaging.mqtt_messaging_client import ReconnectConfig
+from udmi.core.messaging.mqtt_messaging_client import TlsConfig
+
+
+# pylint: disable=redefined-outer-name
+
+
+@pytest.fixture
+def mock_mqtt_client():
+    """A mock MqttMessagingClient instance."""
+    return MagicMock(name="mock_mqtt_client")
+
+
+@pytest.fixture
+def mock_manager():
+    """A mock BaseManager instance."""
+    return MagicMock(name="mock_manager")
+
+
+@patch('src.udmi.core.factory._wire_device')
+@patch('src.udmi.core.factory.MqttMessagingClient')
+@patch('src.udmi.core.factory.JwtAuthProvider')
+def test_create_device_with_jwt(
+    mock_jwt_auth_provider,
+    mock_mqtt_messaging_client,
+    mock_wire_device,
+    mock_endpoint_config
+):
+    """
+    Asserts that the factory creates and passes the JwtAuthProvider.
+    """
+    mock_provider_instance = mock_jwt_auth_provider.return_value
+    mock_client_instance = mock_mqtt_messaging_client.return_value
+
+    create_device_with_jwt(
+        endpoint_config=mock_endpoint_config,
+        jwt_auth_args=JwtAuthArgs(
+            project_id="test-project",
+            key_file="test-key.pem",
+            algorithm="RS256"
+        )
+    )
+
+    mock_jwt_auth_provider.assert_called_once_with(
+        project_id="test-project",
+        private_key_file="test-key.pem",
+        algorithm="RS256",
+        token_config=JwtTokenConfig(
+            lifetime_minutes=60,
+            refresh_buffer_minutes=5)  # We trust the default value
+    )
+
+    mock_mqtt_messaging_client.assert_called_once_with(
+        endpoint_config=mock_endpoint_config,
+        auth_provider=mock_provider_instance,
+        tls_config=TlsConfig(
+            ca_certs=None,
+            cert_file=None,
+            key_file=None,
+            enable_tls=None
+        ),
+        reconnect_config=ReconnectConfig(
+            min_delay_sec=1,
+            max_delay_sec=60
+        )
+    )
+
+    mock_wire_device.assert_called_once_with(
+        mqtt_client=mock_client_instance,
+        managers=None,
+        additional_managers=None,
+        persistence_path='.udmi_persistence.json'
+    )
+
+
+@patch('src.udmi.core.factory._wire_device')
+@patch('src.udmi.core.factory.MqttMessagingClient')
+@patch('src.udmi.core.factory.BasicAuthProvider')
+def test_create_device_with_basic_auth(
+    mock_basic_auth_provider,
+    mock_mqtt_messaging_client,
+    mock_wire_device,
+    mock_endpoint_config
+):
+    """
+    Asserts that the factory creates and passes the BasicAuthProvider
+    and does NOT pass mTLS certs.
+    """
+    mock_provider_instance = mock_basic_auth_provider.return_value
+    mock_client_instance = mock_mqtt_messaging_client.return_value
+
+    create_device_with_basic_auth(
+        endpoint_config=mock_endpoint_config,
+        username="user",
+        password="pass",
+        managers=None,
+        client_config=ClientConfig(
+            tls_config=TlsConfig(ca_certs="test-ca.pem")
+        )
+    )
+
+    mock_basic_auth_provider.assert_called_once_with(
+        username="user",
+        password="pass"
+    )
+
+    mock_mqtt_messaging_client.assert_called_once_with(
+        endpoint_config=mock_endpoint_config,
+        auth_provider=mock_provider_instance,
+        tls_config=TlsConfig(
+            ca_certs="test-ca.pem",
+            cert_file=None,
+            key_file=None,
+            enable_tls=None
+        ),
+        reconnect_config=ReconnectConfig(
+            min_delay_sec=1,
+            max_delay_sec=60
+        )
+    )
+
+    mock_wire_device.assert_called_once_with(
+        mqtt_client=mock_client_instance,
+        managers=None,
+        additional_managers=None,
+        persistence_path='.udmi_persistence.json'
+    )
+
+
+@patch('src.udmi.core.factory.MessageDispatcher')
+@patch('src.udmi.core.factory.Device')
+@patch('src.udmi.core.factory.PointsetManager')
+@patch('src.udmi.core.factory.SystemManager')
+def test_wire_device_with_defaults(
+    mock_system_manager,
+    mock_pointset_manager,
+    mock_device,
+    mock_message_dispatcher,
+    mock_mqtt_client
+):
+    """
+    Tests the _wire_device helper, asserting that it creates the
+    default SystemManager when managers=None.
+    """
+    mock_system_manager_instance = mock_system_manager.return_value
+    mock_pointset_manager_instance = mock_pointset_manager.return_value
+    mock_device_instance = mock_device.return_value
+    mock_dispatcher_instance = mock_message_dispatcher.return_value
+
+    device = _wire_device(
+        mqtt_client=mock_mqtt_client,
+        managers=None
+    )
+
+    mock_system_manager.assert_called_once_with('.udmi_persistence.json')
+
+    mock_device.assert_called_once()
+    device_call_args = mock_device.call_args
+    assert device_call_args.kwargs['managers'] == [mock_system_manager_instance, mock_pointset_manager_instance]
+
+    mock_message_dispatcher.assert_called_once_with(
+        client=mock_mqtt_client,
+        on_ready_callback=mock_device_instance.on_ready,
+        on_disconnect_callback=mock_device_instance.on_disconnect
+    )
+
+    mock_device_instance.wire_up_dispatcher.assert_called_once_with(
+        mock_dispatcher_instance
+    )
+
+    assert device == mock_device_instance
+
+
+@patch('src.udmi.core.factory.MessageDispatcher')
+@patch('src.udmi.core.factory.Device')
+@patch('src.udmi.core.factory.SystemManager')
+def test_wire_device_with_custom_managers(
+    mock_system_manager,
+    mock_device,
+    mock_message_dispatcher,
+    mock_mqtt_client,
+    mock_manager
+):
+    """
+    Tests the _wire_device helper, asserting that it uses the
+    provided list of managers.
+    """
+    mock_device_instance = mock_device.return_value
+
+    device = _wire_device(
+        mqtt_client=mock_mqtt_client,
+        managers=[mock_manager]
+    )
+
+    mock_system_manager.assert_not_called()
+
+    mock_device.assert_called_once()
+    device_call_args = mock_device.call_args
+    assert device_call_args.kwargs['managers'] == [mock_manager]
+
+    mock_message_dispatcher.assert_called_once_with(
+        client=mock_mqtt_client,
+        on_ready_callback=mock_device_instance.on_ready,
+        on_disconnect_callback=mock_device_instance.on_disconnect
+    )
+
+    mock_device_instance.wire_up_dispatcher.assert_called_once()
+
+    assert device == mock_device_instance
+
+--- File: clientlib/python/tests/core/messaging/test_message_dispatcher.py ---
+"""
+Unit tests for the `MessageDispatcher` class.
+
+This module tests the `MessageDispatcher` in isolation by mocking the
+underlying `AbstractMessagingClient`.
+"""
+
+import json
+import logging
+from unittest.mock import MagicMock
+
+import pytest
+
+from src.udmi.core.messaging import MessageDispatcher
+from udmi.schema import State
+from udmi.schema import SystemEvents
+
+
+# pylint: disable=redefined-outer-name,protected-access
+
+
+@pytest.fixture
+def mock_client():
+    """Mocks the AbstractMessagingClient."""
+    client = MagicMock()
+    client.set_on_message_handler = MagicMock()
+    return client
+
+
+@pytest.fixture
+def dispatcher(mock_client):
+    """Returns a MessageDispatcher instance with a mocked client."""
+    return MessageDispatcher(
+        client=mock_client,
+        on_ready_callback=MagicMock(),
+        on_disconnect_callback=MagicMock()
+    )
+
+
+@pytest.fixture
+def handlers():
+    """Provides a dictionary of mock handlers."""
+    return {
+        "config": MagicMock(),
+        "command_reboot": MagicMock(),
+        "commands_wildcard": MagicMock(),
+        "pointset_wildcard": MagicMock(),
+        "proxy_config": MagicMock()
+    }
+
+
+def test_dispatcher_registers_handlers(dispatcher, mock_client, handlers):
+    """
+    Test that the dispatcher correctly registers handlers and
+    sets the client's on_message callback during __init__.
+    """
+    # Verify the dispatcher set its callback on the client
+    mock_client.set_on_message_handler.assert_called_once_with(
+        dispatcher._on_message)
+
+    # Register handlers
+    dispatcher.register_handler("config", handlers["config"])
+    dispatcher.register_handler("commands/reboot", handlers["command_reboot"])
+    dispatcher.register_handler("commands/#", handlers["commands_wildcard"])
+    dispatcher.register_handler("pointset/+/config",
+                                handlers["pointset_wildcard"])
+
+    assert "config" in dispatcher._handlers
+    assert "commands/reboot" in dispatcher._handlers
+    assert len(dispatcher._wildcard_handlers) == 2
+
+
+def test_dispatcher_routes_exact_match(dispatcher, handlers):
+    """Test that an exact channel match is routed correctly."""
+    dispatcher.register_handler("config", handlers["config"])
+    payload_dict = {"system": {}}
+
+    dispatcher._on_message(device_id=None, channel="config", payload=json.dumps(payload_dict))
+
+    handlers["config"].assert_called_once_with("config", payload_dict)
+
+
+def test_dispatcher_routes_proxy_message(dispatcher, handlers):
+    """
+    Test that a message targeted at a specific proxy device
+    is routed to the proxy handler and NOT the main handler.
+    """
+    # Register main handler
+    dispatcher.register_handler("config", handlers["config"])
+    # Register proxy handler
+    dispatcher.register_handler("config", handlers["proxy_config"],
+                                device_id="proxy-1")
+
+    payload_dict = {"system": {"min_loglevel": 300}}
+
+    # Message for PROXY
+    dispatcher._on_message(
+        device_id="proxy-1",
+        channel="config",
+        payload=json.dumps(payload_dict)
+    )
+
+    # Assert Proxy Handler called
+    handlers["proxy_config"].assert_called_once_with("config", payload_dict)
+    # Assert Main Handler NOT called
+    handlers["config"].assert_not_called()
+
+
+def test_dispatcher_routes_multi_level_wildcard(dispatcher, handlers):
+    """Test that a 'commands/#' wildcard works."""
+    dispatcher.register_handler("commands/#", handlers["commands_wildcard"])
+    payload_dict = {"arg": 1}
+
+    channel = "commands/my/custom/sub/command"
+    dispatcher._on_message(device_id=None, channel=channel, payload=json.dumps(payload_dict))
+
+    handlers["commands_wildcard"].assert_called_once_with(channel, payload_dict)
+
+
+def test_dispatcher_routes_single_level_wildcard(dispatcher, handlers):
+    """Test that a 'pointset/+/config' wildcard works."""
+    dispatcher.register_handler("pointset/+/config",
+                                handlers["pointset_wildcard"])
+    payload_dict = {"set_value": 10}
+
+    channel = "pointset/zone_1/config"
+    dispatcher._on_message(device_id=None, channel=channel, payload=json.dumps(payload_dict))
+
+    handlers["pointset_wildcard"].assert_called_once_with(channel, payload_dict)
+
+
+def test_dispatcher_prefers_exact_over_wildcard(dispatcher, handlers):
+    """Test that an exact match is preferred over a wildcard."""
+    dispatcher.register_handler("commands/reboot", handlers["command_reboot"])
+    dispatcher.register_handler("commands/#", handlers["commands_wildcard"])
+    payload_dict = {}
+
+    dispatcher._on_message(device_id=None,
+                           channel="commands/reboot",
+                           payload=json.dumps(payload_dict))
+
+    # The exact handler should be called
+    handlers["command_reboot"].assert_called_once_with("commands/reboot",
+                                                       payload_dict)
+    # The wildcard handler should NOT be called
+    handlers["commands_wildcard"].assert_not_called()
+
+
+def test_dispatcher_handles_json_decode_error(dispatcher, handlers, caplog):
+    """Test that bad JSON is caught and logged, but doesn't crash."""
+    dispatcher.register_handler("config", handlers["config"])
+
+    # No exception should be raised
+    with caplog.at_level(logging.ERROR):
+        dispatcher._on_message(device_id=None, channel="config", payload="this is not json")
+
+    # The handler should not be called
+    handlers["config"].assert_not_called()
+    # We should have logged the error
+    assert "Failed to decode JSON payload" in caplog.text
+
+
+def test_dispatcher_handles_handler_exception(dispatcher, handlers, caplog):
+    """Test that an exception in a handler is caught and logged."""
+    # Make the handler raise an exception when called
+    handlers["config"].side_effect = TypeError("Something broke!")
+    dispatcher.register_handler("config", handlers["config"])
+
+    # No exception should be raised from the dispatcher itself
+    with caplog.at_level(logging.ERROR):
+        dispatcher._on_message(device_id=None, channel="config", payload="{}")
+
+    # The handler should have been called
+    handlers["config"].assert_called_once()
+    # We should have logged the error
+    assert "Handler for channel config failed" in caplog.text
+
+
+def test_publish_state(dispatcher, mock_client):
+    """
+    Verifies that publish_state sends a compact JSON payload.
+    """
+    state = State(version="1")
+    dispatcher.publish_state(state)
+
+    mock_client.publish.assert_called_once_with(
+        "state",
+        '{"timestamp": null, "version": "1", "upgraded_from": null, '
+        '"system": null, "gateway": null, "discovery": null, "localnet": null, '
+        '"blobset": null, "pointset": null}'
+    )
+
+
+def test_publish_event(dispatcher, mock_client):
+    """
+    Verifies it accepts any DataModel (like SystemEvents)
+    and publishes the compact JSON.
+    """
+    event = SystemEvents(version="1")
+    dispatcher.publish_event("system", event)
+
+    mock_client.publish.assert_called_once_with(
+        "system",
+        '{"timestamp": null, "version": "1", "upgraded_from": null, '
+        '"last_config": null, "logentries": null, "event_no": null, '
+        '"metrics": null}'
+    )
+
+
+def test_lifecycle_passthrough_connect(dispatcher, mock_client):
+    """Test Lifecycle Passthrough (connect)"""
+    dispatcher.connect()
+    mock_client.connect.assert_called_once()
+
+
+def test_lifecycle_passthrough_start_loop(dispatcher, mock_client):
+    """Test Lifecycle Passthrough (start_loop)"""
+    dispatcher.start_loop()
+    mock_client.run.assert_called_once()
+
+
+def test_lifecycle_passthrough_close(dispatcher, mock_client):
+    """Test Lifecycle Passthrough (close)"""
+    dispatcher.close()
+    mock_client.close.assert_called_once()
+
+
+def test_lifecycle_passthrough_check_authentication(dispatcher, mock_client):
+    """Test Lifecycle Passthrough (check_authentication)"""
+    dispatcher.check_authentication()
+    mock_client.check_authentication.assert_called_once()
+
+
+def test_unhandled_message_logs_warning(dispatcher, handlers, caplog):
+    """
+    Verifies that a message to an unknown channel is logged
+    and no handlers are called.
+    """
+    dispatcher.register_handler("config", handlers["config"])
+
+    with caplog.at_level(logging.WARNING):
+        dispatcher._on_message(device_id=None, channel="unknown/channel", payload="{}")
+
+    handlers["config"].assert_not_called()
+    assert "No handler found for message" in caplog.text
+    assert "unknown/channel" in caplog.text
+
+--- File: clientlib/python/tests/core/messaging/test_mqtt_messaging_client.py ---
+"""
+Unit tests for the `MqttMessagingClient` class.
+
+This module tests the `MqttMessagingClient` in isolation by mocking the
+underlying `paho.mqtt.client` library.
+
+Key behaviors verified:
+- Initialization: Ensures `__init__` correctly instantiates and configures
+  the Paho client with the correct client_id and internal callbacks.
+-TLS Logic: Verifies the `_should_enable_tls` logic correctly
+  infers whether TLS should be enabled based on port, certs, and flags.
+- Auth Logic: Confirms the correct auth method is chosen, prioritizing
+  mTLS (client certs) over the `AuthProvider` (username/password).
+- Topic Formatting:
+    - `publish`: Ensures the simple channel ('state') is correctly
+      expanded to the full MQTT topic.
+    - `_on_message`: Ensures the full MQTT topic is correctly parsed
+      back into a simple channel.
+- Subscriptions: Verifies `_on_connect` subscribes to all registered
+  channels with the correctly formatted full MQTT topics.
+"""
+
+from unittest.mock import MagicMock
+from unittest.mock import call
+
+import pytest
+
+from src.udmi.core.auth.auth_provider import AuthProvider
+from src.udmi.core.messaging.mqtt_messaging_client import MqttMessagingClient
+from udmi.core.messaging.mqtt_messaging_client import TlsConfig
+from udmi.schema import EndpointConfiguration
+
+
+# pylint: disable=redefined-outer-name,protected-access,unused-argument
+# pylint: disable=comparison-with-callable,too-many-arguments,too-many-positional-arguments
+
+
+@pytest.fixture
+def mock_auth_provider():
+    """Provides a mock AuthProvider."""
+    provider = MagicMock(spec=AuthProvider)
+    provider.get_username.return_value = "mock_user"
+    provider.get_password.return_value = "mock_pass"
+    return provider
+
+
+@pytest.fixture
+def base_endpoint_config():
+    """A base EndpointConfiguration for a device."""
+    return EndpointConfiguration(
+        client_id="projects/p/l/r/d",
+        hostname="mock.host",
+        port=8883,
+        topic_prefix="/devices/"
+    )
+
+
+@pytest.fixture
+def mqtt_client(mock_paho_client_class, base_endpoint_config,
+    mock_auth_provider):
+    """
+    Returns an instance of MqttMessagingClient with paho mocked.
+    Relies on mock_paho_client_class from conftest.py.
+    """
+    client = MqttMessagingClient(
+        endpoint_config=base_endpoint_config,
+        auth_provider=mock_auth_provider
+    )
+    return client
+
+
+def test_init_configures_paho(mock_paho_client_class,
+    mock_paho_client_instance,
+    base_endpoint_config):
+    """
+    Test init configures paho
+    Verify paho.mqtt.client.Client was called with the correct client_id.
+    Verify the instance's on_connect, on_message, and on_disconnect
+    properties were set.
+    """
+    client = MqttMessagingClient(
+        endpoint_config=base_endpoint_config,
+        auth_provider=None
+    )
+
+    mock_paho_client_class.assert_called_with(
+        client_id=base_endpoint_config.client_id
+    )
+
+    assert mock_paho_client_instance.on_connect == client._on_connect
+    assert mock_paho_client_instance.on_message == client._on_message
+    assert mock_paho_client_instance.on_disconnect == client._on_disconnect
+
+
+@pytest.mark.parametrize("port, cert_file, enable_tls, should_be_called", [
+    (8883, None, None, True),  # Test 1: Secure port
+    (1883, "path", None, True),  # Test 2: Insecure port, but cert provided
+    (1883, None, False, False),  # Test 3: Insecure port, explicitly disabled
+    (1883, None, None, False),
+    # Test 4: Insecure port, no certs, implicit disable
+    (8883, None, False, False)  # Test 5: Secure port, explicitly disabled
+])
+def test_tls_inference_logic(port, cert_file, enable_tls, should_be_called,
+    mock_paho_client_instance, base_endpoint_config):
+    """
+    Tests all combinations of port, certs, and enable_tls flag.
+    """
+    config = base_endpoint_config
+    config.port = port
+    tls_config = TlsConfig(cert_file=cert_file, enable_tls=enable_tls)
+
+    client = MqttMessagingClient(
+        endpoint_config=config,
+        tls_config=tls_config
+    )
+
+    try:
+        client.connect()
+    except FileNotFoundError:
+        pass
+
+    if should_be_called:
+        mock_paho_client_instance.tls_set.assert_called_once()
+    else:
+        mock_paho_client_instance.tls_set.assert_not_called()
+
+
+def test_auth_configuration_priority(mock_paho_client_instance,
+    base_endpoint_config, mock_auth_provider):
+    """
+    test_auth_configuration_priority
+    Test 1 (mTLS): cert_file and key_file present, provider is ignored.
+    Test 2 (Provider): Only provider is present.
+    """
+    # Test 1: mTLS
+    client_mtls = MqttMessagingClient(
+        endpoint_config=base_endpoint_config,
+        auth_provider=mock_auth_provider,
+        tls_config=TlsConfig(cert_file="client.crt",  # mTLS certs
+                             key_file="client.key")
+    )
+
+    try:
+        client_mtls.connect()
+    except FileNotFoundError:
+        pass
+
+    mock_paho_client_instance.tls_set.assert_called_once()
+    mock_paho_client_instance.username_pw_set.assert_not_called()
+
+    mock_paho_client_instance.reset_mock()
+
+    # --- Test 2: Provider ---
+    client_auth = MqttMessagingClient(
+        endpoint_config=base_endpoint_config,
+        auth_provider=mock_auth_provider,
+        tls_config=TlsConfig(cert_file=None, key_file=None)
+    )
+
+    client_auth.connect()
+
+    mock_paho_client_instance.tls_set.assert_called_once()
+    mock_paho_client_instance.username_pw_set.assert_called_once_with(
+        username="mock_user",
+        password="mock_pass"
+    )
+
+
+def test_publish_topic_formatting(mqtt_client, mock_paho_client_instance):
+    """
+    test_publish_topic_formatting
+    Verify mock_paho_client_instance.publish was called with the
+            full topic.
+    """
+    mqtt_client.publish("state", "{\"message\": \"hi\"}")
+
+    mock_paho_client_instance.publish.assert_called_once_with(
+        "/devices/d/state",
+        "{\"message\": \"hi\"}",
+        qos=1
+    )
+
+
+def test_on_message_topic_parsing(mqtt_client):
+    """
+    test_on_message_topic_parsing
+    Verify that mock callback was called with the simple channel.
+    """
+    mock_callback = MagicMock()
+    mqtt_client.set_on_message_handler(mock_callback)
+
+    mock_msg = MagicMock()
+    mock_msg.topic = "/devices/d/commands/reboot"
+    mock_msg.payload = b'{"delay": 10}'
+
+    mqtt_client._on_message(None, None, mock_msg)
+
+    mock_callback.assert_called_once_with(
+        'd',
+        "commands/reboot",
+        '{"delay": 10}'
+    )
+
+
+def test_on_connect_subscribes_to_channels(mqtt_client,
+    mock_paho_client_instance):
+    """
+    test_on_connect_subscribes_to_channels
+    Verify mock_paho_client_instance.subscribe was called with
+    the full topic.
+    """
+    mqtt_client.register_channel_subscription("config")
+    mqtt_client.register_channel_subscription("commands/#")
+
+    mqtt_client._on_connect(mock_paho_client_instance, None, None, 0)
+
+    expected_calls = [
+        call("/devices/d/config", 1),
+        call("/devices/d/commands/#", 1)
+    ]
+    mock_paho_client_instance.subscribe.assert_has_calls(
+        expected_calls,
+        any_order=True
+    )
+
+--- File: clientlib/python/tests/core/messaging/__init__.py ---
+
+--- File: clientlib/python/tests/core/test_device_manager_hooks.py ---
+"""
+Tests for the Device-Manager integration within the UDMI core.
+
+This module verifies that the core device orchestrator, created via
+the factory, correctly interacts with its registered `BaseManager` components.
+
+The tests simulate a connected device and check the following key interactions:
+1.  When the device publishes its state, it first calls the manager's
+    `update_state` method to populate the state object.
+2.  When the device receives an MQTT config message, it correctly parses
+    it and calls the manager's `handle_config` method.
+3.  When the device receives an MQTT command message, it correctly parses
+    the topic and payload and calls the manager's `handle_command` method.
+"""
+
+import json
+from unittest.mock import MagicMock
+
+import pytest
+
+from src.udmi.core import create_mqtt_device_instance
+from src.udmi.core.managers import BaseManager
+from udmi.schema import Config
+from udmi.schema import State
+from udmi.schema import StateSystemHardware
+from udmi.schema import SystemState
+
+
+# pylint: disable=redefined-outer-name,protected-access,unused-argument
+
+
+@pytest.fixture
+def mock_manager():
+    """
+    Creates a MagicMock that conforms to the BaseManager spec.
+    """
+    manager = MagicMock(spec=BaseManager)
+
+    def mock_update_state_impl(state: State):
+        if state.system is None:
+            state.system = SystemState()
+        if state.system.hardware is None:
+            state.system.hardware = StateSystemHardware()
+
+        state.system.hardware.make = "TestMake"
+
+    manager.update_state.side_effect = mock_update_state_impl
+    return manager
+
+
+@pytest.fixture
+def test_device(
+    mock_paho_client_class,
+    mock_auth_provider,
+    mock_manager,
+    mock_endpoint_config
+):
+    """
+    Creates a full instance of the Device orchestrator.
+    """
+    device = create_mqtt_device_instance(
+        endpoint_config=mock_endpoint_config,
+        auth_provider=mock_auth_provider,
+        managers=[mock_manager]
+    )
+    return device
+
+
+@pytest.fixture
+def connected_device(
+    test_device,
+    mock_paho_client_instance,
+    mock_manager
+):
+    """
+    A helper fixture to get a device in the 'connected' state.
+    """
+    # Get the internal callback that MqttMessagingClient registered with paho
+    on_connect_callback = mock_paho_client_instance.on_connect
+
+    # Simulate a successful connection (rc=0)
+    on_connect_callback(mock_paho_client_instance, None, None, 0)
+
+    # Reset mocks after the initial connection-related publish
+    mock_paho_client_instance.publish.reset_mock()
+    mock_manager.update_state.reset_mock()
+    return test_device
+
+
+def test_manager_update_state_called(
+    connected_device,
+    mock_paho_client_instance,
+    mock_manager
+):
+    """
+    Test that the manager's 'update_state' method is called
+    by the device's internal '_publish_state()'.
+    """
+    connected_device._publish_state()
+
+    mock_manager.update_state.assert_called_once()
+    assert mock_paho_client_instance.publish.call_count == 1
+
+    payload_str = mock_paho_client_instance.publish.call_args[0][1]
+    payload = json.loads(payload_str)
+    assert payload["system"]["hardware"]["make"] == "TestMake"
+
+
+def test_manager_handle_config_called(
+    connected_device,
+    mock_paho_client_instance,
+    mock_manager
+):
+    """
+    Test that the manager's 'handle_config' method is called
+    by the device's 'handle_config()' orchestrator.
+    """
+    config_topic = "/devices/d/config"
+    config_payload = {"timestamp": "2025-10-17T12:00:00Z", "system": {}}
+
+    config_obj = Config.from_dict(config_payload)
+    on_message_callback = mock_paho_client_instance.on_message
+    mock_msg = MagicMock(
+        topic=config_topic,
+        payload=json.dumps(config_payload).encode('utf-8')
+    )
+    on_message_callback(mock_paho_client_instance, None, mock_msg)
+
+    mock_manager.handle_config.assert_called_once_with(config_obj)
+    assert mock_paho_client_instance.publish.call_count == 1
+
+
+def test_manager_handle_command_called(
+    connected_device,
+    mock_paho_client_instance,
+    mock_manager
+):
+    """
+    Test that the manager's 'handle_command' method is called
+    by the device's 'handle_command()' orchestrator.
+    """
+    command_topic = "/devices/d/commands/reboot"
+    command_payload = {"delay_sec": 10}
+    expected_command_name = "reboot"
+    on_message_callback = mock_paho_client_instance.on_message
+    mock_msg = MagicMock(
+        topic=command_topic,
+        payload=json.dumps(command_payload).encode('utf-8')
+    )
+    on_message_callback(mock_paho_client_instance, None, mock_msg)
+
+    mock_manager.handle_command.assert_called_once_with(
+        expected_command_name,
+        command_payload
+    )
+    mock_paho_client_instance.publish.assert_not_called()
+
+--- File: clientlib/python/tests/core/__init__.py ---
+
+--- File: clientlib/python/tests/core/managers/test_system_manager.py ---
+"""
+Unit tests for the `SystemManager` class.
+
+This module tests the `SystemManager` in isolation by mocking the
+`AbstractMessageDispatcher` and other dependencies.
+
+Key behaviors verified:
+- Start Hook: `start()` correctly publishes a `SystemEvents` message
+  with the "Device has started" log entry.
+- Config Handling: `handle_config()` correctly captures and stores the
+  `timestamp` from the received `Config` object.
+- State Update: `update_state()` correctly populates the `state.system`
+  field with default hardware, software, and operation sub-objects.
+- Command Handling: `handle_command()` logs a warning for
+  unimplemented commands (like 'reboot'), as expected.
+"""
+
+import logging
+from unittest.mock import MagicMock
+
+import pytest
+from udmi.schema import Config
+from udmi.schema import State
+from udmi.schema import SystemEvents
+
+from src.udmi.core.managers.system_manager import SystemManager
+from src.udmi.core.messaging import AbstractMessageDispatcher
+
+
+# pylint: disable=redefined-outer-name,protected-access
+
+
+@pytest.fixture
+def mock_dispatcher():
+    """Provides a mock dispatcher object conforming to the spec."""
+    return MagicMock(spec=AbstractMessageDispatcher)
+
+
+@pytest.fixture
+def system_manager():
+    """Provides a default SystemManager instance."""
+    return SystemManager()
+
+
+def test_start_publishes_startup_event(system_manager, mock_dispatcher):
+    """
+    test_start_publishes_startup_event
+    Verify mock_dispatcher.publish_event was called with the channel "system"
+    and a SystemEvents object.
+    """
+    system_manager.set_device_context(device=None, dispatcher=mock_dispatcher)
+    system_manager.start()
+    mock_dispatcher.publish_event.assert_called_once()
+
+    call_args = mock_dispatcher.publish_event.call_args
+    assert call_args.args[0] == "events/system"
+    assert isinstance(call_args.args[1], SystemEvents)
+
+    published_event: SystemEvents = call_args.args[1]
+    assert len(published_event.logentries) == 1
+    assert published_event.logentries[0].message == "Device has started"
+
+
+def test_handle_config_captures_timestamp(system_manager):
+    """
+    test_handle_config_captures_timestamp
+    Check that manager._last_config_ts equals the timestamp.
+    """
+    test_timestamp = "2025-10-28T14:30:00Z"
+    config_obj = Config(timestamp=test_timestamp)
+
+    system_manager.handle_config(config_obj)
+
+    assert system_manager._last_config_ts == test_timestamp
+
+
+def test_update_state_populates_all_fields(system_manager):
+    """
+    test_update_state_populates_all_fields
+    Verify state.system.hardware, state.system.software, and
+    state.system.operation are all populated.
+    """
+    state = State()
+    system_manager.update_state(state)
+
+    assert state.system is not None
+    assert state.system.hardware == {"make": "pyudmi", "model": "device-v1"}
+    assert state.system.software == {"firmware": "1.0.0"}
+    assert state.system.operation is not None
+    assert state.system.operation.operational is True
+    assert state.system.last_config is None
+
+
+def test_handle_command_logs_warning(system_manager, caplog):
+    """
+    test_handle_command_logs_warning
+    Verify a warning was logged containing "not implemented."
+    """
+    with caplog.at_level(logging.WARNING):
+        system_manager.handle_command("reboot", {})
+
+    assert "Received 'reboot' command" in caplog.text
+    assert "not implemented" in caplog.text
+
+--- File: clientlib/python/tests/core/managers/test_gateway_manager.py ---
+"""
+Unit tests for the `GatewayManager` class.
+
+This module tests the `GatewayManager` and `ProxyDevice` logic, ensuring
+that proxy devices are correctly created, started, stopped, and networked
+via the dispatcher.
+"""
+
+from unittest.mock import MagicMock
+from unittest.mock import call
+
+import pytest
+
+from src.udmi.core.managers.gateway_manager import GatewayManager
+from src.udmi.core.managers.gateway_manager import ProxyDevice
+from src.udmi.core.messaging import AbstractMessageDispatcher
+from udmi.schema import Config
+from udmi.schema import GatewayConfig
+from udmi.schema import State
+
+
+# pylint: disable=redefined-outer-name,protected-access
+
+
+@pytest.fixture
+def mock_dispatcher():
+    """Provides a mock dispatcher object."""
+    dispatcher = MagicMock(spec=AbstractMessageDispatcher)
+    # Ensure client is also a mock so we can verify publish calls
+    dispatcher.client = MagicMock()
+    return dispatcher
+
+
+@pytest.fixture
+def gateway_manager(mock_dispatcher):
+    """Provides a GatewayManager instance with a mocked dispatcher."""
+    manager = GatewayManager()
+    manager.set_device_context(device=None, dispatcher=mock_dispatcher)
+    return manager
+
+
+def test_handle_config_syncs_devices(gateway_manager, mock_dispatcher):
+    """
+    Test that receiving a gateway config with proxy_ids creates and
+    starts the corresponding ProxyDevice objects.
+    """
+    # 1. Create a config with 2 proxies
+    config = Config()
+    config.gateway = GatewayConfig(proxy_ids=["proxy-1", "proxy-2"])
+
+    # 2. Handle config
+    gateway_manager.handle_config(config)
+
+    # 3. Verify proxies were created in the manager
+    assert "proxy-1" in gateway_manager._proxy_devices
+    assert "proxy-2" in gateway_manager._proxy_devices
+    assert len(gateway_manager._proxy_devices) == 2
+
+    # 4. Verify proxies were started (checked via dispatcher registration)
+    # Each proxy should have registered a 'config' handler
+    # register_handler(channel, handler, device_id)
+
+    # We expect 2 calls to register_handler
+    assert mock_dispatcher.register_handler.call_count == 2
+
+    # Check specific calls
+    calls = mock_dispatcher.register_handler.call_args_list
+    device_ids_registered = [c.kwargs['device_id'] for c in calls]
+    assert "proxy-1" in device_ids_registered
+    assert "proxy-2" in device_ids_registered
+
+    # 5. Verify 'attach' messages were published
+    # client.publish("attach", "{}", device_id=...)
+    assert mock_dispatcher.client.publish.call_count == 2
+    client_calls = mock_dispatcher.client.publish.call_args_list
+    # Check args: (channel, payload, device_id)
+    # call.args[0] is channel, call.kwargs['device_id'] is device_id
+
+    # Using a simpler check for the presence of calls
+    has_proxy1_attach = any(
+        c.args[0] == "attach" and c.kwargs.get('device_id') == "proxy-1"
+        for c in client_calls
+    )
+    assert has_proxy1_attach
+
+
+def test_handle_config_removes_devices(gateway_manager, mock_dispatcher):
+    """
+    Test that removing a device ID from the config stops and removes
+    the ProxyDevice.
+    """
+    # 1. Initial state: proxy-1 exists
+    config_1 = Config()
+    config_1.gateway = GatewayConfig(proxy_ids=["proxy-1"])
+    gateway_manager.handle_config(config_1)
+
+    assert "proxy-1" in gateway_manager._proxy_devices
+    mock_dispatcher.client.publish.reset_mock()  # Clear attach calls
+
+    # 2. New state: proxy-1 removed, proxy-2 added
+    config_2 = Config()
+    config_2.gateway = GatewayConfig(proxy_ids=["proxy-2"])
+    gateway_manager.handle_config(config_2)
+
+    # 3. Verify proxy-1 is gone and proxy-2 exists
+    assert "proxy-1" not in gateway_manager._proxy_devices
+    assert "proxy-2" in gateway_manager._proxy_devices
+    assert len(gateway_manager._proxy_devices) == 1
+
+    # 4. Verify proxy-1 sent 'detach'
+    # We check if publish was called with "detach" and device_id="proxy-1"
+    detach_calls = [
+        c for c in mock_dispatcher.client.publish.call_args_list
+        if c.args[0] == "detach"
+    ]
+    assert len(detach_calls) == 1
+    assert detach_calls[0].kwargs['device_id'] == "proxy-1"
+
+
+def test_update_state_populates_gateway_block(gateway_manager):
+    """
+    Test that update_state adds the gateway block.
+    """
+    state = State()
+    gateway_manager.update_state(state)
+
+    assert state.gateway is not None
+    # Status should be set if config was handled, or at least initialized
+    # In a fresh manager, status might be None until config is received,
+    # or default if set in init.
+    # Looking at code: _gateway_state is init with GatewayState().
+    # status is set in handle_config.
+    assert state.gateway.status is None
+
+    # Now handle config
+    config = Config(gateway=GatewayConfig(proxy_ids=[]))
+    gateway_manager.handle_config(config)
+    gateway_manager.update_state(state)
+
+    assert state.gateway.status is not None
+    assert state.gateway.status.category == "gateway"
+    assert state.gateway.status.message == "Configured"
+
+--- File: clientlib/python/tests/core/managers/__init__.py ---
+
+--- File: clientlib/python/tests/core/managers/test_pointset_manager.py ---
+"""
+Unit tests for the `PointsetManager` class.
+
+This module tests the `PointsetManager` in isolation, verifying:
+- Config Handling: Correctly parsing `pointset` config blocks and updating internal state.
+- State Updates: Correctly reflecting point statuses and values in the device state.
+- Telemetry: Correctly formatting and publishing `PointsetEvents` via the dispatcher.
+- Sampling Rate: Correctly calculating the reporting interval from config.
+"""
+
+from unittest.mock import MagicMock
+from unittest.mock import call
+
+import pytest
+
+from src.udmi.core.managers.pointset_manager import PointsetManager
+from src.udmi.core.messaging import AbstractMessageDispatcher
+from udmi.schema import Config
+from udmi.schema import PointPointsetConfig
+from udmi.schema import PointsetConfig
+from udmi.schema import PointsetEvents
+from udmi.schema import State
+from udmi.schema import ValueState
+
+
+# pylint: disable=redefined-outer-name,protected-access
+
+
+@pytest.fixture
+def mock_dispatcher():
+    """Provides a mock dispatcher object."""
+    dispatcher = MagicMock(spec=AbstractMessageDispatcher)
+    return dispatcher
+
+
+@pytest.fixture
+def pointset_manager(mock_dispatcher):
+    """Provides a PointsetManager instance with a mocked dispatcher."""
+    manager = PointsetManager()
+    manager.set_device_context(device=None, dispatcher=mock_dispatcher)
+    return manager
+
+
+def test_handle_config_updates_interval(pointset_manager):
+    """
+    Test that handle_config correctly updates the reporting interval
+    based on sample_rate_sec and sample_limit_sec.
+    """
+    # Case 1: Only sample_rate_sec
+    config_1 = Config(pointset=PointsetConfig(sample_rate_sec=20))
+    pointset_manager.handle_config(config_1)
+    assert pointset_manager._message_report_interval == 20
+
+    # Case 2: Only sample_limit_sec
+    # Explicit set None to avoid default of 300 for sample_rate_sec
+    config_2 = Config(pointset=PointsetConfig(sample_rate_sec=None, sample_limit_sec=15))
+    pointset_manager.handle_config(config_2)
+    assert pointset_manager._message_report_interval == 15
+
+    # Case 3: Both provided (should take max)
+    config_3 = Config(
+        pointset=PointsetConfig(sample_rate_sec=10, sample_limit_sec=30))
+    pointset_manager.handle_config(config_3)
+    assert pointset_manager._message_report_interval == 30
+
+
+def test_handle_config_updates_points(pointset_manager):
+    """
+    Test that handle_config correctly updates the internal point state map.
+    """
+    points_config = {
+        "temp_sensor": PointPointsetConfig(set_value=25.5),
+        "valve_status": PointPointsetConfig(set_value=1)
+    }
+    config = Config(
+        pointset=PointsetConfig(points=points_config, state_etag="etag-123")
+    )
+
+    pointset_manager.handle_config(config)
+
+    state = pointset_manager._pointset_state
+    assert state is not None
+    assert state.state_etag == "etag-123"
+    assert "temp_sensor" in state.points
+    assert "valve_status" in state.points
+
+    # Verify default state application
+    assert state.points["temp_sensor"].value_state == ValueState.applied
+    assert state.points["temp_sensor"].status is None
+
+
+def test_handle_config_clears_state_on_null(pointset_manager):
+    """
+    Test that receiving a None config clears the internal state.
+    """
+    # 1. Set initial state
+    pointset_manager.handle_config(Config(pointset=PointsetConfig(points={})))
+    assert pointset_manager._pointset_state is not None
+
+    # 2. Receive null config
+    pointset_manager.handle_config(Config(pointset=None))
+
+    # 3. Verify state is cleared
+    # Note: The implementation of _update_pointset_points_config handles None config
+    # by setting _pointset_state to None.
+    assert pointset_manager._pointset_state is None
+
+
+def test_update_state_populates_state_block(pointset_manager):
+    """
+    Test that update_state sets the pointset block in the device State.
+    """
+    # Setup internal state
+    config = Config(
+        pointset=PointsetConfig(points={"p1": PointPointsetConfig()}))
+    pointset_manager.handle_config(config)
+
+    # Test update_state
+    device_state = State()
+    pointset_manager.update_state(device_state)
+
+    assert device_state.pointset is not None
+    assert "p1" in device_state.pointset.points
+
+
+def test_publish_telemetry(pointset_manager, mock_dispatcher):
+    """
+    Test that publish_telemetry correctly formats and publishes a PointsetEvent.
+    """
+    values = {
+        "temp": 22.5,
+        "humidity": 60
+    }
+
+    pointset_manager.publish_telemetry(values)
+
+    mock_dispatcher.publish_event.assert_called_once()
+    call_args = mock_dispatcher.publish_event.call_args
+
+    # Arg 0: Channel
+    assert call_args.args[0] == "events/pointset"
+
+    # Arg 1: Event Payload
+    event: PointsetEvents = call_args.args[1]
+    assert isinstance(event, PointsetEvents)
+    assert event.version is not None
+    assert event.timestamp is not None
+    assert event.points["temp"].present_value == 22.5
+    assert event.points["humidity"].present_value == 60
+
+
+def test_publish_telemetry_empty_does_nothing(pointset_manager,
+    mock_dispatcher):
+    """
+    Test that publish_telemetry with empty values does not publish.
+    """
+    pointset_manager.publish_telemetry({})
+    mock_dispatcher.publish_event.assert_not_called()
+
+
+def test_handle_command_logs_warning(pointset_manager, caplog):
+    """
+    Test that handling a pointset command logs a warning (not implemented yet).
+    """
+    import logging
+    with caplog.at_level(logging.WARNING):
+        pointset_manager.handle_command("pointset", {})
+
+    assert "Pointset command received" in caplog.text
+    assert "not yet implemented" in caplog.text
+--- File: clientlib/python/tests/core/test_device_integration.py ---
+"""
+Integration tests for the core UDMI device's MQTT logic.
+
+This module tests the MQTT-level functionality of the device instance
+created by the factory, specifically focusing on the
+device's internal dispatcher and default managers.
+
+Key behaviors verified:
+- The full connection sequence: `connect`, `on_connect` callback,
+  topic subscriptions, and initial state publish.
+- The config-receive -> state-publish acknowledgment loop.
+- Correct routing of command messages.
+- Robustness against connection failures, malformed JSON, and
+  invalid UDMI schemas.
+- The periodic authentication refresh loop.
+- The `start` lifecycle event hook.
+"""
+
+import json
+import logging
+from unittest.mock import MagicMock
+from unittest.mock import call
+
+import pytest
+
+from src.udmi.core import create_mqtt_device_instance
+
+
+# pylint: disable=redefined-outer-name,protected-access,unused-argument
+
+
+@pytest.fixture
+def test_device(
+    mock_paho_client_class,
+    mock_auth_provider,
+    mock_endpoint_config
+):
+    """
+    Creates a full Device instance using the factory,
+    with the Paho client completely mocked.
+    """
+    device = create_mqtt_device_instance(
+        endpoint_config=mock_endpoint_config,
+        auth_provider=mock_auth_provider
+    )
+    return device
+
+
+@pytest.fixture
+def connected_test_device(
+    test_device,
+    mock_paho_client_instance
+):
+    """
+    A helper fixture to get a device in the 'connected' state
+    and reset mocks, so we only test post-connection events.
+    """
+    on_connect_callback = mock_paho_client_instance.on_connect
+    on_connect_callback(mock_paho_client_instance, None, None, 0)
+
+    mock_paho_client_instance.publish.reset_mock()
+    return test_device
+
+
+def test_device_connect_and_initial_state(
+    test_device,
+    mock_paho_client_instance
+):
+    """
+    Test the full connection and initial state publish sequence.
+    """
+    # Start the device
+    test_device.dispatcher.connect()
+    test_device.dispatcher.start_loop()
+
+    # 1. Verify connect() was called correctly
+    mock_paho_client_instance.connect.assert_called_with("mock.host", 8883)
+    mock_paho_client_instance.loop_start.assert_called_once()
+
+    # 2. --- SIMULATE CONNECTION ---
+    # Manually trigger the on_connect callback
+    on_connect_callback = mock_paho_client_instance.on_connect
+    on_connect_callback(mock_paho_client_instance, None, None, 0)  # rc=0
+
+    # 3. --- VERIFY SUBSCRIPTIONS ---
+    expected_subs_list = [
+        call.mock_paho_client_instance.subscribe('/devices/d/config', 1),
+        call.mock_paho_client_instance.subscribe('/devices/d/commands/#', 1)]
+    mock_paho_client_instance.subscribe.assert_has_calls(expected_subs_list,
+                                                         any_order=True)
+
+    # 4. Verify initial state was published
+    assert mock_paho_client_instance.publish.call_count == 1
+    publish_call = mock_paho_client_instance.publish.call_args
+
+    topic = publish_call.args[0]
+    payload = json.loads(publish_call.args[1])
+
+    assert topic == "/devices/d/state"
+    assert payload["system"]["operation"]["operational"] is True
+
+
+def test_device_config_state_loop(
+    test_device,
+    mock_paho_client_instance
+):
+    """
+    Test the full config -> state acknowledgement loop.
+    """
+    # --- 1. SIMULATE CONNECTION ---
+    on_connect_callback = mock_paho_client_instance.on_connect
+    on_connect_callback(mock_paho_client_instance, None, None, 0)
+
+    # Reset the mock to ignore the initial state publish
+    mock_paho_client_instance.publish.reset_mock()
+
+    # --- 2. SIMULATE CONFIG MESSAGE ---
+    config_topic = "/devices/d/config"
+    config_payload = {
+        "timestamp": "2025-10-17T12:00:00Z",
+        "system": {"min_loglevel": 300}
+    }
+
+    # Get the on_message callback
+    on_message_callback = mock_paho_client_instance.on_message
+
+    # Create a mock Paho message object
+    mock_msg = MagicMock()
+    mock_msg.topic = config_topic
+    mock_msg.payload = json.dumps(config_payload).encode('utf-8')
+
+    # Manually trigger the on_message callback
+    on_message_callback(mock_paho_client_instance, None, mock_msg)
+
+    # --- 3. VERIFY BEHAVIOR ---
+    # Verify the device updated its internal state
+    assert test_device.config.system.min_loglevel == 300
+    assert test_device.state.system.last_config == "2025-10-17T12:00:00Z"
+
+    # Verify a new state message was published
+    assert mock_paho_client_instance.publish.call_count == 1
+    publish_call = mock_paho_client_instance.publish.call_args
+
+    topic = publish_call.args[0]
+    payload = json.loads(publish_call.args[1])
+
+    assert topic == "/devices/d/state"
+    assert payload["system"]["last_config"] == "2025-10-17T12:00:00Z"
+
+
+def test_device_connection_failed(
+    test_device,
+    mock_paho_client_instance
+):
+    """
+    Test what happens if on_connect reports an error.
+    """
+    client_instance = test_device.dispatcher.client
+    mock_disconnect_callback = MagicMock()
+    client_instance._callbacks.on_disconnect = mock_disconnect_callback
+
+    on_connect_callback = mock_paho_client_instance.on_connect
+    on_connect_callback(mock_paho_client_instance, None, None, 5)
+
+    mock_paho_client_instance.subscribe.assert_not_called()
+    mock_paho_client_instance.publish.assert_not_called()
+
+    on_disconnect_callback = mock_paho_client_instance.on_disconnect
+    on_disconnect_callback(mock_paho_client_instance, None, 5)
+
+    mock_disconnect_callback.assert_called_with(5)
+
+
+def test_device_receives_bad_json(
+    connected_test_device,
+    mock_paho_client_instance,
+    caplog
+):
+    """
+    Test that malformed JSON is caught, logged, and doesn't crash.
+    """
+    on_message_callback = mock_paho_client_instance.on_message
+    mock_msg = MagicMock()
+    mock_msg.topic = "/devices/d/config"
+    mock_msg.payload = b"this is not json"
+
+    with caplog.at_level(logging.ERROR):
+        on_message_callback(mock_paho_client_instance, None, mock_msg)
+
+    assert "Failed to decode JSON payload" in caplog.text
+    mock_paho_client_instance.publish.assert_not_called()
+
+
+def test_device_receives_bad_config_schema(
+    connected_test_device,
+    mock_paho_client_instance,
+    caplog
+):
+    """
+    Test that valid JSON with an invalid schema is caught and logged.
+    """
+    on_message_callback = mock_paho_client_instance.on_message
+    mock_msg = MagicMock()
+    mock_msg.topic = "/devices/d/config"
+    mock_msg.payload = b'{"system": {"min_loglevel": "not_an_int"}}'
+
+    with caplog.at_level(logging.ERROR):
+        on_message_callback(mock_paho_client_instance, None, mock_msg)
+
+    assert "Failed to parse config message" in caplog.text
+    mock_paho_client_instance.publish.assert_not_called()
+
+
+def test_device_handles_command(
+    connected_test_device,
+    mock_paho_client_instance,
+    caplog
+):
+    """
+    Test that a command is routed to the SystemManager, which logs a warning.
+    """
+    on_message_callback = mock_paho_client_instance.on_message
+    mock_msg = MagicMock()
+    mock_msg.topic = "/devices/d/commands/reboot"
+    mock_msg.payload = b'{"payload": 1}'
+
+    with caplog.at_level(logging.WARNING):
+        on_message_callback(mock_paho_client_instance, None, mock_msg)
+
+    assert "Received 'reboot' command" in caplog.text
+    assert "not implemented" in caplog.text
+    mock_paho_client_instance.publish.assert_not_called()
+
+
+def test_device_auth_refresh_loop(
+    test_device,
+    mock_auth_provider,
+    mock_paho_client_instance):
+    """
+    Test the periodic auth refresh check logic.
+    """
+    mock_auth_provider.get_password.reset_mock()
+    mock_auth_provider.needs_refresh.return_value = True
+
+    test_device.dispatcher.check_authentication()
+
+    mock_auth_provider.get_password.assert_called_once()
+    mock_paho_client_instance.reconnect.assert_called_once()
+
+
+def test_system_manager_start_event(
+    connected_test_device,
+    mock_paho_client_instance
+):
+    """
+    Test that the manager's 'start' hook is called and publishes an event.
+    """
+    for manager in connected_test_device.managers:
+        manager.start()
+
+    mock_paho_client_instance.publish.assert_called_once()
+    publish_call = mock_paho_client_instance.publish.call_args
+
+    topic = publish_call.args[0]
+    payload = json.loads(publish_call.args[1])
+
+    assert topic == "/devices/d/events/system"
+    assert payload["logentries"][0]["message"] == "Device has started"
+
+--- File: clientlib/python/tests/core/auth/test_basic_auth_provider.py ---
+"""
+Unit tests for the `BasicAuthProvider` class.
+
+This module verifies the functionality of the `BasicAuthProvider`, ensuring
+it correctly stores and returns static credentials and reports that
+it never needs to refresh.
+"""
+
+from src.udmi.core.auth import BasicAuthProvider
+
+
+def test_getters():
+    """
+    test_getters
+    Instantiate with "user", "pass".
+    get_username() == "user" and get_password() == "pass".
+    """
+    username = "test_user"
+    password = "test_password"
+
+    provider = BasicAuthProvider(username=username, password=password)
+
+    assert provider.get_username() == username
+    assert provider.get_password() == password
+
+
+def test_needs_refresh():
+    """
+    Assert needs_refresh() always returns False.
+    """
+    provider = BasicAuthProvider(username="user", password="pass")
+
+    refresh_needed = provider.needs_refresh()
+
+    assert refresh_needed is False
+
+--- File: clientlib/python/tests/core/auth/__init__.py ---
+
+--- File: clientlib/python/tests/core/auth/test_jwt_auth_provider.py ---
+"""
+Unit tests for the `JwtAuthProvider` class.
+
+This module verifies the functionality of the `JwtAuthProvider` by mocking
+the private key file.
+
+Key behaviors verified:
+- Token Generation: Ensures a JWT is created correctly.
+- Token Caching: Confirms that a generated token is cached and reused.
+- Refresh Logic: Uses `freezegun` to test the time-based refresh
+  logic, ensuring `needs_refresh()` returns True only after the
+  refresh buffer period has passed.
+- Error Handling:
+    - Checks for `FileNotFoundError` if the key file is missing.
+    - Checks for `PyJWTError` (or other lib-specific errors) if
+      JWT encoding fails, ensuring it returns a safe value.
+- Defaults: Verifies the default token lifetime is 60 minutes.
+"""
+
+from unittest.mock import mock_open
+from unittest.mock import patch
+
+import pytest
+from freezegun import freeze_time
+from jwt.exceptions import PyJWTError
+
+from src.udmi.core.auth import JwtAuthProvider
+from udmi.core.auth.jwt_auth_provider import JwtTokenConfig
+
+MOCK_PRIVATE_KEY = """-----BEGIN PRIVATE KEY-----
+MIIEugIBADANBgkqhkiG9w0BAQEFAASCBKQwggSgAgEAAoIBAQCe5RIBonQNXte4
+T6rTTaPzYk92NRTMFCFt1T7aJmBh5q19VCaMtsnSBr602bPMqOOlufwXftYdc9/g
+jxKRYG/+9WNH0YSk5ZAB1eDUGInuDECF+43aSd9t8z3wQ6W7hDAy4cM74rR0YZoY
+dC2SKo5dsKdDln0XhkoY0nzxFfMoU1udTvHUxIHoCH070rE+zXq+KsKBYW4M5pCn
+JVQw4x/sJNDYJE4O4qIF8kNCfU8M2i0Zet3fRKrg7brxlEWt0rNGTLGwuSfgi+hL
+t1UH5wxA1vk/v1YhGMjiY2gh4f58Wl/l0nGet4AfIxrbeNP86OhPd7d6RmKgBs3K
+YjHgjNxpAgMBAAECgf8agLRmkWVjolSMHL2uTcTxU44gqVOB6dmpkc5p+vyyJHr+
+uVdOVGHu8v3cLHO3YnQvsFXb+8vuHbKGqIm9HD8rlFwUhPeBVmKVHv3hL2nSMTj4
+U0nV0klYjYatpjR+knREbsoIGXtmVHrfZhsAkxiSVMsq+tVI/Z0rIFcdEnKV+kFG
+hMWwGabklVdWVl9NhAFk7TBhi/BCDyHRh4apXWjnTN/UCqRSq3TnR6hUMH+RFXP4
+nLn6W5EDGTvkZMjbi2N1saW08Eet8dDpc0KCyH8uzoDTUMZE27YpQ3BiEJAfNnZA
+0pjBI95Gi0riOuzw39Y8uFFnx2A53c2rXgK1xzkCgYEA0VyNDf2vN6FDMQYM23xt
+xmll+ZLOOiPIWx4rS774m+rD4CjMeGOvHHn8u4I3plImeW6izsOF3N/r+kBodoDD
+1mLIx6LPg9th6IKZHWTndiWtJHjplbasK2uM8Slp5lgh+UqR9HGt9fzv5kd34z0v
+g1Sjl050amAm8WsUnUyGdL0CgYEAwkqCDcSpvDqRiKOdm/abAjYAPTIbx14Ke9CN
+QEFolsfDZWwZqYQpc7i0alJGsfwoffrKSLjq512LXmyoprMtwxVhsuShLTRhLs9Q
+v10x5qWia6qLaPodl/OwsXIm4aoPur63fxyhFbsBormjW6OL9pjDm4XE5G+VV6k4
+t3y13x0CgYBKPqEDCii9+KFEXFno6Cphx3TTWb1qns/piDxgYzv0xv9pme5Q70Dl
+P1liAZ7Mi6t7OsHfwzTQjFQ57eddxvIsL+H18gXXQ9BnzRCRfPwcSOYq3fowDpTl
+3QEhcMdOWYjKyCgUYNAJQQauSj/4xPT5hOVyve7I3opQ6OFpmv6/nQKBgB8ob77h
+gQ7snZY6FvaCD83E9zjZJldMn4XHpj9dvfYgRxemxF7JERS71EMQusGkXKIHbBVJ
+gnJkMAuOhWVmarpUXXyg6bAkLEmjeaGWwn/opCl8CitloQVTUUzDr7SU3zzlhOvf
+nX2spdCA0M/LZJDBYu04AKFZu6t5Od1DJK+JAoGAXBeCLR3k/pyojqGFKX45+T07
+iFztFZK7v/uc8jdkCQkGEArs80nqaj2+0y5QaMtbZu6ewSd3RJ7eMJZStodxO8ES
+YqpSXqOckiDcqkY38sNHi6S2CVwlKilzIbzZTa4Yx0eJF5VrjDlfjU9qQ0XlUTc/
+Xqv7JfZZmBIAC2MzlgE=
+-----END PRIVATE KEY-----"""
+
+
+# pylint: disable=redefined-outer-name,protected-access
+
+
+@pytest.fixture
+def jwt_provider():
+    """Returns a JwtAuthProvider instance with a mocked private key file."""
+    with patch("builtins.open", mock_open(read_data=MOCK_PRIVATE_KEY)):
+        provider = JwtAuthProvider(
+            project_id="test-project",
+            private_key_file="fake/path/key.pem",
+            algorithm="RS256"
+        )
+    return provider
+
+
+def test_jwt_provider_initial_state(jwt_provider):
+    """Test that the provider needs a refresh immediately upon creation."""
+    assert jwt_provider.needs_refresh() is True
+
+
+def test_jwt_provider_token_caching(jwt_provider):
+    """Test that a token is generated and then cached."""
+    with freeze_time("2025-10-17 12:00:00"):
+        # First call generates a token
+        token1 = jwt_provider.get_password()
+        assert token1 is not None
+        assert jwt_provider.needs_refresh() is False  # Should be cached
+
+        # Second call should return the exact same cached token
+        token2 = jwt_provider.get_password()
+        assert token1 == token2
+
+
+@freeze_time("2025-10-17 12:00:00")
+def test_jwt_provider_needs_refresh_logic():
+    """Test the time-based refresh logic."""
+    with patch("builtins.open", mock_open(read_data=MOCK_PRIVATE_KEY)):
+        jwt_provider = JwtAuthProvider(
+            project_id="test-project",
+            private_key_file="fake/path/key.pem",
+            algorithm="RS256",
+            token_config=JwtTokenConfig(lifetime_minutes=60)
+        )
+
+    # 1. Get initial token
+    token1 = jwt_provider.get_password()
+    assert jwt_provider.needs_refresh() is False
+
+    # 2. Move time forward, but not past the refresh buffer
+    with freeze_time("2025-10-17 12:54:00"):
+        assert jwt_provider.needs_refresh() is False
+        assert jwt_provider.get_password() == token1  # Still cached
+
+    # 3. Move time past the refresh buffer
+    with freeze_time("2025-10-17 12:55:01"):
+        assert jwt_provider.needs_refresh() is True
+        token2 = jwt_provider.get_password()
+        assert token2 is not None
+        assert token1 != token2  # New token generated
+        assert jwt_provider.needs_refresh() is False  # Cached again
+
+
+def test_init_raises_file_not_found():
+    """
+    Tests that the constructor correctly raises FileNotFoundError
+    if the private key file is missing.
+    """
+    with patch("builtins.open") as mock_open_fn:
+        mock_open_fn.side_effect = FileNotFoundError("File not found")
+        with pytest.raises(FileNotFoundError):
+            JwtAuthProvider(
+                project_id="test-project",
+                private_key_file="fake/path/key.pem",
+                algorithm="RS256"
+            )
+
+
+def test_jwt_encoding_failure(jwt_provider, caplog):
+    """
+    Tests that if jwt.encode() fails, it logs an error and
+    returns a safe empty string.
+    """
+    with patch("src.udmi.core.auth.jwt_auth_provider.jwt.encode",
+               side_effect=PyJWTError("Mock encode error")):
+        password = jwt_provider.get_password()
+
+    assert "Failed to generate new JWT: Mock encode error" in caplog.text
+    assert "No valid JWT token available to return" in caplog.text
+    assert password == ""
+
+
+def test_default_token_lifetime_is_60_minutes():
+    """
+    Tests that the default token_lifetime_minutes is 60.
+    """
+    with patch("builtins.open", mock_open(read_data=MOCK_PRIVATE_KEY)):
+        with freeze_time("2025-10-17 12:00:00") as ft:
+            provider = JwtAuthProvider(
+                project_id="test-project",
+                private_key_file="fake/path/key.pem",
+                algorithm="RS256"
+            )
+            provider.get_password()
+            assert provider.needs_refresh() is False  # Should be cached
+
+            ft.move_to("2025-10-17 12:55:01")
+            assert provider.needs_refresh() is True
+
+--- File: clientlib/python/tests/core/test_device.py ---
+"""
+Unit tests for the core `Device` class.
+
+This module tests the `Device` class in isolation, mocking all its
+dependencies (Managers and MessageDispatcher) to verify its internal
+orchestration logic.
+
+Key behaviors verified:
+- Periodic tasks within the main run loop:
+    - Verifies that the periodic state publish logic is triggered
+      correctly based on its time interval.
+    - Verifies that the periodic auth check logic is triggered
+      correctly based on its time interval.
+- Lifecycle management:
+    - Ensures that `device.stop()` correctly propagates the stop/close
+      call to its manager and dispatcher dependencies.
+    - Ensures that `device.stop()` is idempotent and safe to call multiple
+      times.
+- Message handling robustness:
+    - Tests that `handle_config` catches, logs, and safely handles
+      a config payload that fails schema validation, ensuring the
+      invalid config is not passed to managers.
+"""
+
+import logging
+import time
+from unittest.mock import MagicMock
+
+import pytest
+from freezegun import freeze_time
+
+from src.udmi.core.device import Device
+from src.udmi.core.managers import BaseManager
+from src.udmi.core.messaging import AbstractMessageDispatcher
+
+
+# pylint: disable=redefined-outer-name,protected-access
+
+
+@pytest.fixture
+def mock_manager():
+    """Provides a mock manager object conforming to the BaseManager spec."""
+    return MagicMock(spec=BaseManager)
+
+
+@pytest.fixture
+def mock_dispatcher():
+    """Provides a mock dispatcher object conforming to the spec."""
+    return MagicMock(spec=AbstractMessageDispatcher)
+
+
+@pytest.fixture
+def test_device(mock_manager, mock_dispatcher):
+    """
+    Provides a real Device instance, unit-tested in isolation by
+    injecting mock managers and a mock dispatcher.
+    """
+    device = Device(managers=[mock_manager])
+
+    device.wire_up_dispatcher(mock_dispatcher)
+
+    return device
+
+
+def test_run_loop_periodic_state_publish(test_device, mock_dispatcher):
+    """
+    Asserts that the logic in the run() loop correctly
+    triggers a periodic state publish.
+    """
+    with freeze_time("2025-10-28 12:00:00") as freezer:
+        test_device._loop_state.last_state_publish_time = freezer.time_to_freeze.timestamp()
+
+        interval = test_device._loop_config.publish_state_interval_sec
+        freezer.tick(interval + 1)
+
+        now = time.time()
+        if (now - test_device._loop_state.last_state_publish_time >
+            test_device._loop_config.publish_state_interval_sec):
+            test_device._publish_state()
+            test_device._last_state_publish_time = now
+
+        mock_dispatcher.publish_state.assert_called_once()
+
+
+def test_run_loop_periodic_auth_check(
+    test_device,
+    mock_dispatcher
+):
+    """
+    Asserts that the logic in the run() loop correctly
+    triggers a periodic auth check.
+    """
+    with freeze_time("2025-10-28 12:00:00") as freezer:
+        test_device._last_auth_check = freezer.time_to_freeze.timestamp()
+
+        interval = test_device._loop_config.auth_check_interval_sec
+        freezer.tick(interval + 1)
+
+        now = time.time()
+        if now - test_device._last_auth_check > test_device._loop_config.auth_check_interval_sec:
+            test_device.dispatcher.check_authentication()
+            test_device._last_auth_check = now
+
+        mock_dispatcher.check_authentication.assert_called_once()
+
+
+def test_stop_calls_dependencies(
+    test_device,
+    mock_manager,
+    mock_dispatcher
+):
+    """
+    Asserts that device.stop() correctly calls stop() and close()
+    on its dependencies.
+    """
+    test_device.stop()
+
+    mock_manager.stop.assert_called_once()
+    mock_dispatcher.close.assert_called_once()
+
+
+def test_stop_is_idempotent(
+    test_device,
+    mock_manager,
+    mock_dispatcher
+):
+    """
+    Asserts that calling device.stop() multiple times only triggers
+    the shutdown sequence once.
+    """
+    test_device.stop()
+    test_device.stop()
+
+    mock_manager.stop.assert_called_once()
+    mock_dispatcher.close.assert_called_once()
+
+
+def test_handle_config_bad_schema(
+    test_device,
+    mock_manager,
+    caplog
+):
+    """
+    Asserts that a config payload that is valid JSON but fails
+    schema parsing (Config.from_dict) is caught and logged,
+    and not passed to the managers.
+    """
+    with caplog.at_level(logging.ERROR):
+        bad_payload = {"system": {"min_loglevel": "this_should_be_an_int"}}
+        test_device.handle_config("config", bad_payload)
+
+    assert "Failed to parse config message" in caplog.text
+
+    mock_manager.handle_config.assert_not_called()
+
+--- File: clientlib/python/README.md ---
+# A Python Library for UDMI
+
+This project is a high-level, extensible Python library designed to simplify the
+development of applications for the **Universal Device Management Interface (
+UDMI)**. It provides a clean, Pythonic abstraction over the core UDMI
+specification, lowering the barrier to entry for developers and device
+manufacturers seeking to create UDMI-compliant IoT solutions.
+
+## Key Features
+
+* **Strict Schema Adherence**: Ensures 1:1 compliance with the UDMI data model
+  by using Python dataclasses that are auto-generated directly from the official
+  UDMI JSON schemas.
+
+* **Abstracted Complexity**: Handles core device functionalities like MQTT
+  client communication, authentication (including certificate management), and
+  the primary config/state message loop.
+
+* **Extensible by Design**: Uses abstract base classes to allow for easy
+  customization and support for future protocols or features.
+
+The library acts as a reference implementation for demonstrating core
+functionalities like connectivity, telemetry, and message handling.
+
+---
+
+## Local Setup & Usage Examples
+
+To install and build the library locally use the build script.
+
+```shell
+${UDMI_ROOT}/clientlib/python/bin/build
+```
+
+You can find a few samples demonstrating how to connect a device using different
+authentication methods as well as other features of the library in
+`$UDMI/ROOT/clientlib/python/samples`.
+

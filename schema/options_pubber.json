@@ -1,0 +1,133 @@
+{
+  "$udmi_version": "1.5.2",
+  "title": "Pubber Options",
+  "description": "Pubber runtime options",
+  "additionalProperties": true,
+  "properties": {
+    "fixedSampleRate": {
+      "type": "integer"
+    },
+    "noHardware": {
+      "type": "boolean"
+    },
+    "noConfigAck": {
+      "type": "boolean"
+    },
+    "noPersist": {
+      "type": "boolean"
+    },
+    "noLastStart": {
+      "type": "boolean"
+    },
+    "noLastConfig": {
+      "type": "boolean"
+    },
+    "badCategory": {
+      "type": "boolean"
+    },
+    "badVersion": {
+      "type": "boolean"
+    },
+    "badAddr": {
+      "type": "boolean"
+    },
+    "noProxy": {
+      "type": "boolean"
+    },
+    "extraDevice": {
+      "type": "boolean"
+    },
+    "barfConfig": {
+      "type": "boolean"
+    },
+    "messageTrace": {
+      "type": "boolean"
+    },
+    "extraPoint": {
+      "type": "string"
+    },
+    "configStateDelay": {
+      "type": "boolean"
+    },
+    "missingPoint": {
+      "type": "string"
+    },
+    "extraField": {
+      "type": "string"
+    },
+    "emptyMissing": {
+      "type": "boolean"
+    },
+    "redirectRegistry": {
+      "type": "string"
+    },
+    "msTimestamp": {
+      "type": "boolean"
+    },
+    "smokeCheck": {
+      "type": "boolean"
+    },
+    "skewClock": {
+      "type": "boolean"
+    },
+    "noPointState": {
+      "type": "boolean"
+    },
+    "noState": {
+      "type": "boolean"
+    },
+    "noStatus": {
+      "type": "boolean"
+    },
+    "noFolder": {
+      "type": "boolean"
+    },
+    "badLevel": {
+      "type": "boolean"
+    },
+    "spamState": {
+      "type": "boolean"
+    },
+    "tweakState": {
+      "type": "boolean"
+    },
+    "badState": {
+      "type": "boolean"
+    },
+    "baseState": {
+      "type": "boolean"
+    },
+    "dupeState": {
+      "type": "boolean"
+    },
+    "noLog": {
+      "type": "boolean"
+    },
+    "featureEnableSwap": {
+      "type": "boolean"
+    },
+    "disableWriteback": {
+      "type": "boolean",
+      "description": "Disable writeback, equivelant to marking all points as unwriteable"
+    },
+    "noWriteback": {
+      "type": "boolean",
+      "description": "Removes writeback functionality, mimicking a device without Writeback support" 
+    },
+    "fixedLogLevel": {
+      "type": "integer"
+    },
+    "fastWrite": {
+      "type": "boolean",
+      "description": "If true, the pubber will simulate a fast writeback operations."
+    },
+    "delayWrite": {
+      "type": "boolean",
+      "description": "If true, the pubber will simulate a delayed writeback operations, leading to slow writeback without an intermediate updating state."
+    },
+    "softwareFirmwareValue": {
+      "type": "string"
+    }
+  }
+}
+

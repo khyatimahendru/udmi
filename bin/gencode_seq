@@ -1,0 +1,68 @@
+#!/bin/bash -e
+
+UDMI_ROOT=$(realpath $(dirname $0))/..
+source $UDMI_ROOT/etc/shell_common.sh
+
+SEQUENCE_MD=$UDMI_ROOT/docs/specs/sequences/generated.md
+
+# Create doc of generated sequence steps
+prefix=sites/udmi_site_model/out/devices/AHU-1/tests
+altfix=$UDMI_ROOT/validator/sequences/
+
+# Remove test runs that are from unit testing
+rm -rf $prefix/test_*
+
+echo Updating $SEQUENCE_MD:
+
+# Clear out existing generated sequences
+sed -i '/<!-- START GENERATED,/q' $SEQUENCE_MD
+
+TEST_LIST=/tmp/sequence.txt
+find $altfix $prefix -name sequence.log \
+    | xargs fgrep -H RESULT | awk '{print $6}' | sed -e 's/+.*//' > $TEST_LIST
+cat $TEST_LIST | sort | uniq > $TEST_LIST.sorted
+sequences=$(cat $TEST_LIST.sorted)
+
+to_add=
+echo
+
+# Generate table of contents
+for sequence in $sequences; do
+  if [[ -f $prefix/$sequence/sequence.md ]]; then
+      base=$prefix
+  else
+      base=$altfix
+  fi
+  seqfile=$base/$sequence/sequence.md
+  header=$(fgrep \#\# $seqfile) || true
+  if [[ -z $header ]]; then
+    echo "$sequence: invalid or missing header in $seqfile"
+    false
+  fi
+  if [[ $header == *\(ALPHA\)* ]]; then
+    echo "$sequence: skipping alpha test"
+    continue
+  fi
+  stage=$(echo $header | sed 's/.*(\(.*\))/\1/' | tr A-Z a-z)
+  description=": $(sed -n '/^1\./q;p' $seqfile | fgrep -v \#\# | xargs echo)"
+  echo "* [${sequence}](#${sequence}-${stage})${description%: }" >> $SEQUENCE_MD
+  to_add+=" $sequence"
+done
+
+# Add in specific test sequences
+for sequence in $to_add; do
+    if [[ -f $prefix/$sequence/sequence.md ]]; then
+        base=$prefix
+    else
+        base=$altfix
+    fi
+    seqfile=$base/$sequence/sequence.md
+    description="$(sed -n '/^1\./q;p' $seqfile | fgrep -v \#\# | xargs echo)"
+    echo $sequence: $description
+    cat $seqfile >> $SEQUENCE_MD
+done
+
+mkdir -p out && cp $SEQUENCE_MD out/
+
+echo
+echo Done with $SEQUENCE_MD generation.

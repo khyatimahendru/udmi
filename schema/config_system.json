@@ -1,0 +1,40 @@
+{
+  "$udmi_version": "1.5.2",
+  "title": "System Config",
+  "description": "[System Config Documentation](../docs/messages/system.md#config)",
+  "type": "object",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+    "min_loglevel": {
+      "description": "The minimum loglevel for reporting log messages below which log entries should not be sent. Default to 300.",
+      "type": "integer",
+      "minimum": 100,
+      "maximum": 800,
+      "default": 300
+    },
+    "metrics_rate_sec": {
+      "description": "The rate at which the system should send system event updates. 0 indicates no updates.",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 86400,
+      "default": 10
+    },
+    "operation": {
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "$ref": "file:common.json#/definitions/mode"
+        },
+        "last_start": {
+          "description": "Last time a device with this id said it restarted: being later than status-supplied last_start indicates resource conflict.",
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "testing": {
+      "$ref": "file:config_system_testing.json#"
+    }
+  }
+}

@@ -1,0 +1,50 @@
+#!/bin/bash -e
+
+if [[ $# != 1 ]]; then
+    echo $0 trace_name
+    false
+fi
+
+echo '################' Running $0 $*
+
+trace_name=$1
+shift
+
+function redact() {
+    sed -E -i $file \
+        -e 's/[0-9-]{10}T[0-9:]{8}Z/1999-10-20T01:02:03Z/' \
+        -e 's/"udmi_version" : ".*"/REDACTED/' \
+        -e 's/Validator.java:[0-9]+/REDACTED/' \
+        -e 's/\\t.*\.java:[0-9]+\)/\\tREDACTED\\n/g' \
+        -e 's/\\n.*\.java:[0-9]+\)/\\tREDACTED\\n/g'
+}
+
+jarfile=$(realpath validator/build/libs/validator-1.0-SNAPSHOT-all.jar)
+javarun="java -cp $jarfile com.google.daq.mqtt.validator.SchemaTester"
+validator/bin/build
+
+trace_in=tests/traces/${trace_name}
+trace_out=$trace_in/expected/
+site_model=sites/udmi_site_model
+site_out=$site_model/out
+
+# Clean up from other testing runs
+rm -rf $site_model/devices/ACME-2301 $site_model/devices/*/out
+rm -rf $site_out $site_model/devices/XXX-*
+(cd $site_model; git checkout .)
+
+# Use a static/constant value to make output stable.
+export UDMI_TOOLS=test_trace
+
+cmd="$javarun -p -- -s $site_model -r $trace_in --"
+echo $cmd
+$cmd
+
+echo Redacting output files...
+for file in `find $site_out -type f`; do redact; done
+for file in `find $trace_out -type f`; do redact; done
+
+echo Checking diff -r $site_out $trace_out
+diff -r $site_out $trace_out
+
+echo Diff complete, no deviation found.

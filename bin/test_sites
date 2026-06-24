@@ -1,0 +1,109 @@
+#!/bin/bash -e
+
+ROOT=$(dirname $0)/..
+cd $ROOT
+
+errorfile=`mktemp`
+rm -f $errorfile
+
+build=y
+force=n
+
+schemadir=schema
+sitesdir=tests/sites
+
+while getopts "d:" opt; do
+    case $opt in
+        d)
+            sitesdir=${OPTARG}
+            ;;
+        \?)
+            echo "Usage: $0 [-d TEST_DATA_DIR]"
+            exit -1
+            ;;
+    esac
+done
+
+shift $((OPTIND-1))
+
+function redact_files {
+    for file in $@; do
+        if [[ $(basename $file) == exceptions.txt ]]; then
+            rm $file
+            continue
+        fi
+        sed -E -i \
+            -e 's-oading .*udmi/tests/-REDACTED/-' \
+            -e 's-^    .*udmi/tests/-    REDACTED/-' \
+            -e 's-.*tests/sites/configs/-    REDACTED/sites/configs/-' \
+            -e 's-^      File not found: /app/tests/sites/-    REDACTED/sites/-' \
+            -e 's-^      File not found: .*udmi/tests/-    REDACTED/-' \
+            $file
+    done
+}
+
+if [[ $# == 0 ]]; then
+    subsets=$(cd $sitesdir; ls -d *)
+else
+    subsets=$*
+fi
+
+echo Testing against: $subsets
+
+FAILURES=out/test_sites-fixes.sh
+rm -f $FAILURES
+
+for subset in $subsets; do
+    echo '##########################################' Testing site $subset
+    site_dir=$sitesdir/$subset
+    devicesdir=$site_dir/devices
+    rm -rf $devicesdir/*/out
+    mkdir -p $devicesdir
+    devices=$(cd $devicesdir; ls -d *)
+
+    # Clean up some stuff that might be left over from unit testing.
+    for device in $devices; do
+        if [[ ! -f $devicesdir/$device/metadata.json ]]; then
+            rm -rf $devicesdir/$device
+        fi
+    done
+
+    # Test the direct config-file variant of registrar.
+    bin/registrar $site_dir/cloud_iot_config.json
+
+    for device in $devices; do
+        devicesout=$devicesdir/$device/out
+        if [[ -d $devicesout ]]; then
+            find $devicesout -name \*.json | xargs -i bash -c "jq -e . {} >/dev/null 2>&1 && jq . {} | sponge {} || true"
+            redact_files $devicesout/* $site_dir/registration_summary.json
+            diffs=$(diff -rq $devicesout $devicesdir/$device/expected 2>&1) || true
+            if [[ -n $diffs ]]; then
+                cat <<< $diffs >> $FAILURES
+                diff -r $devicesout $devicesdir/$device/expected || true
+            fi
+        elif [[ -d $devicesdir/$device/expected ]]; then
+            echo Missing output directory $devicesout
+            false
+        fi
+    done
+done
+
+if [[ -s $FAILURES ]]; then
+    echo
+    echo :::::: Failures found, to fix execute source $FAILURES:
+    sed -i -E \
+        -e 's/^Files (.*) and (.*) differ$/diff \1 \2/' \
+        -e 's-^Only in (.*)/out: (.*)$-echo \1/expected/\2-' \
+        -e 's-^Only in (.*)/expected: (.*)$-touch \1/expected/\2-' \
+        $FAILURES
+    cat $FAILURES
+    sed -i -E \
+        -e 's/^diff /cp /' \
+        -e 's/^touch /rm /' \
+        -e 's/^echo /touch /' \
+        $FAILURES
+    false
+fi
+
+echo
+echo '#########################################' Done with site tests

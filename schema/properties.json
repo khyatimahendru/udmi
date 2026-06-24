@@ -1,0 +1,29 @@
+{
+  "$udmi_version": "1.5.2",
+  "title": "Properties",
+  "type": "object",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "required": [
+    "key_type",
+    "version",
+    "connect"
+  ],
+  "properties": {
+    "key_type": {
+      "enum": [
+        "RSA_PEM",
+        "RSA_X509_PEM"
+      ]
+    },
+    "version": {
+      "description": "Version of the UDMI schema",
+      "type": "string"
+    },
+    "connect": {
+      "enum": [
+        "direct"
+      ]
+    }
+  }  
+}

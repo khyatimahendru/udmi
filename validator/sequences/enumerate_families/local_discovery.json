@@ -1,0 +1,9 @@
+{
+  "enumerations" : {
+    "families" : "entries"
+  },
+  "families" : {
+    "vendor" : { },
+    "bacnet" : { }
+  }
+}

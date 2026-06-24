@@ -1,0 +1,168 @@
+#!/bin/bash -e
+
+UDMI_ROOT=$(dirname $0)/..
+cd $UDMI_ROOT
+
+source etc/shell_common.sh
+
+debug_opts=-v
+seq_opts=
+clean_cache=
+pubber_opts=
+suffix=
+out_check=y
+
+if [[ ${1:-} == 'clean' ]]; then
+    shift
+    clean_cache=y
+fi
+
+if [[ ${1:-} == 'alpha' ]]; then
+    shift
+    seq_opts=-x
+fi
+
+if [[ ${1:-} == 'nostate' ]]; then
+    shift
+    pubber_opts+=" noState"
+    suffix=_nostate
+fi
+
+if [[ ${1:-} == 'local' ]]; then
+    shift
+    suffix=_local
+fi
+
+if [[ ${1:-} == 'nocheck' ]]; then
+    shift
+    out_check=
+fi
+
+if [[ ${1:-} == 'full' ]]; then
+    shift
+    debug_opts=
+fi
+
+if [[ ${1:-} == 'debug' ]]; then
+    shift
+    debug_opts=-vv
+fi
+
+if [[ $# -lt 1 ]]; then
+    fail Usage: $0 [clean] [alpha] [nostate] [full] PROJECT_ID [tests...]
+fi
+
+project_id=$1
+shift
+targets=$*
+
+[[ -n ${GITHUB_RUN_NUMBER:-} ]] && echo "Workflow run number $GITHUB_RUN_NUMBER" || true
+echo "export TARGET_PROJECT=$project_id"
+echo "export UDMI_REGISTRY_SUFFIX=${UDMI_REGISTRY_SUFFIX:-}"
+echo "export UDMI_ALT_REGISTRY=${UDMI_ALT_REGISTRY:-}"
+echo "export MATRIX_SHARD_COUNT=${MATRIX_SHARD_COUNT:-}"
+echo "export MATRIX_SHARD_INDEX=${MATRIX_SHARD_INDEX:-}"
+
+sequencer_start=out/.sequencer.start
+site_path=sites/udmi_site_model
+iot_config=$site_path/cloud_iot_config.json
+device_id=AHU-1
+site_out=$site_path/out
+output_file=$site_out/sequencer_${device_id}.json
+device_out_base=$site_out/devices/$device_id
+tests_out_base=$device_out_base/tests
+
+mkdir -p out
+touch $sequencer_start
+
+if [[ -n $clean_cache ]]; then
+    rm -rf $site_path/out-seq $site_out
+fi
+
+rm -f out/cmd_history.log*
+mkdir -p out/ $tests_out_base/
+
+serial_no=sequencer-$RANDOM
+echo Using pubber with serial $serial_no
+
+PUBBER_LOG=out/pubber.log
+
+bin/clone_model # Clone, and check that version is correct.
+
+if [[ -n ${UDMI_REGISTRY_SUFFIX:-} ]]; then
+    echo Using registry suffix $UDMI_REGISTRY_SUFFIX
+    jq ".registry_suffix = \"$UDMI_REGISTRY_SUFFIX\"" $iot_config | sponge $iot_config
+fi
+
+if [[ -n ${UDMI_ALT_REGISTRY:-} ]]; then
+    alt_registry=$UDMI_ALT_REGISTRY${UDMI_REGISTRY_SUFFIX:-}
+    echo Using alt registry $alt_registry
+    jq ".alt_registry = \"$alt_registry\"" $iot_config | sponge $iot_config
+fi
+
+bin/start_dut $site_path $project_id $device_id $serial_no "$pubber_opts"
+
+# Run in debug mode for fail-fast when things go wrong!
+echo bin/sequencer $debug_opts $seq_opts -s $serial_no $site_path $project_id $device_id $targets
+seq_fail=0
+bin/sequencer $debug_opts $seq_opts -s $serial_no $site_path $project_id $device_id $targets || seq_fail=$?
+echo Completed execution of sequencer test run, exit code $seq_fail
+
+echo Reported cloud version info: $(jq .cloud_version.udmi_ref $output_file)
+
+echo Combining partial-run output files...
+(
+    cd out
+    files=$(ls -1 *.out *.log)
+    echo Merging $files
+    for file in $files; do
+        [[ $file -nt ../$sequencer_start ]] || continue
+        nfile=$(echo $file | sed -E -r "s/\.(.*)\$/$suffix.\1/")
+        [[ $file != $nfile ]] && mv $file $nfile && echo Renamed $file to $nfile
+        cp $nfile $nfile.save
+        cat $nfile >> $nfile.combined
+        cp $nfile.combined $nfile
+    done
+)
+
+echo Generated $output_file:
+jq . $output_file
+
+if [[ -n $out_check && -z $targets ]]; then
+    if [[ -n $clean_cache ]]; then
+        echo Cleaning sequencer result cache...
+        rm -rf validator/sequences
+    fi
+
+    bin/test_sequcheck $suffix
+elif [[ -n ${MATRIX_SHARD_COUNT:-} ]]; then
+    echo Copying results to out-seq for matrix reconciliation...
+    mkdir -p $site_path/out-seq
+    rsync -ah $site_path/out/ $site_path/out-seq/
+    rm -rf $site_path/out
+fi
+
+[[ $seq_fail == 0 ]] || fail Primary squencer run exited with errors, aborting.
+
+pids=`ps ax | fgrep pubber | fgrep java | awk '{print $1}'`
+if [[ -n $pids ]]; then
+    echo Killing pubber pids $pids
+    kill $pids
+else
+    fail No pubber pids found, likely due to premature termination: failing test run.
+fi
+
+echo Sanity check for completed tests...
+fgrep RESULT out/sequencer$suffix.out.save | fgrep -v " schemas " > out/expected.out || true
+result_count=$(cat out/expected.out | wc -l)
+target_count=$(fgrep "Running target" out/sequencer$suffix.log.save | wc -l) || true
+[[ $result_count == $target_count ]] || warn Found $result_count results for $target_count targets.
+
+GOLDEN_FILE=etc/sequencer${suffix}.out
+echo Checking for completed tests in $GOLDEN_FILE...
+while read result; do
+    echo Checking $GOLDEN_FILE for expected result: $result
+    fgrep "$result" $GOLDEN_FILE || fail Expected result not found: $result
+done < out/expected.out
+
+echo Done with $suffix test_sequencer run.

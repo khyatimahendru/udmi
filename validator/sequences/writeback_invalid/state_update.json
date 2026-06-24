@@ -1,0 +1,68 @@
+{
+  "discovery" : {
+    "families" : { }
+  },
+  "localnet" : {
+    "families" : {
+      "ether" : {
+        "addr" : "7c:1e:52:b8:5b:89"
+      },
+      "ipv4" : {
+        "addr" : "10.1.0.142"
+      },
+      "vendor" : {
+        "addr" : "28179023"
+      },
+      "bacnet" : {
+        "addr" : "27312"
+      }
+    }
+  },
+  "pointset" : {
+    "points" : {
+      "filter_alarm_pressure_status" : {
+        "units" : "No-units"
+      },
+      "filter_differential_pressure_setpoint" : {
+        "units" : "Bars",
+        "value_state" : "applied"
+      },
+      "filter_differential_pressure_sensor" : {
+        "units" : "Degrees-Celsius",
+        "value_state" : "invalid",
+        "status" : {
+          "message" : "Written value is not valid",
+          "detail" : "Point filter_differential_pressure_sensor (writable false)",
+          "category" : "pointset.point.invalid",
+          "timestamp" : "TIMESTAMP",
+          "level" : 500
+        }
+      }
+    }
+  },
+  "system" : {
+    "last_config" : "TIMESTAMP",
+    "operation" : {
+      "operational" : true,
+      "last_start" : "TIMESTAMP",
+      "restart_count" : 1,
+      "mode" : "initial"
+    },
+    "serial_no" : "sequencer-20687",
+    "hardware" : {
+      "make" : "BOS",
+      "model" : "pubber"
+    },
+    "software" : {
+      "firmware" : "v1"
+    },
+    "status" : {
+      "message" : "success",
+      "category" : "system.config.apply",
+      "timestamp" : "TIMESTAMP",
+      "level" : 300
+    }
+  },
+  "timestamp" : "TIMESTAMP",
+  "version" : "1.5.3"
+}

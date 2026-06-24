@@ -1,0 +1,34 @@
+//
+// Discovery result for a network scan (e.g. BACnet discovery scan), including
+// an implicit object point enumeration.
+//
+// Sent on MQTT topic: /devices/{device_id}/events/discovery
+// where {device_id} is that of the discovery node (e.g. gateway). The {device_id}
+// of the enumerated node is provided by families.iot.id in the message payload.
+//
+{
+  "version": "1.5.2",
+  "timestamp": "2018-08-26T21:39:29.364Z",
+  "generation": "2018-08-26T21:37:12Z",
+  "family": "bacnet",
+  "addr": "872849",
+  "event_no": 2,
+  "families": {
+    "bacnet": {
+      "addr": "872849"
+    }
+  },
+  "refs": {
+    "sup_flow_actual_avo_1": {
+      "status": {
+        "message": "Timeout during point communication",
+        "category": "discovery.point.describe",
+        "timestamp": "2018-08-26T21:39:28.364Z",
+        "level": 600
+      }
+    },
+    "another_point": {
+      "description": "Nothing to see here! All is good."
+    }
+  }
+}

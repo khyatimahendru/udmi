@@ -1,0 +1,9 @@
+{
+  "families" : {
+    "vendor" : {
+      "generation" : "TIMESTAMP",
+      "scan_duration_sec" : 10,
+      "depth" : "details"
+    }
+  }
+}

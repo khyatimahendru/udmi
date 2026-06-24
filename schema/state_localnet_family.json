@@ -1,0 +1,14 @@
+{
+  "$udmi_version": "1.5.2",
+  "type": "object",
+  "additionalProperties": false,
+  "title": "Family Localnet State",
+  "properties": {
+    "addr": {
+      "type": "string"
+    },
+    "status": {
+      "$ref": "file:entry.json"
+    }
+  }
+}

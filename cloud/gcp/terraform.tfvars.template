@@ -1,0 +1,35 @@
+#See the variable.tf file for a list of all the variables that can be configured and their default values.
+#Variables can be overriden here as needed when a default is provided. They must be defined here when no default is provided.
+
+# GCP Settings
+gcp_project_id   = "@GCP_PROJECT_ID@"
+gcp_project_name   = "@GCP_PROJECT_NAME@"
+gcp_region    = "@GCP_PROJECT_REGION@"
+gcp_auth_file = "./auth/credentials.json"
+
+# Storage Buckets
+tf-state-bucket-name   = "@GCP_PROJECT_NAME@-terraform"
+tf-state-storage-class = "STANDARD"
+
+# Access
+gcp_access_group = "group:@GCP_PROJECT_GROUP@"
+
+# Log level
+log_level = "DEBUG"
+
+#cloud DNS variables and ssl domains for UDMIF. Use a domain you own.
+dns_name        = "udmi.mydomain.com."
+ssl_domains = ["web.udmi.mydomain.com", "api.udmi.mydomain.com"]
+
+#GKE an other related variables
+
+## Postgresql variable
+instance_name    = "PostgreSQLInstaceName"
+database_version = "PostgreSQLserverVersion"
+region           = "@GCP_PROJECT_REGION@"
+tier             = "TheMachineType"
+environment      = "InstanceEnvforLabel"
+db_name          = "DataBaseName"
+db_user          = "DataBaseUser"
+password         = "DataBasePassword"
+

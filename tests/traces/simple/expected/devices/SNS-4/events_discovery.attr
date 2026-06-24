@@ -1,0 +1,10 @@
+{
+  "deviceId" : "SNS-4",
+  "deviceNumId" : "00000079057151",
+  "deviceRegistryId" : "ZZ-TRI-FECTA",
+  "msgSource" : "002_events_discovery.json",
+  "projectId" : "playback-project",
+  "publishTime" : "1999-10-20T01:02:03Z",
+  "subFolder" : "discovery",
+  "subType" : "events"
+}

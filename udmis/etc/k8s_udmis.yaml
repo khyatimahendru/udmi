@@ -1,0 +1,71 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: @TARGET@-pods
+spec:
+  selector:
+    matchLabels:
+      app: @TARGET@
+      role: master
+      tier: backend
+  replicas: 3
+  template:
+    metadata:
+      labels:
+        app: @TARGET@
+        role: master
+        tier: backend
+    spec:
+      containers:
+      - name: @TARGET@-core
+        image: @IMAGE@
+        imagePullPolicy: Always
+        readinessProbe:
+          exec:
+            command:
+              - cat
+              - /tmp/pod_ready.txt
+        resources:
+          requests:
+            cpu: 100m
+            memory: 300Mi
+        volumeMounts:
+        - name: secret-volume
+          mountPath: /udmi
+          readOnly: true
+        env:
+        - name: UDMI_NAMESPACE
+          valueFrom:
+            configMapKeyRef:
+              name: config
+              key: UDMI_NAMESPACE
+              optional: true
+        - name: ETCD_CLUSTER
+          valueFrom:
+            configMapKeyRef:
+              name: config
+              key: ETCD_CLUSTER
+              optional: true
+        - name: BITBOX_DISCOVERY
+          valueFrom:
+            configMapKeyRef:
+              name: config
+              key: BITBOX_DISCOVERY
+              optional: true
+      volumes:
+      - name: secret-volume
+        projected:
+          sources:
+          - secret:
+              name: clearblade.json
+          - secret:
+              name: shunt-config.json
+              optional: true
+      - name: tmp
+        emptyDir:
+          medium: Memory
+      - name: var
+        projected:
+          sources:
+          - configMap:
+              name: config

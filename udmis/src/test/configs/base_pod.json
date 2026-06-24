@@ -1,0 +1,31 @@
+{
+  "flow_defaults": {
+    "protocol": "local",
+    "hostname": "foo"
+  },
+  "flows": {
+    "target": {
+      "recv_id": "udmi_target",
+      "send_id": "iot_access"
+    },
+    "state": {
+      "recv_id": "udmi_state",
+      "send_id": "udmi_target"
+    },
+    "reflect": {
+      "recv_id": "udmi_reflect",
+      "send_id": "udmi_target"
+    },
+    "distributor": {
+      "protocol": "local",
+      "send_id": "mark",
+      "recv_id": "mend",
+      "hostname": "foo"
+    }
+  },
+  "iot_access": {
+    "iot-access": {
+      "provider": "local"
+    }
+  }
+}

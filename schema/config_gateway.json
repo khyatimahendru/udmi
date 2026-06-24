@@ -1,0 +1,23 @@
+{
+  "$udmi_version": "1.5.2",
+  "title": "Gateway Config",
+  "description": "Configuration for gateways. Only required for devices which are acting as [gateways](../docs/specs/gateway.md)",
+  "type": "object",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+    "proxy_ids": {
+      "description": "An array of all the device IDs which are bound to the device",
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Z]{2,6}-[1-9][0-9]*$"
+      },
+      "examples": [["AHU-22"]]
+    },
+    "target": {
+      "description": "For proxied devices, this represents the target proxy device address for use by its gateway",
+      "$ref": "file:model_localnet_family.json"
+    }
+  }
+}

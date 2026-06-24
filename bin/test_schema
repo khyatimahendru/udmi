@@ -1,0 +1,125 @@
+#!/bin/bash -e
+
+ROOT=$(dirname $0)/..
+cd $ROOT
+
+schema_root=../schemas
+
+errorfile=`mktemp`
+rm -f $errorfile
+
+build=y
+force=n
+upgrade=
+
+schemadir=schema
+testdir=tests/schemas/
+outroot=out
+rm -rf $outroot/tests
+
+while getopts "d:s:fnu" opt; do
+    case $opt in
+        f)
+            force=y
+            ;;
+        n)
+            build=n
+            ;;
+        u)
+            upgrade=-u
+            ;;
+        s)
+            subsets=${OPTARG}
+            ;;
+        d)
+            testdir=${OPTARG}
+            ;;
+        \?)
+            echo "Usage: $0 [-f] [-n] [-u] [-d TEST_DATA_DIR] [-s TEST_SUBSET]"
+            exit -1
+            ;;
+    esac
+done
+
+if [ "$build" == y ]; then
+    validator/bin/build
+fi
+
+jarfile=$(realpath validator/build/libs/validator-1.0-SNAPSHOT-all.jar)
+javarun="java -cp $jarfile com.google.daq.mqtt.validator.SchemaTester"
+
+if [[ -z $subsets ]]; then
+    subsets=$(cd $testdir; ls -d *)
+fi
+if [[ -z $subsets ]]; then
+    echo No tests found in $testdir
+    false
+fi
+echo Testing against $subsets
+for subset in $subsets; do
+    schemaname=${subset}.json
+    testfiles=$(cd $testdir/$subset; ls *.json || true)
+    testbase=$testdir/$subset
+
+    echo ================================== $subset
+
+    if [[ "$testbase" == "$schemadir" ]]; then
+        reltest=$subset
+    else
+        reldir=$(realpath --relative-to $schemadir $testdir)
+        reltest=$reldir:$subset
+    fi
+    cmd="$javarun -n -a $schemaname $upgrade -f $reltest"
+    echo $cmd
+    (cd $schemadir; $cmd) || true
+
+    for testfile in $testfiles; do
+        outfile=${testfile%.json}.out
+        testbase=$testdir/$subset
+        testpath=$testbase/$testfile
+        expected=$testbase/$outfile
+        outdir=$outroot/${testbase}
+        mkdir -p $outdir
+        output=$outdir/$outfile
+
+        if [[ ! -f $expected ]]; then
+            echo Missing expected reference file $expected
+            if [ $force == y ]; then
+                touch $expected
+            else
+                echo '    ' touch $expected | tee -a $errorfile
+                continue
+            fi
+        fi
+
+        if [[ "$testbase" == "$schemadir" ]]; then
+          reltest=${testpath#$testbase/}
+        else
+          reldir=$(realpath --relative-to $schemadir $testdir)
+          reltest=$reldir:$(realpath --relative-to $testdir $testpath)
+        fi
+
+        if [ $force == y ]; then
+            diff $output $expected || echo Updating $expected && cp $output $expected
+        else
+            echo diff -b $output $expected
+            diff -b $output $expected || (echo '   ' diff $output $expected | tee -a $errorfile)
+        fi
+
+        if [[ -n $upgrade ]]; then
+            upgrade_new=${output%.out}.json
+            diff $upgrade_new $testpath || (echo cp $upgrade_new $testpath | tee -a $errorfile)
+        fi
+    done
+done
+
+echo ==================================
+echo
+
+if [ -f $errorfile ]; then
+    echo Validation errors found in $(pwd):
+    cat $errorfile
+    false
+fi
+
+echo Done with validation.

@@ -1,0 +1,62 @@
+TEST device_config_acked noConfigAck
+TEST pointset_request_extraneous extraPoint=llama
+TEST pointset_remove_point missingPoint=filter_alarm_pressure_status
+TEST pointset_remove_point noState
+TEST too_much_state spamState
+TEST enumerate_features featureEnableSwap
+TEST valid_serial_no noLastStart
+TEST valid_serial_no noFolder
+TEST valid_serial_no msTimestamp
+TEST writeback_success extraPoint=filter_differential_pressure_setpoint
+TEST writeback_success noWriteback
+TEST writeback_success noPointState
+TEST writeback_operation fastWrite
+TEST writeback_operation delayWrite
+TEST pointset_publish_interval fixedSampleRate=10
+TEST system_min_loglevel fixedLogLevel=100
+TEST system_mode_restart noPersist
+TEST pointset_publish badVersion
+TEST broken_config barfConfig
+TEST broken_config configStateDelay
+TEST broken_config noState
+TEST broken_config noStatus
+TEST broken_config noLog
+TEST broken_config badCategory
+TEST broken_config badLevel
+TEST system_last_update extraField=fnooz
+TEST system_last_update dupeState
+TEST system_last_update badLevel
+TEST state_make_model badState
+
+# Test with various device metadata.json options
+WITH AHU-1 noState
+TEST valid_serial_no
+TEST system_last_update noState
+TEST system_min_loglevel
+TEST system_min_loglevel noState
+
+# Test gateway configurations
+WITH GAT-123
+TEST gateway_proxy_events
+TEST gateway_proxy_events noProxy
+TEST gateway_proxy_state
+TEST gateway_proxy_state noProxy
+TEST scan_single_future
+TEST scan_periodic_now_enumerate
+
+# Test gateway configurations that doesn't do state
+WITH GAT-123 noState
+TEST gateway_proxy_events noState
+TEST gateway_proxy_events badState
+TEST gateway_proxy_state noState
+
+# Test proxy device configurations
+WITH AHU-22
+TEST device_config_acked
+TEST bad_target_family
+TEST bad_target_address
+TEST bad_point_ref
+
+# Test a proxy device with a different configuration
+WITH SNS-4
+TEST bad_point_ref

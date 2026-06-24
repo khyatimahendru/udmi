@@ -1,0 +1,9 @@
+{
+  "enumerations" : {
+    "points" : "entries"
+  },
+  "families" : {
+    "vendor" : { },
+    "bacnet" : { }
+  }
+}

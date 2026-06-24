@@ -1,0 +1,84 @@
+{
+  "$udmi_version": "1.5.2",
+  "title": "Ref Discovery",
+  "description": "Object representation for for a single point reference discovery",
+  "type": "object",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+    "point": {
+      "description": "Point descriptor for this point",
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(_[a-z0-9]+)*$"
+    },
+    "name": {
+      "description": "Friendly name for the reference, if known",
+      "type": "string"
+    },
+    "possible_values": {
+      "description": "List of possible enumerated values for the point",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "units": {
+      "description": "Current or default unit for this point",
+      "type": "string"
+    },
+    "ref": {
+      "description": "Family reference for structures",
+      "type": "string"
+    },
+    "type": {
+      "description": "Current or default type for this point",
+      "type": "string"
+    },
+    "writable": {
+      "description": "Indicates if this point is writable or not",
+      "type": "boolean"
+    },
+    "description": {
+      "description": "Human-readable description of this point",
+      "type": "string"
+    },
+    "status": {
+      "$ref": "file:entry.json"
+    },
+    "ancillary": {
+      "$ref": "file:ancillary_properties.json"
+    },
+    "adjunct": {
+      "type": "object",
+      "existingJavaType": "java.util.Map<String, String>",
+      "additionalProperties": false,
+      "patternProperties": {
+        "^[a-z_]+$": {
+          "type": "string"
+        }
+      }
+    },
+    "structure": {
+      "type": "object",
+      "properties": {
+        "point": {
+          "type": "object",
+          "additionalProperties": false,
+          "existingJavaType": "FamilyDiscovery",
+          "$ref": "file:discovery_family.json"
+        },
+        "families": {
+          "description": "Reference links to alternate families",
+          "type": "object",
+          "additionalProperties": false,
+          "existingJavaType": "java.util.Map<String, FamilyDiscovery>",
+          "patternProperties": {
+            "^[a-z][a-z0-9]*(_[a-z0-9]+)*$": {
+              "$ref": "file:discovery_family.json"
+            }
+          }
+        }
+      }
+    }
+  }
+}

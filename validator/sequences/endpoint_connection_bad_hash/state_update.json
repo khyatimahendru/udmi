@@ -1,0 +1,75 @@
+{
+  "blobset" : {
+    "blobs" : {
+      "_iot_endpoint_config" : {
+        "phase" : "final",
+        "status" : {
+          "message" : "java.lang.RuntimeException: Blob data hash mismatch",
+          "detail" : "java.lang.RuntimeException: java.lang.RuntimeException: Blob data hash mismatch\n\tat udmi.lib.client.host.PublisherHost.maybeRedirectEndpoint(PublisherHost.java:707)\n\tat udmi.lib.client.host.PublisherHost.deferredConfigActions(PublisherHost.java:556)\n\tat udmi.lib.client.host.PublisherHost.periodicUpdate(PublisherHost.java:231)\n\tat daq.pubber.impl.host.PubberPublisherHost.periodicUpdate(PubberPublisherHost.java:311)\n\tat java.base/java.util.concurrent.Executors$RunnableAdapter.call(Executors.java:572)\n\tat java.base/java.util.concurrent.FutureTask.runAndReset(FutureTask.java:358)\n\tat java.base/java.util.concurrent.ScheduledThreadPoolExecutor$ScheduledFutureTask.run(ScheduledThreadPoolExecutor.java:305)\n\tat java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1144)\n\tat java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:642)\n\tat java.base/java.lang.Thread.run(Thread.java:1583)\n",
+          "category" : "blobset.blob.apply",
+          "timestamp" : "TIMESTAMP",
+          "level" : 500
+        },
+        "generation" : "TIMESTAMP"
+      }
+    }
+  },
+  "discovery" : {
+    "families" : { }
+  },
+  "localnet" : {
+    "families" : {
+      "ether" : {
+        "addr" : "7c:1e:52:ff:0a:df"
+      },
+      "ipv4" : {
+        "addr" : "10.1.0.174"
+      },
+      "vendor" : {
+        "addr" : "28179023"
+      },
+      "bacnet" : {
+        "addr" : "27312"
+      }
+    }
+  },
+  "pointset" : {
+    "points" : {
+      "filter_alarm_pressure_status" : {
+        "units" : "No-units"
+      },
+      "filter_differential_pressure_setpoint" : {
+        "units" : "Bars",
+        "value_state" : "applied"
+      },
+      "filter_differential_pressure_sensor" : {
+        "units" : "Degrees-Celsius"
+      }
+    }
+  },
+  "system" : {
+    "last_config" : "TIMESTAMP",
+    "operation" : {
+      "operational" : true,
+      "last_start" : "TIMESTAMP",
+      "restart_count" : 1,
+      "mode" : "initial"
+    },
+    "serial_no" : "sequencer-5676",
+    "hardware" : {
+      "make" : "BOS",
+      "model" : "pubber"
+    },
+    "software" : {
+      "firmware" : "v1"
+    },
+    "status" : {
+      "message" : "success",
+      "category" : "system.config.apply",
+      "timestamp" : "TIMESTAMP",
+      "level" : 300
+    }
+  },
+  "timestamp" : "TIMESTAMP",
+  "version" : "1.5.3"
+}

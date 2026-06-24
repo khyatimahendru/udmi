@@ -1,0 +1,36 @@
+{
+  "gateway": {
+    "target": {
+      "addr": "582312",
+      "family": "bacnet"
+    }
+  },
+  "localnet": {
+    "families": {
+      "bacnet": {}
+    }
+  },
+  "pointset": {
+    "points": {
+      "filter_alarm_pressure_status": {
+        "ref": "BV:11#present_value",
+        "units": "No-units"
+      },
+      "filter_differential_pressure": {
+        "units": "Bars"
+      },
+      "filter_differential_pressure_sensor": {
+        "ref": "AV12.present_value",
+        "units": "Degrees-Celsius"
+      }
+    },
+    "sample_rate_sec": 30
+  },
+  "system": {
+    "metrics_rate_sec": 10,
+    "min_loglevel": 300,
+    "operation": {}
+  },
+  "timestamp": "2020-05-01T13:39:07Z",
+  "version": "1.5.3"
+}

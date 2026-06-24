@@ -1,0 +1,66 @@
+{
+  "cloud_version" : {
+    "deployed_by" : "Default implementation for class com.google.daq.mqtt.validator.MessageReadingClient"
+  },
+  "devices" : {
+    "AHU-1" : {
+      "last_seen" : "1999-10-20T01:02:03Z",
+      "status" : {
+        "category" : "validation.device.multiple",
+        "detail" : "1 schema violations found; missing pointset subblock; 1 schema violations found",
+        "level" : 500,
+        "message" : "Multiple validation errors",
+        "timestamp" : "1999-10-20T01:02:03Z"
+      }
+    },
+    "AHU-22" : {
+      "last_seen" : "1999-10-20T01:02:03Z",
+      "status" : {
+        "category" : "validation.device.multiple",
+        "detail" : "1 schema violations found; missing pointset subblock",
+        "level" : 500,
+        "message" : "Multiple validation errors",
+        "timestamp" : "1999-10-20T01:02:03Z"
+      }
+    },
+    "NON-1" : {
+      "last_seen" : "1999-10-20T01:02:03Z",
+      "status" : {
+        "category" : "validation.device.extra",
+        "detail" : "state_update: 1 schema violations found; /system: object has missing required properties ([\"serial_no\"])",
+        "level" : 400,
+        "message" : "1 schema violations found",
+        "timestamp" : "1999-10-20T01:02:03Z"
+      }
+    },
+    "NON-2" : {
+      "last_seen" : "1999-10-20T01:02:03Z",
+      "status" : {
+        "category" : "validation.device.extra",
+        "level" : 400,
+        "message" : "Successful validation",
+        "timestamp" : "1999-10-20T01:02:03Z"
+      }
+    },
+    "SNS-4" : {
+      "last_seen" : "1999-10-20T01:02:03Z",
+      "status" : {
+        "category" : "validation.device.schema",
+        "detail" : "While validating pointset message at 1999-10-20T01:02:03Z",
+        "level" : 500,
+        "message" : "missing pointset subblock",
+        "timestamp" : "1999-10-20T01:02:03Z"
+      }
+    }
+  },
+  "start_time" : "1999-10-20T01:02:03Z",
+  "summary" : {
+    "correct_devices" : [ ],
+    "error_devices" : [ "AHU-1", "AHU-22", "SNS-4" ],
+    "extra_devices" : [ "NON-1", "NON-2" ],
+    "missing_devices" : [ "GAT-123" ]
+  },
+  "timestamp" : "1999-10-20T01:02:03Z",
+  REDACTED,
+  "version" : "1.5.2"
+}

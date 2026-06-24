@@ -1,0 +1,53 @@
+{
+  "cloud": {},
+  "gateway": {
+    "gateway_id": "DDC-54",
+    "target": {
+      "family": "vendor"
+    }
+  },
+  "hash": "da852d15",
+  "localnet": {
+    "families": {
+      "vendor": {
+        "addr": "0x65"
+      }
+    }
+  },
+  "pointset": {
+    "points": {
+      "filter_alarm_pressure_status": {
+        "ref": "BV11.present_value",
+        "units": "No-units"
+      },
+      "filter_differential_pressure": {
+        "units": "Bars"
+      },
+      "filter_differential_pressure_sensor": {
+        "ref": "AV12.present_value",
+        "units": "Degrees-Celsius"
+      }
+    }
+  },
+  "system": {
+    "location": {
+      "position": {
+        "x": -111.0,
+        "y": 102.3
+      },
+      "section": "2-3N8C",
+      "site": "US-SFO-XYY"
+    },
+    "min_loglevel": 300,
+    "physical_tag": {
+      "asset": {
+        "guid": "bim://04aEp5ymD_$u5IxhJN2aGi",
+        "name": "AHU-1",
+        "site": "US-SFO-XYY"
+      }
+    }
+  },
+  "timestamp": "2020-05-01T13:39:07Z",
+  "upgraded_from": "1",
+  "version": "1.5.3"
+}

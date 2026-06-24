@@ -1,0 +1,27 @@
+{
+  "$udmi_version": "1.5.2",
+  "title": "Blob Blobset Config",
+  "type": "object",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+    "phase": {
+      "$ref": "file:common.json#/definitions/phase"
+    },
+    "url": {
+      "type": "string"
+    },
+    "sha256": {
+      "type": "string",
+      "description": "Expected hash of the retrieved resource",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "generation": {
+      "description": "RFC 3339 UTC timestamp of the blob generation",
+      "type": "string",
+      "format": "date-time",
+      "examples": ["2019-01-17T14:02:29.364Z"]
+    }
+  },
+  "required": ["url", "sha256", "phase", "generation"]
+}

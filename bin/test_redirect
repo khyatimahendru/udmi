@@ -1,0 +1,160 @@
+#!/bin/bash -e
+
+ROOT_DIR=$(dirname $0)/..
+cd $ROOT_DIR
+
+if [[ $# != 1 ]]; then
+    echo Usage: $0 PROJECT_SPEC
+    false
+fi
+
+project_spec=$1
+shift
+
+function log {
+    bin/timestamp $@
+}
+
+function fail {
+    bin/timestamp $@
+    false
+}
+
+log 'Using target project spec:' $project_spec
+project_id=${project_spec#//*/}
+project_id=${project_id%/*}
+
+site_path=sites/udmi_site_model
+device_id=AHU-1 # Static device for testing. Needs to be different than other tests scripts so as not to conflict during CI.
+out_base=$site_path/devices/$device_id/out # For officially generated files (in repo)
+config_base=$site_path/devices/$device_id/config # For config specifications
+work_base=$site_path/out/devices/$device_id # For runtime out files (transitory)
+rm -rf $work_base $out_base
+mkdir -p $work_base $out_base $config_base
+
+serial_no=sequencer-$RANDOM
+log Using pubber with serial $serial_no
+
+site_config=$site_path/cloud_iot_config.json
+cloud_region=$(jq -r .cloud_region $site_config)
+registry_id=$(jq -r .registry_id $site_config)
+
+PUBBER_LOG=out/pubber.log
+rm -f $PUBBER_LOG.*
+
+log Killing running pubber instances...
+ps ax | fgrep pubber | fgrep java | awk '{print $1}' | xargs kill || true
+
+bin/registrar $site_path
+bin/reset_config $site_path $project_spec $device_id
+
+log Running pubber with redirectRegistry on timeout
+timeout 1m unbuffer bin/pubber $site_path $project_spec $device_id $serial_no redirectRegistry=missing > $PUBBER_LOG.1 2>&1 || true
+
+log Checks that a redirect happened and failed...
+egrep -q '/r(egistries)?/(.*~)?ZZ-TRI-FECTA(_.*)?/d(evices)?/' $PUBBER_LOG.1 || bin/fail no ZZ-TRI-FECTA registry reference
+fgrep -q registries/missing/devices $PUBBER_LOG.1 || bin/fail no missing registry reference
+fgrep -q 'While waiting for connection start: Connection error' $PUBBER_LOG.1 || bin/fail no connection error
+fgrep -q 'Endpoint connection restored to last working endpoint' $PUBBER_LOG.1 || bin/fail no restore log message
+
+log Done with timeout, running pubber in background...
+bin/pubber $site_path $project_spec $device_id $serial_no > $PUBBER_LOG.2 2>&1 &
+
+# Wait for initial connection, then reset config to redirect
+sleep 20
+
+cat <<EOF > out/endpoint.json
+{
+  "protocol": "mqtt",
+  "client_id": "projects/$project_id/locations/$cloud_region/registries/reconfigure/devices/$device_id",
+  "topic_prefix": "/devices/$device_id",
+  "hostname": "mqtt.googleapis.com",
+  "auth_provider": {
+    "jwt": {
+      "audience": "$project_id"
+    }
+  }
+}
+EOF
+
+base64=$(base64 -w 0 out/endpoint.json)
+sha256=$(openssl sha256 < out/endpoint.json | awk '{print $2}')
+
+cat <<EOF > out/blobs.json
+{
+  "system": {
+    "operation": {
+      "mode": "active"
+    }
+  },
+  "blobset": {
+    "blobs": {
+      "_iot_endpoint_config": {
+        "phase": "final",
+        "url": "data:application/json;base64,$base64",
+        "sha256": "$sha256"
+      }
+    }
+  }
+}
+EOF
+
+# Merge JSON files together into new redirect config
+jq -s '.[0] * .[1]' $out_base/generated_config.json out/blobs.json > $config_base/redirect_config.json
+jq '.system.operation.mode = "restart"' $config_base/redirect_config.json > $config_base/restart_config.json
+
+log New redirection config:
+cat /tmp/${device_id}_config.json
+
+echo $config_base
+ls -l $config_base
+log bin/reset_config $site_path $project_spec $device_id redirect_config.json
+bin/reset_config $site_path $project_spec $device_id redirect_config.json
+
+log Let pubber react to the new configuration...
+sleep 20
+
+restarts=$(jq .restart_count $work_base/persistent_data.json)
+[[ $restarts -eq 1 ]] || fail Initial restart count incorrect, was $restarts expected 1
+
+log Restart the system...
+log bin/reset_config $site_path $project_spec $device_id restart_config.json
+bin/reset_config $site_path $project_spec $device_id restart_config.json
+
+log And wait a stupid long time to test error recovery...
+sleep 120
+
+tail out/pubber.log.2
+
+restarts=$(jq .restart_count $work_base/persistent_data.json)
+[[ $restarts -eq 2 ]] || fail Reset restart count incorrect, was $restarts expected 2
+
+# Now test that pubber responds to an later last_start config (to trigger automatic shutdown)
+now_date=$(python3 -c 'import datetime; print(datetime.datetime.utcnow().isoformat() + "Z")')
+log Setting last_start time to $now_date for pubber shutdown...
+jq ".system.operation.last_start = \"$now_date\"" $config_base/redirect_config.json > $config_base/shutdown_config.json
+log bin/reset_config $site_path $project_spec $device_id shutdown_config.json
+bin/reset_config $site_path $project_spec $device_id shutdown_config.json
+
+log And let it settle for last start termination...
+sleep 125
+
+tail out/pubber.log.2
+
+restarts=$(jq .restart_count $work_base/persistent_data.json)
+[[ $restarts -eq 2 ]] || fail Shutdown restart count incorrect, was $restarts expected 2
+
+log Checking for lingering pubber instances...
+instances=$(ps ax | fgrep pubber | fgrep java | awk '{print $1}' | wc -l)
+[[ $instances -eq 0 ]] || fail Unexpected lingering pubber instances found.
+
+log Check basic redirect-by-config setup...
+egrep -q '/r(egistries)?/(.*~)?ZZ-TRI-FECTA(_.*)?/d(evices)?/' $PUBBER_LOG.2 || bin/fail no ZZ-TRI-FECTA registry reference
+fgrep -q 'registries/reconfigure/devices' $PUBBER_LOG.2 || bin/fail no reconfigure registry reference
+fgrep -q 'While waiting for connection start: Connection error' $PUBBER_LOG.2 || bin/fail no connection error
+fgrep -q 'Endpoint connection restored to last working endpoint' $PUBBER_LOG.2 || bin/fail no connection restore
+fgrep -q 'Stopping system with extreme prejudice, restart restart' $PUBBER_LOG.2 || bin/fail no restart to restart
+fgrep -q 'Stopping system with extreme prejudice, restart terminate' $PUBBER_LOG.2 || bin/fail no restart to terminate
+fgrep -q 'Done with pubber run, exit code 193' $PUBBER_LOG.2 || bin/fail no auto-kill exit code
+
+log Done with redirect tests.

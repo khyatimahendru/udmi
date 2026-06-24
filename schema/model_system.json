@@ -1,0 +1,302 @@
+{
+  "$udmi_version": "1.5.2",
+  "title": "System Model",
+  "description": "High-level system information about the device. [System Model Documentation](../docs/messages/system.md)",
+  "type": "object",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+    "name": {
+      "description": "Friendly name describing this device",
+      "type": "string",
+      "$presentation": {
+        "display": "show",
+        "style": "bold"
+      }
+    },
+    "description": {
+      "description": "Generic human-readable text describing the device",
+      "type": "string",
+      "$presentation": {
+        "display": "show",
+        "style": "bold"
+      }
+    },
+    "device_version": {
+      "description": "Version of schema supported by the device",
+      "type": "string",
+      "examples": ["1.5.0"],
+      "$presentation": {
+        "display": "show",
+        "style": "bold"
+      }
+    },
+    "zone": {
+      "description": "Aggregation of spaces, partial spaces or other zones that the device is serving",
+      "type": "string",
+      "pattern": "^[-_a-zA-Z0-9]+$",
+      "examples": ["Zone1", "Kitchen_101"],
+      "$presentation": {
+        "display": "show",
+        "style": "bold"
+      }
+    },
+    "node_type": {
+      "description": "The description of what kind of node this is.",
+      "type": "string",
+      "pattern": "^[a-z][_a-z0-9]+$",
+      "examples": ["vitual_device", "field_group", "field_controller", "network_scan_agent"],
+      "$presentation": {
+        "display": "show",
+        "style": "bold"
+      }
+    },
+    "tags":{
+      "description": "Tags associated with the device",
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "pattern": "^[a-z][_a-z0-9]+$"
+      },
+      "examples": [["lighting"], ["energy", "building", "vendor_managed"]],
+      "$presentation": {
+        "display": "show",
+        "style": "bold"
+      }
+    },
+    "location": {
+      "description": "Properties of the expected physical location of the device",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "site": {
+          "description": "The site name according to the site model in which the device is installed in",
+          "type": "string",
+          "pattern": "^[A-Z]{2}-[A-Z]{3,4}-[A-Z0-9]{2,9}$",
+          "examples": ["US-SFO-XYY"],
+          "$presentation": {
+            "display": "show",
+            "style": "bold"
+          }
+        },
+        "panel": {
+          "description": "The reference of the panel where the device is installed in",
+          "type": "string",
+          "pattern": "^[-_a-zA-Z0-9]+$",
+          "examples": ["Panel123", "CTRP-567"],
+          "$presentation": {
+            "display": "show",
+            "style": "bold"
+          }
+        },
+        "section": {
+          "type": "string",
+          "pattern": "^[A-Z0-9-]+$",
+          "$presentation": {
+            "display": "show",
+            "style": "bold"
+          }
+        },
+        "room": {
+          "type": "string",
+          "pattern": "^[-_a-zA-Z0-9]+$",
+          "$presentation": {
+            "display": "show",
+            "style": "bold"
+          }
+        },
+        "floor": {
+          "type": "string",
+          "description": "Name of floor level",
+          "pattern": "^[A-Z0-9-]+$",
+          "examples": ["1", "1A", "G", "B1M", "RF"],
+          "$presentation": {
+            "display": "show",
+            "style": "bold"
+          }
+        },
+        "floor_seq": {
+          "type": "integer",
+          "description": "Sequential integer representation for a floor, primarily for comparisons when non integer floors are used, e.g. 1 and 1M",
+          "$presentation": {
+            "display": "show",
+            "style": "bold"
+          }
+        },
+        "position": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "x": {
+              "description": "The `x` coordinate of the device location in a project specific coordinate system",
+              "type": "number",
+              "$presentation": {
+                "display": "show",
+                "style": "bold"
+              }
+            },
+            "y": {
+              "description": "The `y` coordinate of the device location in a project specific coordinate system",
+              "type": "number",
+              "$presentation": {
+                "display": "show",
+                "style": "bold"
+              }
+            },
+            "z": {
+              "description": "The `z` (height) coordinate of the device location in a project specific coordinate system",
+              "type": "number",
+              "$presentation": {
+                "display": "show",
+                "style": "bold"
+              }
+            }
+          }
+        },
+        "coordinates": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "lat": {
+              "description": "The `latitude` coordinate of the device in the WGS84 coordinate system",
+              "type": "number",
+              "$presentation": {
+                "display": "show",
+                "style": "bold"
+              }
+            },
+            "long": {
+              "description": "The `longitude` coordinate of the device in the WGS84 coordinate system",
+              "type": "number",
+              "$presentation": {
+                "display": "show",
+                "style": "bold"
+              }
+            },
+            "alt_m": {
+              "description": "The `altitude` coordinate of the device in meters",
+              "type": "number",
+              "$presentation": {
+                "display": "show",
+                "style": "bold"
+              }
+            }
+          }
+        }
+      },
+      "required": [
+        "site"
+      ]
+    },
+    "serial_no": {
+      "description": "The serial number of the physical device",
+      "type": "string",
+      "examples": ["A1B2C3D4", "00001"],
+      "$presentation": {
+        "display": "show",
+        "style": "bold"
+      }
+    },
+    "hardware": {
+      "$ref": "file:model_system_hardware.json"
+    },
+    "software": {
+      "additionalProperties": false,
+      "description": "A collection of items which can be used to describe version of software running on a device",
+      "examples": ["firmware", "os", "driver"],
+      "type": "object",
+      "existingJavaType": "java.util.Map<String, String>",
+      "patternProperties": {
+        "^[a-z_]+$": {
+          "type": "string"
+        }
+      },
+      "$presentation": {
+        "paths": {
+          "firmware": { "style": "bold" },
+          "os": { "style": "bold" },
+          "driver": { "style": "bold" }
+        }
+      }
+    },    
+    "physical_tag": {
+      "description": "Information used to print a physical QR code label.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "asset": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "guid": {
+              "type": "string",
+              "pattern": "^[a-z]+://[-0-9a-zA-Z_$]+$",
+              "$presentation": {
+                "display": "show",
+                "style": "bold"
+              }
+            },
+            "site": {
+              "type": "string",
+              "pattern": "^[A-Z]{2}-[A-Z]{3,4}-[A-Z0-9]{2,9}$",
+              "$presentation": {
+                "display": "show",
+                "style": "bold"
+              }
+            },
+            "name": {
+              "type": "string",
+              "pattern": "^[A-Z]{2,6}-[1-9][0-9]*$",
+              "$presentation": {
+                "display": "show",
+                "style": "bold"
+              }
+            }
+          },
+          "required": [
+            "guid",
+            "name"
+          ]
+        }
+      },
+      "required": [
+        "asset"
+      ]
+    },
+    "adjunct": {
+      "type": "object",
+      "additionalProperties": false,
+      "existingJavaType": "java.util.Map<String, String>",
+      "patternProperties": {
+        "^[a-z_]+$": {
+          "type": "string"
+        }
+      },
+      "$presentation": {
+        "display": "show",
+        "style": "bold"
+      }
+    },
+    "min_loglevel": {
+      "description": "The minimum loglevel for reporting log messages below which log entries should not be sent. Default to 300.",
+      "type": "integer",
+      "minimum": 100,
+      "maximum": 800,
+      "default": 300,
+      "$presentation": {
+        "display": "show",
+        "style": "bold"
+      }
+    },
+    "metrics_rate_sec": {
+      "description": "The rate at which the system should send system event updates. 0 indicates no updates.",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 86400,
+      "$presentation": {
+        "display": "show",
+        "style": "bold"
+      }
+    }
+  }
+}

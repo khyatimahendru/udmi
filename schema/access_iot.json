@@ -1,0 +1,26 @@
+{
+  "$udmi_version": "1.5.2",
+  "type": "object",
+  "title": "Iot Access",
+  "additionalProperties": false,
+  "properties": {
+    "name": {
+      "type": "string"
+    },
+    "provider": {
+      "$ref": "file:common.json#/definitions/iot_provider"
+    },
+    "project_id": {
+      "type": "string"
+    },
+    "profile_sec": {
+      "type": "integer"
+    },
+    "options": {
+      "type": "string"
+    },
+    "endpoint": {
+      "$ref": "file:configuration_endpoint.json"
+    }
+  }
+}

@@ -1,0 +1,61 @@
+{
+  "pointset": {
+    "exclude_points_from_config": true,
+    "points": {
+      "triangulating_axis": {
+        "units": "Degrees-phase"
+      },
+      "split_threshold": {
+        "units": "Imperial-gallons-per-minute"
+      },
+      "fan_status": {
+        "ref": "1/101?type=BOOLEAN"
+      },
+      "filter_differential_pressure": {
+        "units": "Pascals",
+        "ref": "4/30005?type=UINT32&worder=LWF&scale=0.01"
+      },
+      "test_offset_point": {
+        "ref": "3/40001?type=INT16&scale=0.1&offset=100.5"
+      }
+    }
+  },
+  "system": {
+    "location": {
+      "section": "2-3N8C"
+    },
+    "physical_tag": {
+      "asset": {
+        "guid": "drw://TBA",
+        "site": "ZZ-TRI-FECTA",
+        "name": "SNS-4"
+      }
+    }
+  },
+  "externals": {
+    "dbo": {
+      "ext_id": "0060917f-8c21-47c4-b011-52521085fdc3",
+      "type": "HVAC/VAV_SD_DSP",
+      "label": "VAV CO 1-2-37"
+    },
+    "ifc": {
+      "ext_id": "a87a9b4b-e9e5-424b-9a4e-22378987dddd",
+      "etag": "98bac980",
+      "type": "IfcDoor"
+    },
+    "json_ld": {
+      "ext_id": "https://dbpedia.org/page/John_Lennon",
+      "type": "person"
+    }
+  },
+  "gateway": {
+    "gateway_id": "GAT-123",
+    "target": {
+      "family": "modbus",
+      "addr": "2",
+      "network_id": "modbus_rtu_1"
+    }
+  },
+  "version": "1.5.2",
+  "timestamp": "2020-05-01T13:39:07Z"
+}

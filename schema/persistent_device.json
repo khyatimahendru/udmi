@@ -1,0 +1,18 @@
+{
+  "$udmi_version": "1.5.2",
+  "title": "Device Persistent",
+  "description": "Device persistent data",
+  "additionalProperties": true,
+  "properties": {
+    "endpoint": {
+      "$ref": "file:configuration_endpoint.json"
+    },
+    "restart_count": {
+      "type": "integer"
+    },
+    "applied_blobs": {
+      "type": "object",
+      "existingJavaType": "java.util.HashMap<String, String>"
+    }
+  }
+}

@@ -1,0 +1,8 @@
+#!/bin/sh
+set -o errexit -o nounset
+
+docker run --rm \
+  -p 8080:8080 \
+  -p 8443:8443 \
+  -v "$(dirname "$0")"/data:/opt/mango-data \
+  ghcr.io/radixiot/mango:latest

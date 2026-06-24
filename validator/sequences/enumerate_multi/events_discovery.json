@@ -1,0 +1,66 @@
+{
+  "families" : {
+    "ether" : {
+      "addr" : "60:45:bd:7d:d2:f7"
+    },
+    "ipv4" : {
+      "addr" : "10.1.0.133"
+    },
+    "vendor" : {
+      "addr" : "28179023"
+    },
+    "bacnet" : {
+      "addr" : "27312"
+    }
+  },
+  "family" : "iot",
+  "features" : {
+    "enumeration.families" : {
+      "stage" : "preview"
+    },
+    "endpoint.config" : {
+      "stage" : "beta"
+    },
+    "system" : {
+      "stage" : "beta"
+    },
+    "enumeration.features" : {
+      "stage" : "beta"
+    },
+    "system.mode" : {
+      "stage" : "beta"
+    },
+    "pointset" : {
+      "stage" : "beta"
+    },
+    "enumeration.pointset" : {
+      "stage" : "preview"
+    },
+    "enumeration" : {
+      "stage" : "stable"
+    },
+    "discovery.scan" : {
+      "stage" : "preview"
+    }
+  },
+  "generation" : "TIMESTAMP",
+  "points" : {
+    "filter_alarm_pressure_status" : {
+      "units" : "No-units",
+      "ref" : "BV11.present_value"
+    },
+    "filter_differential_pressure_setpoint" : {
+      "units" : "Bars",
+      "writable" : true,
+      "baseline_value" : 98
+    },
+    "filter_differential_pressure_sensor" : {
+      "units" : "Degrees-Celsius",
+      "baseline_value" : 10,
+      "baseline_tolerance" : 2.0,
+      "ref" : "AV12.present_value"
+    }
+  },
+  "timestamp" : "TIMESTAMP",
+  "version" : "1.5.3"
+}

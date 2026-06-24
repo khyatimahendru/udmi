@@ -1,0 +1,10 @@
+{
+  "families" : {
+    "vendor" : {
+      "generation" : "TIMESTAMP",
+      "phase" : "stopped"
+    }
+  },
+  "timestamp" : "TIMESTAMP",
+  "version" : "1.5.3"
+}

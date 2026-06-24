@@ -1,0 +1,27 @@
+{
+  "cloud": {
+    "auth_type": "ES256",
+    "config": {
+      "static_file": "notjson.txt"
+    }
+  },
+  "gateway": {
+    "proxy_ids": []
+  },
+  "hash": "f8995442",
+  "system": {
+    "location": {
+      "section": "2-3N8C"
+    },
+    "min_loglevel": 300,
+    "physical_tag": {
+      "asset": {
+        "guid": "drw://TBB",
+        "name": "GAT-456",
+        "site": "ZZ-TRI-FECTA"
+      }
+    }
+  },
+  "timestamp": "2020-05-01T13:39:07Z",
+  "version": "1.5.2"
+}

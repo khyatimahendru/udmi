@@ -1,0 +1,101 @@
+{
+  "$udmi_version": "1.5.2",
+  "title": "Metadata",
+  "description": "[Metadata](../docs/specs/metadata.md) is a description about the device: a specification about how the device should be configured and expectations about what the device should be doing. Defined by `metadata.json`",
+  "$section": "Site Model",
+  "type": "object",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "required": [ 
+    "timestamp",
+    "version",
+    "system"
+  ],
+  "properties": {
+    "timestamp": {
+      "description": "RFC 3339 timestamp UTC the data was generated",
+      "type": "string",
+      "format": "date-time",
+      "examples": ["2019-01-17T14:02:29.364Z"]
+    },
+    "version": {
+      "description": "Version of the UDMI schema for this file",
+      "type": "string"
+    },
+    "upgraded_from": {
+      "description": "Original version of the UDMI schema for this file",
+      "type": "string"
+    },
+    "hash": {
+      "description": "DEPRECATED",
+      "type": "string",
+      "pattern": "^[0-9a-z]{8}$"
+    },
+    "operation": {
+      "description": "Used for model update operations (so not a model proper), e.g. DELETE or BIND operations",
+      "$ref": "file:common.json#/definitions/operation"
+    },
+    "cloud": {
+      "$ref": "file:model_cloud.json#",
+      "$presentation": {
+        "section": "cloud"
+      }
+    },
+    "system": {
+      "$ref": "file:model_system.json#",
+      "$presentation": {
+        "section": "system"
+      }
+    },
+    "externals": {
+      "$ref": "file:model_externals.json#"
+    },
+    "relationships": {
+      "$ref": "file:model_relationships.json#"
+    },
+    "gateway": {
+      "$ref": "file:model_gateway.json#",
+      "$presentation": {
+        "section": "gateway"
+      }
+    },
+    "discovery": {
+      "$ref": "file:model_discovery.json#"
+    },
+    "localnet": {
+      "$ref": "file:model_localnet.json#",
+      "$presentation": {
+        "section": "localnet"
+      }
+    },
+    "testing": {
+      "$ref": "file:model_testing.json#"
+    },
+    "features": {
+      "$ref": "file:model_features.json#"
+    },
+    "alarmset": {
+      "$ref": "file:model_alarmset.json#",
+      "$presentation": {
+        "section": "alarmset"
+      }
+    },
+    "pointset": {
+      "$ref": "file:model_pointset.json#",
+      "$presentation": {
+        "section": "pointset"
+      }
+    },
+    "structure": {
+      "existingJavaType": "java.util.HashMap<String, DiscoveryEvents>",
+      "patternProperties": {
+        "^[a-z][a-z0-9]*(_[a-z0-9]+)*$": {
+          "$ref": "file:events_discovery.json"
+        }
+      }
+    },
+    "policy": {
+      "$ref": "file:model_policy.json#"
+  }
+  }
+}

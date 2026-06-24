@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="CompilerConfiguration">
+    <bytecodeTargetLevel>
+      <module name="bambi.main" target="21" />
+      <module name="bambi.test" target="21" />
+      <module name="validator.bambi" target="17" />
+      <module name="validator.bambi.main" target="17" />
+      <module name="validator.bambi.test" target="17" />
+    </bytecodeTargetLevel>
+  </component>
+</project>

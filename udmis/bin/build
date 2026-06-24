@@ -1,0 +1,56 @@
+#!/bin/bash -e
+
+while [[ $# -gt 0 ]]; do
+  if [[ "$1" == "check" ]]; then
+    check=check
+    [[ ! -f /tmp/pod_ready.txt ]] || sudo rm /tmp/pod_ready.txt
+    shift
+  elif [[ "$1" == "debug" ]]; then
+    check="check -i"
+    shift
+  elif [[ "$1" == "covg" ]]; then
+    covg=jacocoTestReport
+    shift
+  else
+    break
+  fi
+done
+
+ROOT=$(dirname $0)/..
+BASE=..
+cd $ROOT
+
+jarbase=udmis-1.0-SNAPSHOT-all.jar
+jartmp=/tmp/$jarbase
+jardir=build/libs
+jarfile=$jardir/$jarbase
+
+rm -f $jartmp
+echo Stashing $jartmp
+[[ ! -f $jarfile ]] || cp -a $jarfile $jartmp
+
+echo Cleaning $ROOT/build/
+rm -rf build
+mkdir -p $jardir
+
+[[ ! -f $jartmp ]] || cp -a $jartmp $jarfile
+
+echo Mirroring udmi files...
+cp -a ../bin/ build/udmi_bin/
+cp -a ../etc/ build/udmi_etc/
+cp -a ../schema build/schema/
+
+newer_files=$([[ -f $jarfile ]] && find src/ $BASE/gencode/java -type f -newer $jarfile || echo missing)
+if [[ -z $check && -z $covg && -z $newer_files ]]; then
+    ls -l $jarfile
+    echo $jarfile up-to-date, skipping build.
+    exit 0
+fi
+
+echo Building udmis in $PWD
+
+./gradlew shadow $check $covg $*
+
+ls -l $jarfile
+
+echo Done with udmis build.

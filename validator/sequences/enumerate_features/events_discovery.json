@@ -1,0 +1,35 @@
+{
+  "family" : "iot",
+  "features" : {
+    "enumeration.families" : {
+      "stage" : "preview"
+    },
+    "endpoint.config" : {
+      "stage" : "beta"
+    },
+    "system" : {
+      "stage" : "beta"
+    },
+    "enumeration.features" : {
+      "stage" : "beta"
+    },
+    "system.mode" : {
+      "stage" : "beta"
+    },
+    "pointset" : {
+      "stage" : "beta"
+    },
+    "enumeration.pointset" : {
+      "stage" : "preview"
+    },
+    "enumeration" : {
+      "stage" : "stable"
+    },
+    "discovery.scan" : {
+      "stage" : "preview"
+    }
+  },
+  "generation" : "TIMESTAMP",
+  "timestamp" : "TIMESTAMP",
+  "version" : "1.5.3"
+}
