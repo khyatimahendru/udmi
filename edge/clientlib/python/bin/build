@@ -17,9 +17,9 @@ set -euo pipefail
 echo "Setting up script variables..."
 SCRIPT_ROOT=$(realpath "$(dirname "$0")")
 LIB_ROOT=$(realpath "$SCRIPT_ROOT/..")
-UDMI_ROOT=$(realpath "$SCRIPT_ROOT/../../..")
+UDMI_ROOT=$(realpath "$SCRIPT_ROOT/../../../..")
 VENV_DIR="$LIB_ROOT/venv"
-PYPROJECT_FILE="$UDMI_ROOT/pyproject.toml"
+PYPROJECT_FILE="$LIB_ROOT/pyproject.toml"
 POETRY_VERSION="2.0.1"
 
 # Source the common shell functions

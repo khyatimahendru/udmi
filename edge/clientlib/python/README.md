@@ -29,14 +29,14 @@ functionalities like connectivity, telemetry, and message handling.
 To install and build the library locally, use the provided `poe` build task. This will properly bundle the auto-generated schemas into the python package.
 
 ```shell
-cd ${UDMI_ROOT}/clientlib/python
+cd ${UDMI_ROOT}/edge/clientlib/python
 poetry install
 poetry run poe build
 ```
 
 You can find a few samples demonstrating how to connect a device using different
 authentication methods as well as other features of the library in
-`$UDMI/ROOT/clientlib/python/samples`.
+`${UDMI_ROOT}/edge/clientlib/python/samples`.
 
 ### Running Samples
 To run the included examples properly within the setup environment:
@@ -62,7 +62,7 @@ python3 samples/connectivity/simple_connect.py
 * **JIT Credential Generation:** A built-in `CredentialManager` detects missing keys and generates RSA/ECC key pairs and self-signed certificates on the fly ("Zero-Config" mTLS/JWT).  
 * **Connection Robustness:** Automatic reconnection handling using `paho-mqtt` with configurable exponential backoff parameters to survive network instability.
 
-**Sample Usage: [`simple_connect.py`](https://github.com/faucetsdn/udmi/tree/master/clientlib/python/samples/connectivity/simple_connect.py)**  
+**Sample Usage: [`simple_connect.py`](https://github.com/faucetsdn/udmi/tree/master/edge/clientlib/python/samples/connectivity/simple_connect.py)**  
  
 
 ```py
@@ -93,7 +93,7 @@ device.run()
 * **Config Sync Latch:** Logic ensures the device does not publish its initial state until a valid Config message is received or a timeout expires, preventing state thrashing on startup.  
 * **Atomic Persistence:** Critical state data (such as `restart_count` and active endpoint configurations) is saved atomically to disk to prevent data corruption and ensure continuity after power loss.
 
-**Sample Usage: [`state_injection.py`](https://github.com/faucetsdn/udmi/tree/master/clientlib/python/samples/system/state_injection.py)**
+**Sample Usage: [`state_injection.py`](https://github.com/faucetsdn/udmi/tree/master/edge/clientlib/python/samples/system/state_injection.py)**
 
 ```py
 from udmi.core.managers import SystemManager
@@ -123,7 +123,7 @@ device = create_device(system_state=static_info,
 * **System Metrics:** The `SystemManager` automatically collects and reports system health metrics (e.g., RAM usage) in the `system` event stream.
 
 **Sample Usage:**   
-* **[`telemetry_basic.py`](https://github.com/faucetsdn/udmi/tree/master/clientlib/python/samples/pointset/telemetry_basic.py)**
+* **[`telemetry_basic.py`](https://github.com/faucetsdn/udmi/tree/master/edge/clientlib/python/samples/pointset/telemetry_basic.py)**
 
 ```py
 # Update the PointsetManager (Internal Cache)
@@ -132,7 +132,7 @@ pointset_manager.set_point_value("supply_temp", 22.5)
 # The background thread automatically publishes this at the configured 'sample_rate_sec'. 
 ```
 
-* **[`logging_integration.py`](https://github.com/faucetsdn/udmi/tree/master/clientlib/python/samples/events/logging_integration.py)**
+* **[`logging_integration.py`](https://github.com/faucetsdn/udmi/tree/master/edge/clientlib/python/samples/events/logging_integration.py)**
 
 ```py
 import logging
@@ -158,7 +158,7 @@ logger.warning("High CPU usage detected!")
 * **Polling Support:** Supports a "pull" model via set\_poll\_callback for just-in-time data retrieval.
 
 **Sample Usage:**   
-* **[`point_writeback.py`](https://github.com/faucetsdn/udmi/tree/master/clientlib/python/samples/pointset/point_writeback.py)** 
+* **[`point_writeback.py`](https://github.com/faucetsdn/udmi/tree/master/edge/clientlib/python/samples/pointset/point_writeback.py)** 
 
 ```py
 def on_writeback(point_name: str, value: Any):
@@ -169,9 +169,9 @@ def on_writeback(point_name: str, value: Any):
 pointset_manager.set_writeback_handler(on_writeback)
 ```
 
-* **[`pointset_dynamic_configuration.py`](https://github.com/faucetsdn/udmi/tree/master/clientlib/python/samples/pointset/pointset_dynamic_provisioning.py)** 
+* **[`pointset_dynamic_configuration.py`](https://github.com/faucetsdn/udmi/tree/master/edge/clientlib/python/samples/pointset/pointset_dynamic_provisioning.py)** 
 
-* **[`telemetry_poll_callback.py`](https://github.com/faucetsdn/udmi/tree/master/clientlib/python/samples/pointset/telemetry_poll_callback.py)**
+* **[`telemetry_poll_callback.py`](https://github.com/faucetsdn/udmi/tree/master/edge/clientlib/python/samples/pointset/telemetry_poll_callback.py)**
 
 ```py
 pointset_manager.set_poll_callback(my_sensor_poll)
@@ -187,7 +187,7 @@ pointset_manager.set_poll_callback(my_sensor_poll)
 * **Automatic Verification:** The library enforces **SHA256 hash verification** on all downloaded blobs before passing them to the application logic.  
 * **Two-Stage Workflow:** Supports a "Process" \-\> "State Flush" \-\> "Post-Process" pipeline to safely handle self-updates and restarts without leaving the cloud in an unknown state.
 
-**Sample Usage: [`ota_update_workflow.py`](https://github.com/faucetsdn/udmi/tree/master/clientlib/python/samples/system/ota_update_workflow.py)**
+**Sample Usage: [`ota_update_workflow.py`](https://github.com/faucetsdn/udmi/tree/master/edge/clientlib/python/samples/system/ota_update_workflow.py)**
 
 ```py
 sys_manager.register_blob_handler(
@@ -208,8 +208,8 @@ sys_manager.register_blob_handler(
 * **Discovery Manager:** Implementation of the discovery block to support active scanning using registered `FamilyProvider` drivers and reporting `DiscoveryEvents`.
 
 **Sample Usage:**   
-* **[`gateway_proxy.py`](https://github.com/faucetsdn/udmi/tree/master/clientlib/python/samples/gateway/gateway_proxy.py)**
-* **[`discovery_scan.py`](https://github.com/faucetsdn/udmi/tree/master/clientlib/python/samples/gateway/discovery_scan.py)**
+* **[`gateway_proxy.py`](https://github.com/faucetsdn/udmi/tree/master/edge/clientlib/python/samples/gateway/gateway_proxy.py)**
+* **[`discovery_scan.py`](https://github.com/faucetsdn/udmi/tree/master/edge/clientlib/python/samples/gateway/discovery_scan.py)**
 
 ```py
 # Triggered by cloud 'discovery' command
@@ -227,15 +227,15 @@ class MyBacnetProvider(FamilyProvider):
 
 * **State Throttling:** "Dirty bit" logic triggers state updates immediately upon change, subject to a minimum time interval (STATE\_THROTTLE\_SEC) to prevent broker spamming.  
 * **Endpoint Redirection:**  
-  * **Sample usage: [`endpoint_redirection.py`](https://github.com/faucetsdn/udmi/tree/master/clientlib/python/samples/advanced/endpoint_redirection.py)**  
+  * **Sample usage: [`endpoint_redirection.py`](https://github.com/faucetsdn/udmi/tree/master/edge/clientlib/python/samples/advanced/endpoint_redirection.py)**  
 * **Key Rotation:** The `SystemManager` handles the `rotate_key` command and also has a public API `rotate_key`, triggering the `CredentialManager` to generate new keys, backup old ones, and invoke a callback for cloud registration.  
-  * **Sample usage: [`key_rotation.py`](https://github.com/faucetsdn/udmi/tree/master/clientlib/python/samples/advanced/key_rotation.py)**  
+  * **Sample usage: [`key_rotation.py`](https://github.com/faucetsdn/udmi/tree/master/edge/clientlib/python/samples/advanced/key_rotation.py)**  
 * **Localnet Manager:** Handles the localnet configuration block to validate address families (e.g., mapping generic device IDs to physical BACnet addresses) using registered providers.  
-  * **Sample usage: [`localnet_routing.py`](https://github.com/faucetsdn/udmi/tree/master/clientlib/python/samples/localnet/localnet_routing.py)**  
+  * **Sample usage: [`localnet_routing.py`](https://github.com/faucetsdn/udmi/tree/master/edge/clientlib/python/samples/localnet/localnet_routing.py)**  
 * **Lifecycle Commands:** Maps UDMI commands (reboot, shutdown) to registered callbacks or specific process exit codes.  
-  * **Sample usage: [`lifecycle_commands.py`](https://github.com/faucetsdn/udmi/tree/master/clientlib/python/samples/system/lifecycle_commands.py)**  
+  * **Sample usage: [`lifecycle_commands.py`](https://github.com/faucetsdn/udmi/tree/master/edge/clientlib/python/samples/system/lifecycle_commands.py)**  
 * **Custom Persistence Backend:**  
-  * **Sample usage: [`custom_persistence_backend.py`](https://github.com/faucetsdn/udmi/tree/master/clientlib/python/samples/advanced/custom_persistence_backend.py)**
+  * **Sample usage: [`custom_persistence_backend.py`](https://github.com/faucetsdn/udmi/tree/master/edge/clientlib/python/samples/advanced/custom_persistence_backend.py)**
 
 ## 
 
@@ -267,7 +267,7 @@ class CustomHeartbeatManager(BaseManager):
 device = create_device(endpoint_config, managers=[CustomHeartbeatManager()])
 ```
 
-*   **Sample usage: [`custom_manager.py`](https://github.com/faucetsdn/udmi/tree/master/clientlib/python/samples/advanced/custom_manager.py)**
+*   **Sample usage: [`custom_manager.py`](https://github.com/faucetsdn/udmi/tree/master/edge/clientlib/python/samples/advanced/custom_manager.py)**
 
 ## 9\. Hardware-Specific Binding (Lifecycle Hooks)
 
@@ -283,4 +283,4 @@ sys_manager.register_restart_handler(physical_board_reboot)
 sys_manager.register_shutdown_handler(physical_power_down)
 ```
 
-*   **Sample usage: [`lifecycle_commands.py`](https://github.com/faucetsdn/udmi/tree/master/clientlib/python/samples/system/lifecycle_commands.py)**  
+*   **Sample usage: [`lifecycle_commands.py`](https://github.com/faucetsdn/udmi/tree/master/edge/clientlib/python/samples/system/lifecycle_commands.py)**  

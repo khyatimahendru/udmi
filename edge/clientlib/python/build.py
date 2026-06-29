@@ -5,7 +5,7 @@ import subprocess
 def build():
     # Source and destination paths
     root_dir = os.path.dirname(os.path.abspath(__file__))
-    src_dir = os.path.abspath(os.path.join(root_dir, "../../gencode/python/udmi/schema"))
+    src_dir = os.path.abspath(os.path.join(root_dir, "../../../gencode/python/udmi/schema"))
     dest_dir = os.path.abspath(os.path.join(root_dir, "src/udmi/schema"))
 
     print(f"Temporarily replacing symlink with physical files from {src_dir}...")
@@ -33,7 +33,7 @@ def build():
         shutil.rmtree(dest_dir)
         if was_symlink:
             # Recreate the symlink
-            os.symlink("../../../../gencode/python/udmi/schema/", dest_dir)
+            os.symlink("../../../../../gencode/python/udmi/schema/", dest_dir)
 
 if __name__ == "__main__":
     build()
