@@ -26,12 +26,11 @@ functionalities like connectivity, telemetry, and message handling.
 
 ## Local Setup & Usage Examples
 
-To install and build the library locally, use the provided `poe` build task. This will properly bundle the auto-generated schemas into the python package.
+To install and build the library locally, use the provided `bin/build` script. This will set up the virtual environment, install all dependencies, and properly bundle the auto-generated schemas into the python package.
 
 ```shell
 cd ${UDMI_ROOT}/edge/clientlib/python
-poetry install
-poetry run poe build
+bin/build
 ```
 
 You can find a few samples demonstrating how to connect a device using different
