@@ -24,6 +24,7 @@ for i in $(seq 1); do
     --network=discovery-integration\
     --ip=192.168.12.$i \
     -e BACNET_ID=$i \
+    -e BACNET_IP=192.168.12.$i/24 \
     test-bacnet-device
 done
 
@@ -44,7 +45,9 @@ for test in "${TESTS[@]}"; do
   docker run --rm \
     --entrypoint=/venv/bin/python3 \
     --network=discovery-integration \
+    --ip=192.168.12.100 \
     -e I_AM_INTEGRATION_TEST=1 \
+    -e BACNET_IP=192.168.12.100/24 \
     test-discovery_node \
     -m pytest --capture=no --log-cli-level=INFO "$test" # Run the specific test
 

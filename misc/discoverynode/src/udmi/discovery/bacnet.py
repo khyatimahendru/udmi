@@ -225,7 +225,7 @@ class GlobalBacnetDiscovery(discovery.DiscoveryController):
             ref.possible_values = point.properties.units_state
           elif isinstance(point.properties.units_state, str): 
             ref.units = point.properties.units_state
-          point_id = BacnetObjectAcronyms[point.properties.type].value + ":" + point.properties.address
+          point_id = BacnetObjectAcronyms[point.properties.type].value + "/" + point.properties.address
           event.refs[point_id] = ref
     
       except Exception as err:

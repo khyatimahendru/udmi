@@ -23,7 +23,8 @@ from BAC0.core.devices.local.models import (
 )
 from BAC0.core.devices.local.object import ObjectFactory
 
-bacnet = BAC0.lite(port=47808, deviceId=int(os.environ['BACNET_ID']))
+bacnet_ip = os.environ.get('BACNET_IP', None)
+bacnet = BAC0.lite(ip=bacnet_ip, port=47808, deviceId=int(os.environ['BACNET_ID']))
 
 ObjectFactory.clear_objects()
 

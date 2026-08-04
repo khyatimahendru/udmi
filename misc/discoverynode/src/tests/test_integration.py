@@ -25,7 +25,7 @@ def test_bacnet_system():
   test_config = collections.defaultdict()
   test_config["mqtt"] = dict(device_id="THUNDERBIRD-2")
   test_config["mqtt"] = dict(device_id="THUNDERBIRD-2")
-  test_config["bacnet"] = dict(ip=None, port=None, interface=None)
+  test_config["bacnet"] = dict(ip=os.environ.get("BACNET_IP", None), port=None, interface=None)
   test_config["udmi"] = {"discovery": dict(ipv4=False,vendor=False,ether=False,bacnet=True)}
   # Container for storing all discovery messages
   messages = []
@@ -70,7 +70,7 @@ def test_bacnet_refs():
   test_config = collections.defaultdict()
   test_config["mqtt"] = dict(device_id="THUNDERBIRD-2")
   test_config["mqtt"] = dict(device_id="THUNDERBIRD-2")
-  test_config["bacnet"] = dict(ip=None, port=None, interface=None)
+  test_config["bacnet"] = dict(ip=os.environ.get("BACNET_IP", None), port=None, interface=None)
   test_config["udmi"] = {"discovery": dict(ipv4=False,vendor=False,ether=False,bacnet=True)}
   # Container for storing all discovery messages
   messages = []
@@ -114,7 +114,7 @@ def test_nmap():
   test_config = collections.defaultdict()
   test_config["mqtt"] = dict(device_id="THUNDERBIRD-2")
   test_config["mqtt"] = dict(device_id="THUNDERBIRD-2")
-  test_config["bacnet"] = dict(ip=None, port=None, interface=None)
+  test_config["bacnet"] = dict(ip=os.environ.get("BACNET_IP", None), port=None, interface=None)
   test_config["udmi"] = {"discovery": dict(ipv4=False,vendor=False,ether=True,bacnet=False)}
   test_config["nmap"] = dict(targets=["192.168.12.1"])
 
@@ -135,7 +135,7 @@ def test_nmap():
             "timestamp": timestamp_now(),
             "discovery": {
                 "families": {
-                    "ether": {"generation": timestamp_now(), "depth": "services", "addrs": ["192.168.12.1/24"]}
+                    "ether": {"generation": timestamp_now(), "depth": "services", "addrs": ["192.168.12.1"]}
                 }
             },
         })

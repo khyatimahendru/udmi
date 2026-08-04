@@ -132,6 +132,8 @@ def docker_devices():
               f"--ip={localnet['ipv4']['addr']}",
               "-e",
               f"BACNET_ID={localnet['bacnet']['addr']}",
+              "-e",
+              f"BACNET_IP={localnet['ipv4']['addr']}/24",
               "test-bacnet-device",
           ])
       )
