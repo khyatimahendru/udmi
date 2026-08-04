@@ -281,6 +281,7 @@ public class ImplicitIotAccessProvider extends IotAccessBase {
       }
       registryDeviceRef(registryId, deviceId).delete(BOUND_TO_KEY);
       registryDeviceRef(registryId, deviceId).delete(BIND_STATUS_KEY);
+      registryDeviceRef(registryId, deviceId).put(RESOURCE_TYPE_PROPERTY, DIRECT.toString());
       gatewayBoundRef(registryId, gatewayId).delete(deviceId);
       if (brokerAuth) {
         futures.add(withQueueRetry(() -> broker.unbindGateway(
@@ -389,6 +390,7 @@ public class ImplicitIotAccessProvider extends IotAccessBase {
         // Clear database entries for the bound device
         registryDeviceRef(registryId, deviceId).delete(BOUND_TO_KEY);
         registryDeviceRef(registryId, deviceId).delete(BIND_STATUS_KEY);
+        registryDeviceRef(registryId, deviceId).put(RESOURCE_TYPE_PROPERTY, DIRECT.toString());
         gatewayBoundRef(registryId, gatewayId).delete(deviceId);
 
         // Unbind in the broker
@@ -501,8 +503,12 @@ public class ImplicitIotAccessProvider extends IotAccessBase {
   private Map<String, String> toDeviceMap(CloudModel cloudModel, String createdAt) {
     Map<String, String> properties = new HashMap<>();
     ifNotNullThen(createdAt, x -> properties.put(CREATED_AT_PROPERTY, createdAt));
-    properties.put(RESOURCE_TYPE_PROPERTY,
-        ofNullable(cloudModel.resource_type).orElse(DIRECT).toString());
+    if (createdAt != null) {
+      properties.put(RESOURCE_TYPE_PROPERTY,
+          ofNullable(cloudModel.resource_type).orElse(DIRECT).toString());
+    } else if (cloudModel.resource_type != null) {
+      properties.put(RESOURCE_TYPE_PROPERTY, cloudModel.resource_type.toString());
+    }
     requireNull(cloudModel.metadata_str, "unexpected metadata_str content");
     properties.put(METADATA_STR_KEY, stringifyTerse(cloudModel.metadata));
     ifNotNullThen(ifNotNullGet(cloudModel.metadata, metadata -> metadata.get("key_bytes")),
@@ -604,8 +610,32 @@ public class ImplicitIotAccessProvider extends IotAccessBase {
   public void activate() {
     database = UdmiServicePod.getComponent(IMPLICIT_DATABASE_COMPONENT);
     super.activate();
+    migrateProxiedDevices();
     if (isPublishEnabled()) {
       connectMqttClient();
+    }
+  }
+
+  private void migrateProxiedDevices() {
+    try {
+      Set<String> registries = getRegistries();
+      registries.forEach(registryId -> {
+        Map<String, String> entries = registryDevicesRef(registryId).entries();
+        if (entries != null) {
+          entries.keySet().parallelStream().forEach(deviceId -> {
+            DataRef deviceRef = registryDeviceRef(registryId, deviceId);
+            String boundTo = deviceRef.get(BOUND_TO_KEY);
+            String resourceType = deviceRef.get(RESOURCE_TYPE_PROPERTY);
+            if (boundTo != null && !PROXIED.toString().equals(resourceType)) {
+              info("Migrating device %s/%s resource_type to PROXIED in database",
+                  registryId, deviceId);
+              deviceRef.put(RESOURCE_TYPE_PROPERTY, PROXIED.toString());
+            }
+          });
+        }
+      });
+    } catch (Exception e) {
+      warn("Failed to migrate proxied devices: %s", friendlyStackTrace(e));
     }
   }
 
@@ -647,6 +677,13 @@ public class ImplicitIotAccessProvider extends IotAccessBase {
       return null;
     }
     CloudModel cloudModel = requireNonNull(JsonUtil.convertTo(CloudModel.class, properties));
+    String boundTo = properties.get(BOUND_TO_KEY);
+    if (boundTo != null) {
+      cloudModel.resource_type = PROXIED;
+      if (!PROXIED.toString().equals(properties.get(RESOURCE_TYPE_PROPERTY))) {
+        registryDeviceRef(registryId, deviceId).put(RESOURCE_TYPE_PROPERTY, PROXIED.toString());
+      }
+    }
     cloudModel.metadata = ifNotNullGet(cloudModel.metadata_str, JsonUtil::toStringMapStr);
     cloudModel.metadata_str = null;
 
@@ -745,9 +782,15 @@ public class ImplicitIotAccessProvider extends IotAccessBase {
       cloudModel.auth_type = CloudModel.Auth_type.fromValue(authType);
     }
     String boundTo = properties.get(BOUND_TO_KEY);
-    cloudModel.resource_type = boundTo != null ? PROXIED
-        : ofNullable(properties.get(RESOURCE_TYPE_PROPERTY))
-            .map(Resource_type::fromValue).orElse(DIRECT);
+    if (boundTo != null) {
+      cloudModel.resource_type = PROXIED;
+      if (!PROXIED.toString().equals(properties.get(RESOURCE_TYPE_PROPERTY))) {
+        registryDeviceRef(registryId, deviceId).put(RESOURCE_TYPE_PROPERTY, PROXIED.toString());
+      }
+    } else {
+      cloudModel.resource_type = ofNullable(properties.get(RESOURCE_TYPE_PROPERTY))
+          .map(Resource_type::fromValue).orElse(DIRECT);
+    }
     cloudModel.blocked = "true".equals(properties.get(BLOCKED_PROPERTY)) ? true : null;
     cloudModel.updated_time = JsonUtil.getDate(properties.get(CREATED_AT_PROPERTY));
     return cloudModel;

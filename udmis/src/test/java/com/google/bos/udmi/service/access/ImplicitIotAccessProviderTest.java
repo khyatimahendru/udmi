@@ -187,6 +187,51 @@ class ImplicitIotAccessProviderTest {
     CloudModel deviceModel = listModel.device_ids.get(TEST_DEVICE);
     org.junit.jupiter.api.Assertions.assertNotNull(deviceModel);
     assertEquals(udmi.schema.CloudModel.Resource_type.PROXIED, deviceModel.resource_type);
+    assertEquals("PROXIED", store.get("r/test-reg/d/test-dev:resource_type"));
+  }
+
+  @Test
+  void testFetchDeviceBoundDeviceProjectsProxied() {
+    store.put("r/test-reg/d/test-dev:bound_to", "test-gateway");
+    store.put("r/test-reg/d/test-dev:bind_status", "bound");
+    store.put("r/test-reg/d/test-dev:resource_type", "DIRECT");
+
+    CloudModel deviceModel = provider.fetchDevice(TEST_REGISTRY, TEST_DEVICE);
+
+    org.junit.jupiter.api.Assertions.assertNotNull(deviceModel);
+    assertEquals(udmi.schema.CloudModel.Resource_type.PROXIED, deviceModel.resource_type);
+    assertEquals("PROXIED", store.get("r/test-reg/d/test-dev:resource_type"));
+  }
+
+  @Test
+  void testUpdateDevicePreservesProxied() {
+    store.put("r/test-reg/d/test-dev:bound_to", "test-gateway");
+    store.put("r/test-reg/d/test-dev:resource_type", "PROXIED");
+
+    CloudModel updateModel = new CloudModel();
+    updateModel.operation = ModelOperation.UPDATE;
+    updateModel.blocked = false;
+
+    provider.modelDevice(TEST_REGISTRY, TEST_DEVICE, updateModel, null);
+
+    assertEquals("PROXIED", store.get("r/test-reg/d/test-dev:resource_type"));
+  }
+
+  @Test
+  void testUnbindDeviceRestoresDirect() {
+    store.put("r/test-reg/d/test-dev:num_id", "12345");
+    store.put("r/test-reg/d/proxy-device:bound_to", "test-dev");
+    store.put("r/test-reg/d/proxy-device:resource_type", "PROXIED");
+
+    CloudModel unbindModel = new CloudModel();
+    unbindModel.operation = ModelOperation.UNBIND;
+    unbindModel.functions_ver = 1;
+    unbindModel.gateway = new udmi.schema.GatewayModel();
+    unbindModel.gateway.proxy_ids = List.of("proxy-device");
+
+    provider.modelDevice(TEST_REGISTRY, TEST_DEVICE, unbindModel, null);
+
+    assertEquals("DIRECT", store.get("r/test-reg/d/proxy-device:resource_type"));
   }
 
   @Test

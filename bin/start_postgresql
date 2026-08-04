@@ -93,7 +93,7 @@ echo $POSTGRES_PID > $POSTGRES_PID_FILE
 echo Waiting for postgresql to start on port ${postgres_port}, log in $POSTGRES_LOG
 # Wait up to 15s, polling to check if it's ready
 for i in {1..15}; do
-    if psql -h 127.0.0.1 -p ${postgres_port} -U "${postgres_user}" -d "${postgres_db}" -c "SELECT 1;" >/dev/null 2>&1; then
+    if psql -w -h 127.0.0.1 -p ${postgres_port} -U "${postgres_user}" -d "${postgres_db}" -c "SELECT 1;" >/dev/null 2>&1; then
         echo "PostgreSQL started successfully."
         break
     fi
