@@ -11,6 +11,7 @@ import static com.google.udmi.util.SourceRepository.SPREADSHEET_ID_KEY;
 
 import com.google.pubsub.v1.PubsubMessage;
 import com.google.udmi.util.AbstractPollingService;
+import com.google.udmi.util.RedisDistributedLock;
 import com.google.udmi.util.SheetsOutputStream;
 import com.google.udmi.util.SourceRepository;
 import java.io.File;
@@ -52,7 +53,7 @@ public class RegistrarService extends AbstractPollingService {
    */
   public RegistrarService(String projectTarget, String registrarTarget, String siteModelBaseDir,
       String localOriginDir) {
-    super(SERVICE_NAME, SUBSCRIPTION_SUFFIX, projectTarget, siteModelBaseDir, localOriginDir);
+    super(SERVICE_NAME, SUBSCRIPTION_SUFFIX, projectTarget, siteModelBaseDir, localOriginDir, 10);
     this.registrarTarget = registrarTarget;
     LOGGER.info("Starting Registrar Service for project {}, cloning to {}", projectTarget,
         siteModelBaseDir);
@@ -104,6 +105,11 @@ public class RegistrarService extends AbstractPollingService {
     }
 
     String repoId = extractRepoId(messageData);
+
+    RedisDistributedLock.executeWithLock(repoId, () -> processRepository(repoId));
+  }
+
+  private void processRepository(String repoId) {
     SourceRepository repository = initRepository(repoId);
 
     if (repository.clone(TRIGGER_BRANCH)) {

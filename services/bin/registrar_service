@@ -62,6 +62,10 @@ main() {
 
     if [[ $is_local -eq 1 ]]; then
         build_services_jar
+
+        echo "Starting local Redis container..."
+        docker run -d --name udmi-redis-local -p 6379:6379 redis:alpine || echo "Redis may already be running"
+        export REDIS_HOST="localhost"
     else
         setup_service_gcp_environment ${service_name}
     fi
