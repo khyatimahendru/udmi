@@ -35,6 +35,7 @@ import com.google.daq.mqtt.sequencer.semantic.SemanticDate;
 import com.google.daq.mqtt.sequencer.semantic.SemanticValue;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Base64;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
@@ -612,7 +613,8 @@ public class BlobsetSequences extends SequenceBase {
   @Summary("Validates successful device credentials / key rotation.")
   @DefaultLogLevel(Level.DEBUG)
   public void key_rotation_success() {
-    String payload = "{\"key_format\":\"RS256\",\"key_data\":\"sample_public_key_data\"}";
+    String keyData = Base64.getEncoder().encodeToString("sample_private_key_data".getBytes());
+    String payload = String.format("{\"key_format\":\"RS256\",\"key_data\":\"%s\"}", keyData);
     setDeviceConfigCredentialsBlob(payload, false);
     updateConfig("trigger key rotation update");
 

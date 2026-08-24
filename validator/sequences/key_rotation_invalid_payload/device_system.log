@@ -1,0 +1,186 @@
+2026-08-24T12:30:42Z INFO    device.log             Configured with auth_type RS256
+2026-08-24T12:30:42Z INFO    device.log             Using addresses from default interface: ens4 for family: ipv4
+2026-08-24T12:30:42Z INFO    device.log             Family ipv4 address is 172.17.35.172
+2026-08-24T12:30:42Z INFO    device.log             Using addresses from default interface: ens4 for family: ether
+2026-08-24T12:30:42Z INFO    device.log             Family ether address is 42:01:ac:11:23:ac
+2026-08-24T12:30:42Z INFO    device.log             Loading endpoint into persistent data from configuration
+2026-08-24T12:30:42Z WARNING device.log             Updating persistent store:
+{
+  "applied_blobs" : { },
+  "endpoint" : {
+    "auth_provider" : {
+      "basic" : {
+        "password" : "38269d11",
+        "username" : "/r/ZZ-TRI-FECTA/d/AHU-1"
+      }
+    },
+    "client_id" : "/r/ZZ-TRI-FECTA/d/AHU-1",
+    "hostname" : "localhost",
+    "port" : 9001,
+    "protocol" : "mqtt",
+    "topic_prefix" : "/r/ZZ-TRI-FECTA/d/AHU-1",
+    "transport" : "ssl"
+  },
+  "restart_count" : 1
+}
+2026-08-24T12:30:42Z INFO    device.log             Starting pubber AHU-1, serial sequencer-17222, mac null, gateway null, options noPersist
+2026-08-24T12:30:42Z INFO    device.log             Initializing mock JGit module in /usr/local/google/home/heykhyati/Projects/udmi/out/pubber_module_repo_sequencer-17222
+2026-08-24T12:30:42Z INFO    device.log             Isolated JGit repo initialized successfully.
+2026-08-24T12:30:42Z WARNING device.log             Starting connection 1787574642503 with 0
+2026-08-24T12:30:42Z INFO    device.log             Loading device key bytes from /usr/local/google/home/heykhyati/Projects/udmi/sites/udmi_site_model/devices/AHU-1/rsa_private.pkcs8
+2026-08-24T12:30:42Z INFO    device.log             CA cert file: /usr/local/google/home/heykhyati/Projects/udmi/sites/udmi_site_model/reflector/ca.crt
+2026-08-24T12:30:42Z INFO    device.log             Device cert file: /usr/local/google/home/heykhyati/Projects/udmi/sites/udmi_site_model/devices/AHU-1/rsa_private.crt
+2026-08-24T12:30:42Z INFO    device.log             Private key file: /usr/local/google/home/heykhyati/Projects/udmi/sites/udmi_site_model/devices/AHU-1/rsa_private.pem
+2026-08-24T12:30:42Z INFO    device.log             Password sha256 6b5344e1
+2026-08-24T12:30:42Z WARNING device.log             Creating new config latch for AHU-1
+2026-08-24T12:30:42Z INFO    device.log             Update state 2026-08-24T12:30:42Z last_config 1970-01-01T00:00:00Z
+2026-08-24T12:30:42Z WARNING device.log             Dropping state update until config received...
+2026-08-24T12:30:43Z INFO    device.log             Update state 2026-08-24T12:30:43Z last_config 1970-01-01T00:00:00Z
+2026-08-24T12:30:43Z WARNING device.log             Dropping state update until config received...
+2026-08-24T12:30:43Z INFO    device.log             Update state 2026-08-24T12:30:43Z last_config 1970-01-01T00:00:00Z
+2026-08-24T12:30:43Z WARNING device.log             Dropping state update until config received...
+2026-08-24T12:30:43Z WARNING device.log             Received config for config latch AHU-1
+2026-08-24T12:30:43Z WARNING device.log             Starting AHU-1 PubberPublisherHost sender with delay 10s
+2026-08-24T12:30:43Z INFO    device.log             2026-08-24T12:30:43Z received config 2026-08-24T12:30:40Z
+2026-08-24T12:30:43Z WARNING device.log             Starting AHU-1 PubberSystemManager sender with delay 10s
+2026-08-24T12:30:43Z WARNING device.log             Starting AHU-1 PubberPointsetManager sender with delay 300s
+2026-08-24T12:30:43Z NOTICE  system.config.apply    success
+2026-08-24T12:30:43Z WARNING device.log             Start waiting 10s for config latch for AHU-1
+2026-08-24T12:30:43Z WARNING device.log             Ending connection 1787574642503 with 1
+2026-08-24T12:30:43Z NOTICE  system.config.apply    success
+2026-08-24T12:30:55Z DEBUG   device.log             value of noWriteback: false
+2026-08-24T12:30:55Z DEBUG   device.log             value of noWriteback: false
+2026-08-24T12:30:55Z DEBUG   device.log             value of noWriteback: false
+2026-08-24T12:30:55Z NOTICE  system.config.apply    success
+2026-08-24T12:30:55Z DEBUG   device.log             State update defer 1997ms
+2026-08-24T12:30:55Z DEBUG   system.config.receive  success
+2026-08-24T12:30:55Z DEBUG   device.log             State update defer 1916ms
+2026-08-24T12:30:55Z DEBUG   system.config.parse    success
+2026-08-24T12:30:55Z DEBUG   device.log             State update defer 1916ms
+2026-08-24T12:30:55Z DEBUG   device.log             Config update AHU-1 (key_rotation_invalid_payload)
+2026-08-24T12:30:55Z INFO    device.log             2026-08-24T12:30:55Z received config 2026-08-24T12:30:55Z
+2026-08-24T12:30:55Z DEBUG   device.log             value of noWriteback: false
+2026-08-24T12:30:55Z DEBUG   device.log             value of noWriteback: false
+2026-08-24T12:30:55Z DEBUG   device.log             value of noWriteback: false
+2026-08-24T12:30:55Z NOTICE  system.config.apply    success
+2026-08-24T12:30:55Z DEBUG   device.log             State update defer 1911ms
+2026-08-24T12:30:55Z DEBUG   device.log             State update defer 1911ms
+2026-08-24T12:30:55Z DEBUG   device.log             State update defer 1910ms
+2026-08-24T12:30:55Z DEBUG   device.log             State update defer 1910ms
+2026-08-24T12:30:57Z DEBUG   device.log             State update defer 0ms
+2026-08-24T12:30:57Z INFO    device.log             Update state 2026-08-24T12:30:57Z last_config 2026-08-24T12:30:55Z
+2026-08-24T12:30:57Z DEBUG   device.log             State update AHU-1 (key_rotation_invalid_payload)
+2026-08-24T12:30:58Z DEBUG   system.config.receive  success
+2026-08-24T12:30:58Z DEBUG   device.log             State update defer 1252ms
+2026-08-24T12:30:58Z DEBUG   system.config.parse    success
+2026-08-24T12:30:58Z INFO    device.log             Device AHU-1 config handler
+2026-08-24T12:30:58Z DEBUG   device.log             State update defer 1251ms
+2026-08-24T12:30:58Z DEBUG   device.log             Config update AHU-1 (key_rotation_invalid_payload)
+2026-08-24T12:30:58Z INFO    device.log             2026-08-24T12:30:58Z received config 2026-08-24T12:30:58Z
+2026-08-24T12:30:58Z DEBUG   device.log             value of noWriteback: false
+2026-08-24T12:30:58Z DEBUG   device.log             value of noWriteback: false
+2026-08-24T12:30:58Z DEBUG   device.log             value of noWriteback: false
+2026-08-24T12:30:58Z NOTICE  system.config.apply    success
+2026-08-24T12:30:58Z DEBUG   device.log             State update defer 1246ms
+2026-08-24T12:30:59Z DEBUG   device.log             State update defer 0ms
+2026-08-24T12:30:59Z INFO    device.log             Update state 2026-08-24T12:30:59Z last_config 2026-08-24T12:30:58Z
+2026-08-24T12:30:59Z DEBUG   device.log             State update AHU-1 (key_rotation_invalid_payload)
+2026-08-24T12:31:02Z DEBUG   system.config.receive  success
+2026-08-24T12:31:02Z DEBUG   system.config.parse    success
+2026-08-24T12:31:02Z DEBUG   device.log             State update defer -773ms
+2026-08-24T12:31:02Z INFO    device.log             Update state 2026-08-24T12:31:02Z last_config 2026-08-24T12:30:58Z
+2026-08-24T12:31:02Z DEBUG   device.log             State update AHU-1 (key_rotation_invalid_payload)
+2026-08-24T12:31:02Z DEBUG   device.log             Config update AHU-1 (key_rotation_invalid_payload)
+2026-08-24T12:31:02Z INFO    device.log             2026-08-24T12:31:02Z received config 2026-08-24T12:31:02Z
+2026-08-24T12:31:02Z DEBUG   device.log             value of noWriteback: false
+2026-08-24T12:31:02Z DEBUG   device.log             value of noWriteback: false
+2026-08-24T12:31:02Z DEBUG   device.log             value of noWriteback: false
+2026-08-24T12:31:02Z NOTICE  system.config.apply    success
+2026-08-24T12:31:02Z DEBUG   device.log             State update defer 1997ms
+2026-08-24T12:31:02Z DEBUG   device.log             State update defer 1997ms
+2026-08-24T12:31:02Z DEBUG   device.log             State update defer 1996ms
+2026-08-24T12:31:03Z DEBUG   device.log             State update defer 768ms
+2026-08-24T12:31:04Z DEBUG   device.log             State update defer 0ms
+2026-08-24T12:31:04Z INFO    device.log             Update state 2026-08-24T12:31:04Z last_config 2026-08-24T12:31:02Z
+2026-08-24T12:31:04Z DEBUG   device.log             State update AHU-1 (key_rotation_invalid_payload)
+2026-08-24T12:31:06Z DEBUG   system.config.receive  success
+2026-08-24T12:31:06Z DEBUG   system.config.parse    success
+2026-08-24T12:31:06Z DEBUG   device.log             State update defer -71ms
+2026-08-24T12:31:06Z INFO    device.log             Device AHU-1 config handler
+2026-08-24T12:31:06Z DEBUG   device.log             State update AHU-1 (key_rotation_invalid_payload)
+2026-08-24T12:31:06Z DEBUG   device.log             Config update AHU-1 (key_rotation_invalid_payload)
+2026-08-24T12:31:06Z INFO    device.log             2026-08-24T12:31:06Z received config 2026-08-24T12:31:06Z
+2026-08-24T12:31:06Z DEBUG   device.log             value of noWriteback: false
+2026-08-24T12:31:06Z DEBUG   device.log             value of noWriteback: false
+2026-08-24T12:31:06Z DEBUG   device.log             value of noWriteback: false
+2026-08-24T12:31:06Z NOTICE  system.config.apply    success
+2026-08-24T12:31:06Z DEBUG   device.log             State update defer 1997ms
+2026-08-24T12:31:06Z DEBUG   system.config.receive  success
+2026-08-24T12:31:06Z DEBUG   device.log             State update defer 1785ms
+2026-08-24T12:31:06Z DEBUG   system.config.parse    success
+2026-08-24T12:31:06Z INFO    device.log             Device AHU-1 config handler
+2026-08-24T12:31:06Z DEBUG   device.log             State update defer 1784ms
+2026-08-24T12:31:06Z DEBUG   device.log             Config update AHU-1 (key_rotation_invalid_payload)
+2026-08-24T12:31:06Z INFO    device.log             2026-08-24T12:31:06Z received config 2026-08-24T12:31:06Z
+2026-08-24T12:31:06Z DEBUG   device.log             value of noWriteback: false
+2026-08-24T12:31:06Z DEBUG   device.log             value of noWriteback: false
+2026-08-24T12:31:06Z DEBUG   device.log             value of noWriteback: false
+2026-08-24T12:31:06Z NOTICE  system.config.apply    success
+2026-08-24T12:31:06Z DEBUG   device.log             State update defer 1781ms
+2026-08-24T12:31:06Z DEBUG   device.log             State update defer 1781ms
+2026-08-24T12:31:06Z DEBUG   device.log             State update defer 1780ms
+2026-08-24T12:31:06Z DEBUG   device.log             State update defer 1780ms
+2026-08-24T12:31:06Z DEBUG   device.log             State update defer 1780ms
+2026-08-24T12:31:07Z DEBUG   system.config.receive  success
+2026-08-24T12:31:07Z DEBUG   device.log             State update defer 666ms
+2026-08-24T12:31:07Z DEBUG   system.config.parse    success
+2026-08-24T12:31:07Z DEBUG   device.log             State update defer 665ms
+2026-08-24T12:31:07Z INFO    device.log             Device AHU-1 config handler
+2026-08-24T12:31:07Z DEBUG   device.log             Config update AHU-1 (key_rotation_invalid_payload)
+2026-08-24T12:31:07Z INFO    device.log             2026-08-24T12:31:07Z received config 2026-08-24T12:31:07Z
+2026-08-24T12:31:07Z DEBUG   device.log             value of noWriteback: false
+2026-08-24T12:31:07Z DEBUG   device.log             value of noWriteback: false
+2026-08-24T12:31:07Z DEBUG   device.log             value of noWriteback: false
+2026-08-24T12:31:07Z NOTICE  system.config.apply    success
+2026-08-24T12:31:07Z DEBUG   device.log             State update defer 660ms
+2026-08-24T12:31:08Z DEBUG   device.log             State update defer 0ms
+2026-08-24T12:31:08Z INFO    device.log             Update state 2026-08-24T12:31:08Z last_config 2026-08-24T12:31:07Z
+2026-08-24T12:31:08Z DEBUG   device.log             State update AHU-1 (key_rotation_invalid_payload)
+2026-08-24T12:31:08Z DEBUG   system.config.receive  success
+2026-08-24T12:31:08Z DEBUG   device.log             State update defer 1628ms
+2026-08-24T12:31:08Z DEBUG   system.config.parse    success
+2026-08-24T12:31:08Z DEBUG   device.log             State update defer 1627ms
+2026-08-24T12:31:08Z DEBUG   device.log             Config update AHU-1 (key_rotation_invalid_payload)
+2026-08-24T12:31:08Z INFO    device.log             2026-08-24T12:31:08Z received config 2026-08-24T12:31:08Z
+2026-08-24T12:31:08Z DEBUG   device.log             value of noWriteback: false
+2026-08-24T12:31:08Z DEBUG   device.log             value of noWriteback: false
+2026-08-24T12:31:08Z DEBUG   device.log             value of noWriteback: false
+2026-08-24T12:31:08Z NOTICE  system.config.apply    success
+2026-08-24T12:31:08Z DEBUG   device.log             State update defer 1624ms
+2026-08-24T12:31:08Z DEBUG   system.config.receive  success
+2026-08-24T12:31:08Z DEBUG   device.log             State update defer 1548ms
+2026-08-24T12:31:08Z DEBUG   system.config.parse    success
+2026-08-24T12:31:08Z INFO    device.log             Device AHU-1 config handler
+2026-08-24T12:31:08Z DEBUG   device.log             State update defer 1547ms
+2026-08-24T12:31:08Z DEBUG   device.log             Config update AHU-1 (key_rotation_invalid_payload)
+2026-08-24T12:31:08Z INFO    device.log             2026-08-24T12:31:08Z received config 2026-08-24T12:31:08Z
+2026-08-24T12:31:08Z DEBUG   device.log             value of noWriteback: false
+2026-08-24T12:31:08Z DEBUG   device.log             value of noWriteback: false
+2026-08-24T12:31:08Z DEBUG   device.log             value of noWriteback: false
+2026-08-24T12:31:08Z DEBUG   blobset.blob.receive   Received blob update config for _iot_endpoint_credentials
+2026-08-24T12:31:08Z INFO    device.log             Update state 2026-08-24T12:31:08Z last_config 2026-08-24T12:31:08Z
+2026-08-24T12:31:08Z WARNING device.log             State update delay 1540ms
+2026-08-24T12:31:10Z DEBUG   device.log             State update AHU-1 (key_rotation_invalid_payload)
+2026-08-24T12:31:10Z NOTICE  system.config.apply    success
+2026-08-24T12:31:10Z DEBUG   device.log             State update defer 1998ms
+2026-08-24T12:31:10Z DEBUG   blobset.blob.fetch     Fetch blob data for _iot_endpoint_credentials
+2026-08-24T12:31:10Z DEBUG   device.log             State update defer 1998ms
+2026-08-24T12:31:10Z NOTICE  blobset.blob.apply     Staging blob update...
+2026-08-24T12:31:10Z DEBUG   device.log             State update defer 1996ms
+2026-08-24T12:31:10Z ERROR   device.log             Failed to apply blob _iot_endpoint_credentials: Invalid credentials payload for _iot_endpoint_credentials
+2026-08-24T12:31:10Z ERROR   blobset.blob.parse     Invalid credentials payload for _iot_endpoint_credentials
+2026-08-24T12:31:10Z DEBUG   device.log             State update defer 1993ms
+2026-08-24T12:31:12Z DEBUG   device.log             State update defer 0ms
+2026-08-24T12:31:12Z INFO    device.log             Update state 2026-08-24T12:31:12Z last_config 2026-08-24T12:31:08Z
+2026-08-24T12:31:12Z DEBUG   device.log             State update AHU-1 (key_rotation_invalid_payload)
+2026-08-24T12:31:18Z NOTICE  validation.feature.sequence Sequence complete

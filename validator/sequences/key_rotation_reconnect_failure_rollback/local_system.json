@@ -1,0 +1,10 @@
+{
+  "metrics_rate_sec" : 10,
+  "min_loglevel" : 100,
+  "operation" : {
+    "last_start" : "2026-08-24T12:38:08Z"
+  },
+  "testing" : {
+    "sequence_name" : "key_rotation_reconnect_failure_rollback"
+  }
+}

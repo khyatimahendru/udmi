@@ -366,14 +366,15 @@ public interface PublisherHost extends ManagerHost {
       } catch (Exception e) {
         error(format("Failed to apply blob %s", blobName), e);
 
-        withStateLock(() -> {
-          state.phase = BlobPhase.FINAL;
-          state.status = exceptionStatus(e, Category.BLOBSET_BLOB_APPLY);
-        });
-
         String category = e instanceof UdmiException
             ? ((UdmiException) e).getCategory()
-            : Category.BLOBSET_BLOB_FETCH;
+            : Category.BLOBSET_BLOB_APPLY;
+
+        withStateLock(() -> {
+          state.phase = BlobPhase.FINAL;
+          state.status = exceptionStatus(e, category);
+        });
+
         logEvent(category, "For blob name " + blobName + ":\n", e);
 
         publishAsynchronousState();

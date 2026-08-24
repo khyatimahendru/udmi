@@ -46,6 +46,9 @@ RESULT skip system.software.updates blob_update_invalid_payload PREVIEW 0/0 Stat
 RESULT skip system.software.updates blob_update_oversize PREVIEW 0/0 State testing disabled
 RESULT skip system.software.updates blob_update_success PREVIEW 0/0 State testing disabled
 RESULT skip system.software.updates blob_update_unreachable_url PREVIEW 0/0 State testing disabled
+RESULT skip system.software.updates key_rotation_invalid_payload PREVIEW 0/0 State testing disabled
+RESULT skip system.software.updates key_rotation_reconnect_failure_rollback PREVIEW 0/0 State testing disabled
+RESULT skip system.software.updates key_rotation_success PREVIEW 0/0 State testing disabled
 RESULT skip system state_make_model STABLE 0/0 State testing disabled
 RESULT skip system state_software STABLE 0/0 State testing disabled
 RESULT skip system system_last_update STABLE 0/0 State testing disabled

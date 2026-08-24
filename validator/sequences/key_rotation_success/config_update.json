@@ -1,0 +1,55 @@
+{
+  "blobset" : {
+    "blobs" : {
+      "_iot_endpoint_credentials" : {
+        "generation" : "2026-08-24T12:27:50Z",
+        "phase" : "final",
+        "sha256" : "@@@blob data hash###39c43f17b5391d6e2302c8e1e294d7ac5105e1b70ad162033bfd6bfd89a4b401",
+        "url" : "@@@credentials data###data:application/json;base64,eyJrZXlfZm9ybWF0IjoiUlMyNTYiLCJrZXlfZGF0YSI6ImMyRnRjR3hsWDNCeWFYWmhkR1ZmYTJWNVgyUmhkR0U9In0="
+      }
+    }
+  },
+  "discovery" : {
+    "families" : {
+      "bacnet" : { },
+      "vendor" : { }
+    }
+  },
+  "localnet" : {
+    "families" : {
+      "bacnet" : { },
+      "ether" : { },
+      "ipv4" : { },
+      "vendor" : { }
+    }
+  },
+  "pointset" : {
+    "points" : {
+      "filter_alarm_pressure_status" : {
+        "ref" : "BV11.present_value",
+        "units" : "No-units"
+      },
+      "filter_differential_pressure_sensor" : {
+        "ref" : "AV12.present_value",
+        "units" : "Degrees-Celsius"
+      },
+      "filter_differential_pressure_setpoint" : {
+        "set_value" : 98,
+        "units" : "Bars"
+      }
+    },
+    "sample_rate_sec" : 300
+  },
+  "system" : {
+    "metrics_rate_sec" : 10,
+    "min_loglevel" : 100,
+    "operation" : {
+      "last_start" : "2026-08-24T12:27:27Z"
+    },
+    "testing" : {
+      "sequence_name" : "key_rotation_success"
+    }
+  },
+  "timestamp" : "2026-08-24T12:27:53Z",
+  "version" : "@@@cloud udmi version###1.4.2-632-gb9a7c34d0-dirty"
+}

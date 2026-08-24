@@ -1,0 +1,26 @@
+{
+  "hardware" : {
+    "make" : "BOS",
+    "model" : "pubber"
+  },
+  "last_config" : "2026-08-24T12:27:53Z",
+  "operation" : {
+    "last_start" : "2026-08-24T12:27:27Z",
+    "mode" : "initial",
+    "operational" : true,
+    "restart_count" : 1
+  },
+  "serial_no" : "sequencer-18142",
+  "software" : {
+    "firmware" : "v1",
+    "system" : "v1"
+  },
+  "status" : {
+    "category" : "blobset.blob.apply",
+    "level" : 300,
+    "message" : "Staging blob update...",
+    "timestamp" : "2026-08-24T12:27:55Z"
+  },
+  "timestamp" : "2026-08-24T12:27:57Z",
+  "version" : "1.5.7"
+}

@@ -1,0 +1,77 @@
+{
+  "blobset" : {
+    "blobs" : {
+      "_iot_endpoint_credentials" : {
+        "generation" : "2026-08-24T12:31:05Z",
+        "phase" : "final",
+        "status" : {
+          "category" : "blobset.blob.parse",
+          "detail" : "udmi.lib.base.UdmiException: Invalid credentials payload for _iot_endpoint_credentials\n\tat daq.pubber.impl.blob.PubberBlobLifecycleHandler.stagePubberCredentialsUpdate(PubberBlobLifecycleHandler.java:173)\n\tat daq.pubber.impl.blob.PubberBlobLifecycleHandler.stageBlob(PubberBlobLifecycleHandler.java:102)\n\tat udmi.lib.client.host.PublisherHost.orchestrateTwoPhaseDeployment(PublisherHost.java:398)\n\tat udmi.lib.client.host.PublisherHost.lambda$evaluateAndDeployBlob$3(PublisherHost.java:365)\n\tat java.base/java.util.concurrent.CompletableFuture$AsyncRun.run(CompletableFuture.java:1804)\n\tat java.base/java.util.concurrent.CompletableFuture$AsyncRun.exec(CompletableFuture.java:1796)\n\tat java.base/java.util.concurrent.ForkJoinTask.doExec(ForkJoinTask.java:387)\n\tat java.base/java.util.concurrent.ForkJoinPool$WorkQueue.topLevelExec(ForkJoinPool.java:1312)\n\tat java.base/java.util.concurrent.ForkJoinPool.scan(ForkJoinPool.java:1843)\n\tat java.base/java.util.concurrent.ForkJoinPool.runWorker(ForkJoinPool.java:1808)\n\tat java.base/java.util.concurrent.ForkJoinWorkerThread.run(ForkJoinWorkerThread.java:188)\n",
+          "level" : 500,
+          "message" : "Invalid credentials payload for _iot_endpoint_credentials",
+          "timestamp" : "2026-08-24T12:31:10Z"
+        }
+      }
+    }
+  },
+  "discovery" : {
+    "families" : { }
+  },
+  "localnet" : {
+    "families" : {
+      "bacnet" : {
+        "addr" : "27312"
+      },
+      "ether" : {
+        "addr" : "42:01:ac:11:23:ac"
+      },
+      "ipv4" : {
+        "addr" : "172.17.35.172"
+      },
+      "vendor" : {
+        "addr" : "28179023"
+      }
+    }
+  },
+  "pointset" : {
+    "points" : {
+      "filter_alarm_pressure_status" : {
+        "units" : "No-units"
+      },
+      "filter_differential_pressure_sensor" : {
+        "units" : "Degrees-Celsius"
+      },
+      "filter_differential_pressure_setpoint" : {
+        "units" : "Bars",
+        "value_state" : "applied"
+      }
+    }
+  },
+  "system" : {
+    "hardware" : {
+      "make" : "BOS",
+      "model" : "pubber"
+    },
+    "last_config" : "2026-08-24T12:31:08Z",
+    "operation" : {
+      "last_start" : "2026-08-24T12:30:41Z",
+      "mode" : "initial",
+      "operational" : true,
+      "restart_count" : 1
+    },
+    "serial_no" : "sequencer-17222",
+    "software" : {
+      "firmware" : "v1",
+      "system" : "v1"
+    },
+    "status" : {
+      "category" : "blobset.blob.parse",
+      "detail" : "udmi.lib.base.UdmiException: Invalid credentials payload for _iot_endpoint_credentials;",
+      "level" : 500,
+      "message" : "Invalid credentials payload for _iot_endpoint_credentials",
+      "timestamp" : "2026-08-24T12:31:10Z"
+    }
+  },
+  "timestamp" : "2026-08-24T12:31:12Z",
+  "version" : "1.5.7"
+}
