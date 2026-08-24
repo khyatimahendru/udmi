@@ -23,6 +23,7 @@ import static udmi.schema.Category.BLOBSET_BLOB_APPLY;
 import static udmi.schema.Category.BLOBSET_BLOB_FETCH;
 import static udmi.schema.Category.BLOBSET_BLOB_PARSE;
 import static udmi.schema.Category.BLOBSET_BLOB_RECEIVE;
+import static udmi.schema.Category.BLOBSET_BLOB_ROLLBACK;
 import static udmi.schema.FeatureDiscovery.FeatureStage.PREVIEW;
 
 import com.google.daq.mqtt.sequencer.DefaultLogLevel;
@@ -68,6 +69,8 @@ public class BlobsetSequences extends SequenceBase {
   public static final String JSON_MIME_TYPE = "application/json";
   public static final String DATA_URL_FORMAT = "data:%s;base64,%s";
   public static final String IOT_BLOB_KEY = SystemBlobsets.IOT_ENDPOINT_CONFIG.value();
+  public static final String CREDENTIALS_BLOB_KEY =
+      SystemBlobsets.IOT_ENDPOINT_CREDENTIALS.value();
   private static final String IOT_CORE_CLIENT_ID_FMT =
       "projects/%s/locations/%s/registries/%s/devices/%s";
   private static final String LOCAL_CLIENT_ID_FMT = "/r/%s/d/%s";
@@ -583,6 +586,97 @@ public class BlobsetSequences extends SequenceBase {
       BlobBlobsetState blobState = deviceState.blobset.blobs.get(target.blob_name);
       return blobState != null && BlobPhase.FINAL.equals(blobState.phase);
     });
+  }
+
+  private static BlobBlobsetConfig makeCredentialsBlob(String payload, boolean badHash) {
+    BlobBlobsetConfig config = new BlobBlobsetConfig();
+    config.url = SemanticValue.describe("credentials data", generateEndpointConfigDataUrl(payload));
+    config.phase = BlobPhase.FINAL;
+    config.generation = SemanticDate.describe("blob generation", new Date());
+    String description = badHash ? "invalid blob data hash" : "blob data hash";
+    config.sha256 = SemanticValue.describe(description,
+        badHash ? sha256(payload + "X") : sha256(payload));
+    return config;
+  }
+
+  private void setDeviceConfigCredentialsBlob(String payload, boolean badHash) {
+    BlobBlobsetConfig config = makeCredentialsBlob(payload, badHash);
+    BlobsetConfig blobset = new BlobsetConfig();
+    blobset.blobs = new HashMap<>();
+    blobset.blobs.put(CREDENTIALS_BLOB_KEY, config);
+    deviceConfig.blobset = blobset;
+  }
+
+  @Test(timeout = TWO_MINUTES_MS)
+  @Feature(stage = PREVIEW, bucket = SYSTEM_SOFTWARE_UPDATES)
+  @Summary("Validates successful device credentials / key rotation.")
+  @DefaultLogLevel(Level.DEBUG)
+  public void key_rotation_success() {
+    String payload = "{\"key_format\":\"RS256\",\"key_data\":\"sample_public_key_data\"}";
+    setDeviceConfigCredentialsBlob(payload, false);
+    updateConfig("trigger key rotation update");
+
+    waitForLog(BLOBSET_BLOB_RECEIVE);
+    waitForLog(BLOBSET_BLOB_FETCH);
+    waitForLog(BLOBSET_BLOB_APPLY);
+
+    untilTrue(CREDENTIALS_BLOB_KEY + " phase is FINAL", () -> {
+      BlobBlobsetState state = deviceState.blobset != null && deviceState.blobset.blobs != null
+          ? deviceState.blobset.blobs.get(CREDENTIALS_BLOB_KEY) : null;
+      return state != null && BlobPhase.FINAL.equals(state.phase);
+    });
+
+    BlobBlobsetState finalState = deviceState.blobset.blobs.get(CREDENTIALS_BLOB_KEY);
+    checkThat(CREDENTIALS_BLOB_KEY + " state is success", () -> finalState.status == null);
+  }
+
+  @Test(timeout = TWO_MINUTES_MS)
+  @Feature(stage = PREVIEW, bucket = SYSTEM_SOFTWARE_UPDATES)
+  @Summary("Validates rejection of invalid payload during key rotation.")
+  @DefaultLogLevel(Level.DEBUG)
+  public void key_rotation_invalid_payload() {
+    String payload = "{\"trigger\":\"invalid_payload\"}";
+    setDeviceConfigCredentialsBlob(payload, false);
+    updateConfig("trigger invalid key rotation payload");
+
+    waitForLog(BLOBSET_BLOB_RECEIVE);
+    waitForLog(BLOBSET_BLOB_FETCH);
+    waitForLog(BLOBSET_BLOB_PARSE, Level.ERROR);
+
+    untilTrue(CREDENTIALS_BLOB_KEY + " phase is FINAL", () -> {
+      BlobBlobsetState state = deviceState.blobset != null && deviceState.blobset.blobs != null
+          ? deviceState.blobset.blobs.get(CREDENTIALS_BLOB_KEY) : null;
+      return state != null && BlobPhase.FINAL.equals(state.phase);
+    });
+
+    BlobBlobsetState finalState = deviceState.blobset.blobs.get(CREDENTIALS_BLOB_KEY);
+    checkThat(CREDENTIALS_BLOB_KEY + " state indicates error", () ->
+        finalState.status != null && finalState.status.level >= Level.ERROR.value());
+  }
+
+  @Test(timeout = TWO_MINUTES_MS)
+  @Feature(stage = PREVIEW, bucket = SYSTEM_SOFTWARE_UPDATES)
+  @Summary("Validates automatic rollback upon key rotation reconnection failure.")
+  @DefaultLogLevel(Level.DEBUG)
+  public void key_rotation_reconnect_failure_rollback() {
+    String payload = "{\"trigger\":\"fail_reconnect\"}";
+    setDeviceConfigCredentialsBlob(payload, false);
+    updateConfig("trigger key rotation with simulated reconnect failure");
+
+    waitForLog(BLOBSET_BLOB_RECEIVE);
+    waitForLog(BLOBSET_BLOB_FETCH);
+    waitForLog(BLOBSET_BLOB_APPLY);
+
+    untilTrue(CREDENTIALS_BLOB_KEY + " phase is FINAL", () -> {
+      BlobBlobsetState state = deviceState.blobset != null && deviceState.blobset.blobs != null
+          ? deviceState.blobset.blobs.get(CREDENTIALS_BLOB_KEY) : null;
+      return state != null && BlobPhase.FINAL.equals(state.phase);
+    });
+
+    BlobBlobsetState finalState = deviceState.blobset.blobs.get(CREDENTIALS_BLOB_KEY);
+    checkThat(CREDENTIALS_BLOB_KEY + " state indicates rollback error", () ->
+        finalState.status != null && finalState.status.level >= Level.ERROR.value()
+            && BLOBSET_BLOB_ROLLBACK.equals(finalState.status.category));
   }
 
 }

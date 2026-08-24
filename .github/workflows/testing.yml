@@ -386,6 +386,8 @@ jobs:
         run: bin/test_regclean $TARGET_PROJECT
       - name: bin/test_blob_updates
         run: bin/test_blob_updates $TARGET_PROJECT
+      - name: bin/test_rotate_keys
+        run: bin/test_rotate_keys $TARGET_PROJECT
       - name: pubber.log
         if: ${{ !cancelled() }}
         run: more out/pubber.log* | cat
