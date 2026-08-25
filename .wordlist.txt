@@ -229,6 +229,7 @@ RDF
 Readme
 reconciler
 Reconciler
+reconnection
 REPL
 repo
 Responder
