@@ -1,0 +1,10 @@
+{
+  "blobs" : {
+    "_iot_endpoint_credentials" : {
+      "generation" : "2026-08-24T12:38:31Z",
+      "phase" : "final",
+      "sha256" : "@@@blob data hash###0d76606d3eb996d13e35ae8555822a529807bb466f73b69111fabe3f1c5da20e",
+      "url" : "@@@credentials data###data:application/json;base64,eyJ0cmlnZ2VyIjoiZmFpbF9yZWNvbm5lY3QifQ=="
+    }
+  }
+}

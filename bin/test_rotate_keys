@@ -1,0 +1,82 @@
+#!/bin/bash -e
+
+ROOT_DIR=$(realpath $(dirname $0)/..)
+cd $ROOT_DIR
+
+if [[ $# != 1 ]]; then
+    echo "Usage: $0 PROJECT_SPEC"
+    false
+fi
+
+project_spec=$1
+shift
+
+function log {
+    $ROOT_DIR/bin/timestamp $@
+}
+
+function fail {
+    $ROOT_DIR/bin/timestamp $@
+    false
+}
+
+site_path=sites/udmi_site_model
+device_id=AHU-1
+serial_no=sequencer-$RANDOM
+device_dir="$site_path/devices/$device_id"
+
+# Backup original keys before testing to restore on exit
+orig_key_backup=$(mktemp -d)
+cp -r $device_dir/* $orig_key_backup/
+
+pubber_pid=""
+cleanup() {
+    if [[ -n "$pubber_pid" ]]; then
+        echo "Cleaning up pubber background process ($pubber_pid)..."
+        kill $pubber_pid 2>/dev/null || true
+    fi
+    # Restore original device keys
+    cp -r $orig_key_backup/* $device_dir/ 2>/dev/null || true
+    rm -rf $orig_key_backup
+}
+trap cleanup EXIT
+
+mkdir -p out/
+pubber_log=out/pubber.log.${serial_no}
+
+log "Starting pubber with serial $serial_no..."
+bin/pubber $site_path $project_spec $device_id $serial_no > $pubber_log 2>&1 &
+pubber_pid=$!
+
+log "Waiting for pubber to start and connect..."
+sleep 20
+
+log "Triggering automated key rotation using bin/rotate_keys..."
+bin/rotate_keys $site_path $project_spec $device_id RS256
+
+log "Waiting for pubber to process rotation and reconnect..."
+sleep 20
+
+log "Verifying logs for key rotation events..."
+if grep -q "Staged credentials update for _iot_endpoint_credentials" $pubber_log; then
+    log "Credential staging event detected."
+else
+    fail "Credential staging event NOT detected in pubber log."
+fi
+
+sleep 10
+
+if grep -q "Credentials rotated successfully for _iot_endpoint_credentials" $pubber_log; then
+    log "Credential rotation activation success detected."
+else
+    fail "Credential rotation activation success NOT detected in pubber log."
+fi
+
+log "Verifying device state in pubber/out/state.json..."
+if jq -e '.blobset.blobs._iot_endpoint_credentials.phase == "final" and (.blobset.blobs._iot_endpoint_credentials.status == null or .blobset.blobs._iot_endpoint_credentials.status.level < 500)' pubber/out/state.json > /dev/null 2>&1; then
+    log "Blobset state phase: FINAL with successful status verified in state.json"
+else
+    fail "Blobset state phase: FINAL NOT found in pubber/out/state.json"
+fi
+
+log "Automated key rotation integration test passed successfully!"

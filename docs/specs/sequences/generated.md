@@ -63,6 +63,9 @@ Some caveats:
 * [family_ipv6_addr](#family_ipv6_addr-preview): Test skipped: No ipv6 address defined in metadata
 * [gateway_proxy_events](#gateway_proxy_events-beta): Check that a gateway proxies pointset events for indicated devices Test skipped: Not a gateway
 * [gateway_proxy_state](#gateway_proxy_state-preview): Check that a gateway proxies state updates for indicated devices Test skipped: Not a gateway
+* [key_rotation_invalid_payload](#key_rotation_invalid_payload-preview): Validates rejection of invalid payload during key rotation.
+* [key_rotation_reconnect_failure_rollback](#key_rotation_reconnect_failure_rollback-preview): Validates automatic rollback upon key rotation reconnection failure.
+* [key_rotation_success](#key_rotation_success-preview): Validates successful device credentials / key rotation.
 * [pointset_numeric_values](#pointset_numeric_values-stable): Check that numerical values in pointset payloads are reported as JSON numbers and not strings
 * [pointset_publish](#pointset_publish-stable): Check that a device publishes pointset events
 * [pointset_publish_interval](#pointset_publish_interval-stable): Check handling of sample_rate_sec and sample_limit_sec
@@ -563,6 +566,48 @@ Check that a gateway proxies state updates for indicated devices
 
 
 Test skipped: Not a gateway
+
+## key_rotation_invalid_payload (PREVIEW)
+
+Validates rejection of invalid payload during key rotation.
+
+1. Update config trigger invalid key rotation payload
+    * Add `blobset` = { "blobs": { "_iot_endpoint_credentials": { "phase": `final`, "generation": `blob generation`, "sha256": `blob data hash`, "url": `credentials data` } } }
+1. Wait until system logs level `DEBUG` category `blobset.blob.receive`
+1. Wait until system logs level `DEBUG` category `blobset.blob.fetch`
+1. Wait until system logs level `ERROR` category `blobset.blob.parse`
+1. Wait for _iot_endpoint_credentials phase is FINAL
+1. Check that _iot_endpoint_credentials state indicates error
+
+Test passed.
+
+## key_rotation_reconnect_failure_rollback (PREVIEW)
+
+Validates automatic rollback upon key rotation reconnection failure.
+
+1. Update config trigger key rotation with simulated reconnect failure
+    * Add `blobset` = { "blobs": { "_iot_endpoint_credentials": { "phase": `final`, "generation": `blob generation`, "sha256": `blob data hash`, "url": `credentials data` } } }
+1. Wait until system logs level `DEBUG` category `blobset.blob.receive`
+1. Wait until system logs level `DEBUG` category `blobset.blob.fetch`
+1. Wait until system logs level `NOTICE` category `blobset.blob.apply`
+1. Wait for _iot_endpoint_credentials phase is FINAL
+1. Check that _iot_endpoint_credentials state indicates rollback error
+
+Test passed.
+
+## key_rotation_success (PREVIEW)
+
+Validates successful device credentials / key rotation.
+
+1. Update config trigger key rotation update
+    * Add `blobset` = { "blobs": { "_iot_endpoint_credentials": { "phase": `final`, "generation": `blob generation`, "sha256": `blob data hash`, "url": `credentials data` } } }
+1. Wait until system logs level `DEBUG` category `blobset.blob.receive`
+1. Wait until system logs level `DEBUG` category `blobset.blob.fetch`
+1. Wait until system logs level `NOTICE` category `blobset.blob.apply`
+1. Wait for _iot_endpoint_credentials phase is FINAL
+1. Check that _iot_endpoint_credentials state is success
+
+Test passed.
 
 ## pointset_numeric_values (STABLE)
 

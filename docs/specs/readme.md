@@ -20,6 +20,7 @@
 - [Subblocks](subblocks.md) (core-to-apps API)
 - [UUFI](uufi.md) (app-to-system API)
 - [Blob Updates](blob_updates.md)
+- [Key Rotation](key_rotation.md)
 - [Categories](categories.md)
 - [Log/Status Entries](entries.md)
 - [System Mode](system_mode.md)

@@ -1,0 +1,27 @@
+{
+  "hardware" : {
+    "make" : "BOS",
+    "model" : "pubber"
+  },
+  "last_config" : "2026-08-24T12:31:08Z",
+  "operation" : {
+    "last_start" : "2026-08-24T12:30:41Z",
+    "mode" : "initial",
+    "operational" : true,
+    "restart_count" : 1
+  },
+  "serial_no" : "sequencer-17222",
+  "software" : {
+    "firmware" : "v1",
+    "system" : "v1"
+  },
+  "status" : {
+    "category" : "blobset.blob.parse",
+    "detail" : "udmi.lib.base.UdmiException: Invalid credentials payload for _iot_endpoint_credentials;",
+    "level" : 500,
+    "message" : "Invalid credentials payload for _iot_endpoint_credentials",
+    "timestamp" : "2026-08-24T12:31:10Z"
+  },
+  "timestamp" : "2026-08-24T12:31:12Z",
+  "version" : "1.5.7"
+}

@@ -56,7 +56,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.Lock;
-import java.util.stream.Collectors;
 import org.apache.http.ConnectionClosedException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -284,7 +283,7 @@ public interface PublisherHost extends ManagerHost {
         .collect(java.util.stream.Collectors.toSet());
 
     for (String blobName : allBlobs.keySet()) {
-      if (systemBlobs.contains(blobName)) {
+      if (IOT_ENDPOINT_CONFIG.value().equals(blobName)) {
         continue;
       }
       if (!getBlobLifecycleHandler().isBlobSupported(blobName)) {
@@ -304,13 +303,10 @@ public interface PublisherHost extends ManagerHost {
       return;
     }
     Map<String, BlobBlobsetConfig> allBlobs = getAllBlobsConfig();
-    Set<String> systemBlobs = Arrays.stream(SystemBlobsets.values())
-        .map(SystemBlobsets::value)
-        .collect(Collectors.toSet());
 
     List<String> stateBlobs = new ArrayList<>(getDeviceState().blobset.blobs.keySet());
     for (String blobName : stateBlobs) {
-      if (!systemBlobs.contains(blobName) && !allBlobs.containsKey(blobName)) {
+      if (!IOT_ENDPOINT_CONFIG.value().equals(blobName) && !allBlobs.containsKey(blobName)) {
         info("Removing blobset state for removed blob: " + blobName);
         removeBlobsetBlobState(blobName);
       }
@@ -370,14 +366,15 @@ public interface PublisherHost extends ManagerHost {
       } catch (Exception e) {
         error(format("Failed to apply blob %s", blobName), e);
 
-        withStateLock(() -> {
-          state.phase = BlobPhase.FINAL;
-          state.status = exceptionStatus(e, Category.BLOBSET_BLOB_APPLY);
-        });
-
         String category = e instanceof UdmiException
             ? ((UdmiException) e).getCategory()
-            : Category.BLOBSET_BLOB_FETCH;
+            : Category.BLOBSET_BLOB_APPLY;
+
+        withStateLock(() -> {
+          state.phase = BlobPhase.FINAL;
+          state.status = exceptionStatus(e, category);
+        });
+
         logEvent(category, "For blob name " + blobName + ":\n", e);
 
         publishAsynchronousState();

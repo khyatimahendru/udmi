@@ -1,0 +1,437 @@
+{
+  "event_no" : 4,
+  "last_config" : "2026-08-24T12:31:08Z",
+  "logentries" : [ {
+    "category" : "device.log",
+    "level" : 100,
+    "message" : "State update defer 0ms",
+    "timestamp" : "2026-08-24T12:31:04Z"
+  }, {
+    "category" : "device.log",
+    "level" : 200,
+    "message" : "Update state 2026-08-24T12:31:04Z last_config 2026-08-24T12:31:02Z",
+    "timestamp" : "2026-08-24T12:31:04Z"
+  }, {
+    "category" : "device.log",
+    "detail" : "{\n  \"discovery\" : {\n    \"families\" : { }\n  },\n  \"localnet\" : {\n    \"families\" : {\n      \"bacnet\" : {\n        \"addr\" : \"27312\"\n      },\n      \"ether\" : {\n        \"addr\" : \"42:01:ac:11:23:ac\"\n      },\n      \"ipv4\" : {\n        \"addr\" : \"172.17.35.172\"\n      },\n      \"vendor\" : {\n        \"addr\" : \"28179023\"\n      }\n    }\n  },\n  \"pointset\" : {\n    \"points\" : {\n      \"filter_alarm_pressure_status\" : {\n        \"units\" : \"No-units\"\n      },\n      \"filter_differential_pressure_sensor\" : {\n        \"units\" : \"Degrees-Celsius\"\n      },\n      \"filter_differential_pressure_setpoint\" : {\n        \"units\" : \"Bars\",\n        \"value_state\" : \"applied\"\n      }\n    }\n  },\n  \"system\" : {\n    \"hardware\" : {\n      \"make\" : \"BOS\",\n      \"model\" : \"pubber\"\n    },\n    \"last_config\" : \"2026-08-24T12:31:02Z\",\n    \"operation\" : {\n      \"last_start\" : \"2026-08-24T12:30:41Z\",\n      \"mode\" : \"initial\",\n      \"operational\" : true,\n      \"restart_count\" : 1\n    },\n    \"serial_no\" : \"sequencer-17222\",\n    \"software\" : {\n      \"firmware\" : \"v1\",\n      \"system\" : \"v1\"\n    },\n    \"status\" : {\n      \"category\" : \"system.config.apply\",\n      \"level\" : 300,\n      \"message\" : \"success\",\n      \"timestamp\" : \"2026-08-24T12:31:02Z\"\n    }\n  },\n  \"timestamp\" : \"2026-08-24T12:31:04Z\",\n  \"version\" : \"1.5.7\"\n}",
+    "level" : 100,
+    "message" : "State update AHU-1 (key_rotation_invalid_payload)",
+    "timestamp" : "2026-08-24T12:31:04Z"
+  }, {
+    "category" : "system.config.receive",
+    "level" : 100,
+    "message" : "success",
+    "timestamp" : "2026-08-24T12:31:06Z"
+  }, {
+    "category" : "system.config.parse",
+    "level" : 100,
+    "message" : "success",
+    "timestamp" : "2026-08-24T12:31:06Z"
+  }, {
+    "category" : "device.log",
+    "level" : 100,
+    "message" : "State update defer -71ms",
+    "timestamp" : "2026-08-24T12:31:06Z"
+  }, {
+    "category" : "device.log",
+    "level" : 200,
+    "message" : "Device AHU-1 config handler",
+    "timestamp" : "2026-08-24T12:31:06Z"
+  }, {
+    "category" : "device.log",
+    "detail" : "{\n  \"discovery\" : {\n    \"families\" : { }\n  },\n  \"localnet\" : {\n    \"families\" : {\n      \"bacnet\" : {\n        \"addr\" : \"27312\"\n      },\n      \"ether\" : {\n        \"addr\" : \"42:01:ac:11:23:ac\"\n      },\n      \"ipv4\" : {\n        \"addr\" : \"172.17.35.172\"\n      },\n      \"vendor\" : {\n        \"addr\" : \"28179023\"\n      }\n    }\n  },\n  \"pointset\" : {\n    \"points\" : {\n      \"filter_alarm_pressure_status\" : {\n        \"units\" : \"No-units\"\n      },\n      \"filter_differential_pressure_sensor\" : {\n        \"units\" : \"Degrees-Celsius\"\n      },\n      \"filter_differential_pressure_setpoint\" : {\n        \"units\" : \"Bars\",\n        \"value_state\" : \"applied\"\n      }\n    }\n  },\n  \"system\" : {\n    \"hardware\" : {\n      \"make\" : \"BOS\",\n      \"model\" : \"pubber\"\n    },\n    \"last_config\" : \"2026-08-24T12:31:02Z\",\n    \"operation\" : {\n      \"last_start\" : \"2026-08-24T12:30:41Z\",\n      \"mode\" : \"initial\",\n      \"operational\" : true,\n      \"restart_count\" : 1\n    },\n    \"serial_no\" : \"sequencer-17222\",\n    \"software\" : {\n      \"firmware\" : \"v1\",\n      \"system\" : \"v1\"\n    },\n    \"status\" : {\n      \"category\" : \"system.config.parse\",\n      \"level\" : 100,\n      \"message\" : \"success\",\n      \"timestamp\" : \"2026-08-24T12:31:06Z\"\n    }\n  },\n  \"timestamp\" : \"2026-08-24T12:31:06Z\",\n  \"version\" : \"1.5.7\"\n}",
+    "level" : 100,
+    "message" : "State update AHU-1 (key_rotation_invalid_payload)",
+    "timestamp" : "2026-08-24T12:31:06Z"
+  }, {
+    "category" : "device.log",
+    "detail" : "{\n  \"discovery\" : {\n    \"families\" : {\n      \"bacnet\" : { },\n      \"vendor\" : { }\n    }\n  },\n  \"localnet\" : {\n    \"families\" : {\n      \"bacnet\" : { },\n      \"ether\" : { },\n      \"ipv4\" : { },\n      \"vendor\" : { }\n    }\n  },\n  \"pointset\" : {\n    \"points\" : {\n      \"filter_alarm_pressure_status\" : {\n        \"ref\" : \"BV11.present_value\",\n        \"units\" : \"No-units\"\n      },\n      \"filter_differential_pressure_sensor\" : {\n        \"ref\" : \"AV12.present_value\",\n        \"units\" : \"Degrees-Celsius\"\n      },\n      \"filter_differential_pressure_setpoint\" : {\n        \"set_value\" : 98,\n        \"units\" : \"Bars\"\n      }\n    },\n    \"sample_rate_sec\" : 300\n  },\n  \"system\" : {\n    \"metrics_rate_sec\" : 10,\n    \"min_loglevel\" : 100,\n    \"operation\" : {\n      \"last_start\" : \"2026-08-24T12:30:41Z\"\n    },\n    \"testing\" : {\n      \"config_base\" : 17,\n      \"sequence_name\" : \"key_rotation_invalid_payload\",\n      \"transaction_id\" : \"RC:9966a6.00000008\"\n    }\n  },\n  \"timestamp\" : \"2026-08-24T12:31:06Z\",\n  \"version\" : \"1.4.2-632-gb9a7c34d0-dirty\"\n}",
+    "level" : 100,
+    "message" : "Config update AHU-1 (key_rotation_invalid_payload)",
+    "timestamp" : "2026-08-24T12:31:06Z"
+  }, {
+    "category" : "device.log",
+    "level" : 200,
+    "message" : "2026-08-24T12:31:06Z received config 2026-08-24T12:31:06Z",
+    "timestamp" : "2026-08-24T12:31:06Z"
+  }, {
+    "category" : "device.log",
+    "level" : 100,
+    "message" : "value of noWriteback: false",
+    "timestamp" : "2026-08-24T12:31:06Z"
+  }, {
+    "category" : "device.log",
+    "level" : 100,
+    "message" : "value of noWriteback: false",
+    "timestamp" : "2026-08-24T12:31:06Z"
+  }, {
+    "category" : "device.log",
+    "level" : 100,
+    "message" : "value of noWriteback: false",
+    "timestamp" : "2026-08-24T12:31:06Z"
+  }, {
+    "category" : "system.config.apply",
+    "level" : 300,
+    "message" : "success",
+    "timestamp" : "2026-08-24T12:31:06Z"
+  }, {
+    "category" : "device.log",
+    "level" : 100,
+    "message" : "State update defer 1997ms",
+    "timestamp" : "2026-08-24T12:31:06Z"
+  }, {
+    "category" : "system.config.receive",
+    "level" : 100,
+    "message" : "success",
+    "timestamp" : "2026-08-24T12:31:06Z"
+  }, {
+    "category" : "device.log",
+    "level" : 100,
+    "message" : "State update defer 1785ms",
+    "timestamp" : "2026-08-24T12:31:06Z"
+  }, {
+    "category" : "system.config.parse",
+    "level" : 100,
+    "message" : "success",
+    "timestamp" : "2026-08-24T12:31:06Z"
+  }, {
+    "category" : "device.log",
+    "level" : 200,
+    "message" : "Device AHU-1 config handler",
+    "timestamp" : "2026-08-24T12:31:06Z"
+  }, {
+    "category" : "device.log",
+    "level" : 100,
+    "message" : "State update defer 1784ms",
+    "timestamp" : "2026-08-24T12:31:06Z"
+  }, {
+    "category" : "device.log",
+    "detail" : "{\n  \"discovery\" : {\n    \"families\" : {\n      \"bacnet\" : { },\n      \"vendor\" : { }\n    }\n  },\n  \"localnet\" : {\n    \"families\" : {\n      \"bacnet\" : { },\n      \"ether\" : { },\n      \"ipv4\" : { },\n      \"vendor\" : { }\n    }\n  },\n  \"pointset\" : {\n    \"points\" : {\n      \"filter_alarm_pressure_status\" : {\n        \"ref\" : \"BV11.present_value\",\n        \"units\" : \"No-units\"\n      },\n      \"filter_differential_pressure_sensor\" : {\n        \"ref\" : \"AV12.present_value\",\n        \"units\" : \"Degrees-Celsius\"\n      },\n      \"filter_differential_pressure_setpoint\" : {\n        \"set_value\" : 98,\n        \"units\" : \"Bars\"\n      }\n    },\n    \"sample_rate_sec\" : 300\n  },\n  \"system\" : {\n    \"metrics_rate_sec\" : 10,\n    \"min_loglevel\" : 100,\n    \"operation\" : {\n      \"last_start\" : \"2026-08-24T12:30:41Z\"\n    },\n    \"testing\" : {\n      \"config_base\" : 18,\n      \"sequence_name\" : \"key_rotation_invalid_payload\",\n      \"transaction_id\" : \"RC:9966a6.00000009\"\n    }\n  },\n  \"timestamp\" : \"2026-08-24T12:31:06Z\",\n  \"version\" : \"1.4.2-632-gb9a7c34d0-dirty\"\n}",
+    "level" : 100,
+    "message" : "Config update AHU-1 (key_rotation_invalid_payload)",
+    "timestamp" : "2026-08-24T12:31:06Z"
+  }, {
+    "category" : "device.log",
+    "level" : 200,
+    "message" : "2026-08-24T12:31:06Z received config 2026-08-24T12:31:06Z",
+    "timestamp" : "2026-08-24T12:31:06Z"
+  }, {
+    "category" : "device.log",
+    "level" : 100,
+    "message" : "value of noWriteback: false",
+    "timestamp" : "2026-08-24T12:31:06Z"
+  }, {
+    "category" : "device.log",
+    "level" : 100,
+    "message" : "value of noWriteback: false",
+    "timestamp" : "2026-08-24T12:31:06Z"
+  }, {
+    "category" : "device.log",
+    "level" : 100,
+    "message" : "value of noWriteback: false",
+    "timestamp" : "2026-08-24T12:31:06Z"
+  }, {
+    "category" : "system.config.apply",
+    "level" : 300,
+    "message" : "success",
+    "timestamp" : "2026-08-24T12:31:06Z"
+  }, {
+    "category" : "device.log",
+    "level" : 100,
+    "message" : "State update defer 1781ms",
+    "timestamp" : "2026-08-24T12:31:06Z"
+  }, {
+    "category" : "device.log",
+    "level" : 100,
+    "message" : "State update defer 1781ms",
+    "timestamp" : "2026-08-24T12:31:06Z"
+  }, {
+    "category" : "device.log",
+    "level" : 100,
+    "message" : "State update defer 1780ms",
+    "timestamp" : "2026-08-24T12:31:06Z"
+  }, {
+    "category" : "device.log",
+    "level" : 100,
+    "message" : "State update defer 1780ms",
+    "timestamp" : "2026-08-24T12:31:06Z"
+  }, {
+    "category" : "device.log",
+    "level" : 100,
+    "message" : "State update defer 1780ms",
+    "timestamp" : "2026-08-24T12:31:06Z"
+  }, {
+    "category" : "system.config.receive",
+    "level" : 100,
+    "message" : "success",
+    "timestamp" : "2026-08-24T12:31:07Z"
+  }, {
+    "category" : "device.log",
+    "level" : 100,
+    "message" : "State update defer 666ms",
+    "timestamp" : "2026-08-24T12:31:07Z"
+  }, {
+    "category" : "system.config.parse",
+    "level" : 100,
+    "message" : "success",
+    "timestamp" : "2026-08-24T12:31:07Z"
+  }, {
+    "category" : "device.log",
+    "level" : 100,
+    "message" : "State update defer 665ms",
+    "timestamp" : "2026-08-24T12:31:07Z"
+  }, {
+    "category" : "device.log",
+    "level" : 200,
+    "message" : "Device AHU-1 config handler",
+    "timestamp" : "2026-08-24T12:31:07Z"
+  }, {
+    "category" : "device.log",
+    "detail" : "{\n  \"discovery\" : {\n    \"families\" : {\n      \"bacnet\" : { },\n      \"vendor\" : { }\n    }\n  },\n  \"localnet\" : {\n    \"families\" : {\n      \"bacnet\" : { },\n      \"ether\" : { },\n      \"ipv4\" : { },\n      \"vendor\" : { }\n    }\n  },\n  \"pointset\" : {\n    \"points\" : {\n      \"filter_alarm_pressure_status\" : {\n        \"ref\" : \"BV11.present_value\",\n        \"units\" : \"No-units\"\n      },\n      \"filter_differential_pressure_sensor\" : {\n        \"ref\" : \"AV12.present_value\",\n        \"units\" : \"Degrees-Celsius\"\n      },\n      \"filter_differential_pressure_setpoint\" : {\n        \"set_value\" : 98,\n        \"units\" : \"Bars\"\n      }\n    },\n    \"sample_rate_sec\" : 300\n  },\n  \"system\" : {\n    \"metrics_rate_sec\" : 10,\n    \"min_loglevel\" : 100,\n    \"operation\" : {\n      \"last_start\" : \"2026-08-24T12:30:41Z\"\n    },\n    \"testing\" : {\n      \"config_base\" : 19,\n      \"sequence_name\" : \"key_rotation_invalid_payload\",\n      \"transaction_id\" : \"RC:9966a6.0000000a\"\n    }\n  },\n  \"timestamp\" : \"2026-08-24T12:31:07Z\",\n  \"version\" : \"1.4.2-632-gb9a7c34d0-dirty\"\n}",
+    "level" : 100,
+    "message" : "Config update AHU-1 (key_rotation_invalid_payload)",
+    "timestamp" : "2026-08-24T12:31:07Z"
+  }, {
+    "category" : "device.log",
+    "level" : 200,
+    "message" : "2026-08-24T12:31:07Z received config 2026-08-24T12:31:07Z",
+    "timestamp" : "2026-08-24T12:31:07Z"
+  }, {
+    "category" : "device.log",
+    "level" : 100,
+    "message" : "value of noWriteback: false",
+    "timestamp" : "2026-08-24T12:31:07Z"
+  }, {
+    "category" : "device.log",
+    "level" : 100,
+    "message" : "value of noWriteback: false",
+    "timestamp" : "2026-08-24T12:31:07Z"
+  }, {
+    "category" : "device.log",
+    "level" : 100,
+    "message" : "value of noWriteback: false",
+    "timestamp" : "2026-08-24T12:31:07Z"
+  }, {
+    "category" : "system.config.apply",
+    "level" : 300,
+    "message" : "success",
+    "timestamp" : "2026-08-24T12:31:07Z"
+  }, {
+    "category" : "device.log",
+    "level" : 100,
+    "message" : "State update defer 660ms",
+    "timestamp" : "2026-08-24T12:31:07Z"
+  }, {
+    "category" : "device.log",
+    "level" : 100,
+    "message" : "State update defer 0ms",
+    "timestamp" : "2026-08-24T12:31:08Z"
+  }, {
+    "category" : "device.log",
+    "level" : 200,
+    "message" : "Update state 2026-08-24T12:31:08Z last_config 2026-08-24T12:31:07Z",
+    "timestamp" : "2026-08-24T12:31:08Z"
+  }, {
+    "category" : "device.log",
+    "detail" : "{\n  \"discovery\" : {\n    \"families\" : { }\n  },\n  \"localnet\" : {\n    \"families\" : {\n      \"bacnet\" : {\n        \"addr\" : \"27312\"\n      },\n      \"ether\" : {\n        \"addr\" : \"42:01:ac:11:23:ac\"\n      },\n      \"ipv4\" : {\n        \"addr\" : \"172.17.35.172\"\n      },\n      \"vendor\" : {\n        \"addr\" : \"28179023\"\n      }\n    }\n  },\n  \"pointset\" : {\n    \"points\" : {\n      \"filter_alarm_pressure_status\" : {\n        \"units\" : \"No-units\"\n      },\n      \"filter_differential_pressure_sensor\" : {\n        \"units\" : \"Degrees-Celsius\"\n      },\n      \"filter_differential_pressure_setpoint\" : {\n        \"units\" : \"Bars\",\n        \"value_state\" : \"applied\"\n      }\n    }\n  },\n  \"system\" : {\n    \"hardware\" : {\n      \"make\" : \"BOS\",\n      \"model\" : \"pubber\"\n    },\n    \"last_config\" : \"2026-08-24T12:31:07Z\",\n    \"operation\" : {\n      \"last_start\" : \"2026-08-24T12:30:41Z\",\n      \"mode\" : \"initial\",\n      \"operational\" : true,\n      \"restart_count\" : 1\n    },\n    \"serial_no\" : \"sequencer-17222\",\n    \"software\" : {\n      \"firmware\" : \"v1\",\n      \"system\" : \"v1\"\n    },\n    \"status\" : {\n      \"category\" : \"system.config.apply\",\n      \"level\" : 300,\n      \"message\" : \"success\",\n      \"timestamp\" : \"2026-08-24T12:31:07Z\"\n    }\n  },\n  \"timestamp\" : \"2026-08-24T12:31:08Z\",\n  \"version\" : \"1.5.7\"\n}",
+    "level" : 100,
+    "message" : "State update AHU-1 (key_rotation_invalid_payload)",
+    "timestamp" : "2026-08-24T12:31:08Z"
+  }, {
+    "category" : "system.config.receive",
+    "level" : 100,
+    "message" : "success",
+    "timestamp" : "2026-08-24T12:31:08Z"
+  }, {
+    "category" : "device.log",
+    "level" : 100,
+    "message" : "State update defer 1628ms",
+    "timestamp" : "2026-08-24T12:31:08Z"
+  }, {
+    "category" : "system.config.parse",
+    "level" : 100,
+    "message" : "success",
+    "timestamp" : "2026-08-24T12:31:08Z"
+  }, {
+    "category" : "device.log",
+    "level" : 100,
+    "message" : "State update defer 1627ms",
+    "timestamp" : "2026-08-24T12:31:08Z"
+  }, {
+    "category" : "device.log",
+    "detail" : "{\n  \"discovery\" : {\n    \"families\" : {\n      \"bacnet\" : { },\n      \"vendor\" : { }\n    }\n  },\n  \"localnet\" : {\n    \"families\" : {\n      \"bacnet\" : { },\n      \"ether\" : { },\n      \"ipv4\" : { },\n      \"vendor\" : { }\n    }\n  },\n  \"pointset\" : {\n    \"points\" : {\n      \"filter_alarm_pressure_status\" : {\n        \"ref\" : \"BV11.present_value\",\n        \"units\" : \"No-units\"\n      },\n      \"filter_differential_pressure_sensor\" : {\n        \"ref\" : \"AV12.present_value\",\n        \"units\" : \"Degrees-Celsius\"\n      },\n      \"filter_differential_pressure_setpoint\" : {\n        \"set_value\" : 98,\n        \"units\" : \"Bars\"\n      }\n    },\n    \"sample_rate_sec\" : 300\n  },\n  \"system\" : {\n    \"metrics_rate_sec\" : 10,\n    \"min_loglevel\" : 100,\n    \"operation\" : {\n      \"last_start\" : \"2026-08-24T12:30:41Z\"\n    },\n    \"testing\" : {\n      \"config_base\" : 20,\n      \"sequence_name\" : \"key_rotation_invalid_payload\",\n      \"transaction_id\" : \"RC:9966a6.0000000c\"\n    }\n  },\n  \"timestamp\" : \"2026-08-24T12:31:08Z\",\n  \"version\" : \"1.4.2-632-gb9a7c34d0-dirty\"\n}",
+    "level" : 100,
+    "message" : "Config update AHU-1 (key_rotation_invalid_payload)",
+    "timestamp" : "2026-08-24T12:31:08Z"
+  }, {
+    "category" : "device.log",
+    "level" : 200,
+    "message" : "2026-08-24T12:31:08Z received config 2026-08-24T12:31:08Z",
+    "timestamp" : "2026-08-24T12:31:08Z"
+  }, {
+    "category" : "device.log",
+    "level" : 100,
+    "message" : "value of noWriteback: false",
+    "timestamp" : "2026-08-24T12:31:08Z"
+  }, {
+    "category" : "device.log",
+    "level" : 100,
+    "message" : "value of noWriteback: false",
+    "timestamp" : "2026-08-24T12:31:08Z"
+  }, {
+    "category" : "device.log",
+    "level" : 100,
+    "message" : "value of noWriteback: false",
+    "timestamp" : "2026-08-24T12:31:08Z"
+  }, {
+    "category" : "system.config.apply",
+    "level" : 300,
+    "message" : "success",
+    "timestamp" : "2026-08-24T12:31:08Z"
+  }, {
+    "category" : "device.log",
+    "level" : 100,
+    "message" : "State update defer 1624ms",
+    "timestamp" : "2026-08-24T12:31:08Z"
+  }, {
+    "category" : "system.config.receive",
+    "level" : 100,
+    "message" : "success",
+    "timestamp" : "2026-08-24T12:31:08Z"
+  }, {
+    "category" : "device.log",
+    "level" : 100,
+    "message" : "State update defer 1548ms",
+    "timestamp" : "2026-08-24T12:31:08Z"
+  }, {
+    "category" : "system.config.parse",
+    "level" : 100,
+    "message" : "success",
+    "timestamp" : "2026-08-24T12:31:08Z"
+  }, {
+    "category" : "device.log",
+    "level" : 200,
+    "message" : "Device AHU-1 config handler",
+    "timestamp" : "2026-08-24T12:31:08Z"
+  }, {
+    "category" : "device.log",
+    "level" : 100,
+    "message" : "State update defer 1547ms",
+    "timestamp" : "2026-08-24T12:31:08Z"
+  }, {
+    "category" : "device.log",
+    "detail" : "{\n  \"blobset\" : {\n    \"blobs\" : {\n      \"_iot_endpoint_credentials\" : {\n        \"generation\" : \"2026-08-24T12:31:05Z\",\n        \"phase\" : \"final\",\n        \"sha256\" : \"9a64bfe827ef51499abf61964229f33855ab9ef728cf1a9f8bc9f4ab6d85d44d\",\n        \"url\" : \"data:application/json;base64,eyJ0cmlnZ2VyIjoiaW52YWxpZF9wYXlsb2FkIn0=\"\n      }\n    }\n  },\n  \"discovery\" : {\n    \"families\" : {\n      \"bacnet\" : { },\n      \"vendor\" : { }\n    }\n  },\n  \"localnet\" : {\n    \"families\" : {\n      \"bacnet\" : { },\n      \"ether\" : { },\n      \"ipv4\" : { },\n      \"vendor\" : { }\n    }\n  },\n  \"pointset\" : {\n    \"points\" : {\n      \"filter_alarm_pressure_status\" : {\n        \"ref\" : \"BV11.present_value\",\n        \"units\" : \"No-units\"\n      },\n      \"filter_differential_pressure_sensor\" : {\n        \"ref\" : \"AV12.present_value\",\n        \"units\" : \"Degrees-Celsius\"\n      },\n      \"filter_differential_pressure_setpoint\" : {\n        \"set_value\" : 98,\n        \"units\" : \"Bars\"\n      }\n    },\n    \"sample_rate_sec\" : 300\n  },\n  \"system\" : {\n    \"metrics_rate_sec\" : 10,\n    \"min_loglevel\" : 100,\n    \"operation\" : {\n      \"last_start\" : \"2026-08-24T12:30:41Z\"\n    },\n    \"testing\" : {\n      \"config_base\" : 21,\n      \"sequence_name\" : \"key_rotation_invalid_payload\",\n      \"transaction_id\" : \"RC:9966a6.0000000b\"\n    }\n  },\n  \"timestamp\" : \"2026-08-24T12:31:08Z\",\n  \"version\" : \"1.4.2-632-gb9a7c34d0-dirty\"\n}",
+    "level" : 100,
+    "message" : "Config update AHU-1 (key_rotation_invalid_payload)",
+    "timestamp" : "2026-08-24T12:31:08Z"
+  }, {
+    "category" : "device.log",
+    "level" : 200,
+    "message" : "2026-08-24T12:31:08Z received config 2026-08-24T12:31:08Z",
+    "timestamp" : "2026-08-24T12:31:08Z"
+  }, {
+    "category" : "device.log",
+    "level" : 100,
+    "message" : "value of noWriteback: false",
+    "timestamp" : "2026-08-24T12:31:08Z"
+  }, {
+    "category" : "device.log",
+    "level" : 100,
+    "message" : "value of noWriteback: false",
+    "timestamp" : "2026-08-24T12:31:08Z"
+  }, {
+    "category" : "device.log",
+    "level" : 100,
+    "message" : "value of noWriteback: false",
+    "timestamp" : "2026-08-24T12:31:08Z"
+  }, {
+    "category" : "blobset.blob.receive",
+    "level" : 100,
+    "message" : "Received blob update config for _iot_endpoint_credentials",
+    "timestamp" : "2026-08-24T12:31:08Z"
+  }, {
+    "category" : "device.log",
+    "level" : 200,
+    "message" : "Update state 2026-08-24T12:31:08Z last_config 2026-08-24T12:31:08Z",
+    "timestamp" : "2026-08-24T12:31:08Z"
+  }, {
+    "category" : "device.log",
+    "level" : 400,
+    "message" : "State update delay 1540ms",
+    "timestamp" : "2026-08-24T12:31:08Z"
+  }, {
+    "category" : "device.log",
+    "detail" : "{\n  \"blobset\" : {\n    \"blobs\" : {\n      \"_iot_endpoint_credentials\" : {\n        \"generation\" : \"2026-08-24T12:31:05Z\",\n        \"phase\" : \"apply\"\n      }\n    }\n  },\n  \"discovery\" : {\n    \"families\" : { }\n  },\n  \"localnet\" : {\n    \"families\" : {\n      \"bacnet\" : {\n        \"addr\" : \"27312\"\n      },\n      \"ether\" : {\n        \"addr\" : \"42:01:ac:11:23:ac\"\n      },\n      \"ipv4\" : {\n        \"addr\" : \"172.17.35.172\"\n      },\n      \"vendor\" : {\n        \"addr\" : \"28179023\"\n      }\n    }\n  },\n  \"pointset\" : {\n    \"points\" : {\n      \"filter_alarm_pressure_status\" : {\n        \"units\" : \"No-units\"\n      },\n      \"filter_differential_pressure_sensor\" : {\n        \"units\" : \"Degrees-Celsius\"\n      },\n      \"filter_differential_pressure_setpoint\" : {\n        \"units\" : \"Bars\",\n        \"value_state\" : \"applied\"\n      }\n    }\n  },\n  \"system\" : {\n    \"hardware\" : {\n      \"make\" : \"BOS\",\n      \"model\" : \"pubber\"\n    },\n    \"last_config\" : \"2026-08-24T12:31:08Z\",\n    \"operation\" : {\n      \"last_start\" : \"2026-08-24T12:30:41Z\",\n      \"mode\" : \"initial\",\n      \"operational\" : true,\n      \"restart_count\" : 1\n    },\n    \"serial_no\" : \"sequencer-17222\",\n    \"software\" : {\n      \"firmware\" : \"v1\",\n      \"system\" : \"v1\"\n    },\n    \"status\" : {\n      \"category\" : \"blobset.blob.receive\",\n      \"level\" : 100,\n      \"message\" : \"Received blob update config for _iot_endpoint_credentials\",\n      \"timestamp\" : \"2026-08-24T12:31:08Z\"\n    }\n  },\n  \"timestamp\" : \"2026-08-24T12:31:08Z\",\n  \"version\" : \"1.5.7\"\n}",
+    "level" : 100,
+    "message" : "State update AHU-1 (key_rotation_invalid_payload)",
+    "timestamp" : "2026-08-24T12:31:10Z"
+  }, {
+    "category" : "system.config.apply",
+    "level" : 300,
+    "message" : "success",
+    "timestamp" : "2026-08-24T12:31:10Z"
+  }, {
+    "category" : "device.log",
+    "level" : 100,
+    "message" : "State update defer 1998ms",
+    "timestamp" : "2026-08-24T12:31:10Z"
+  }, {
+    "category" : "blobset.blob.fetch",
+    "level" : 100,
+    "message" : "Fetch blob data for _iot_endpoint_credentials",
+    "timestamp" : "2026-08-24T12:31:10Z"
+  }, {
+    "category" : "device.log",
+    "level" : 100,
+    "message" : "State update defer 1998ms",
+    "timestamp" : "2026-08-24T12:31:10Z"
+  }, {
+    "category" : "blobset.blob.apply",
+    "level" : 300,
+    "message" : "Staging blob update...",
+    "timestamp" : "2026-08-24T12:31:10Z"
+  }, {
+    "category" : "device.log",
+    "level" : 100,
+    "message" : "State update defer 1996ms",
+    "timestamp" : "2026-08-24T12:31:10Z"
+  }, {
+    "category" : "device.log",
+    "level" : 500,
+    "message" : "Failed to apply blob _iot_endpoint_credentials: Invalid credentials payload for _iot_endpoint_credentials",
+    "timestamp" : "2026-08-24T12:31:10Z"
+  }, {
+    "category" : "blobset.blob.parse",
+    "detail" : "udmi.lib.base.UdmiException: Invalid credentials payload for _iot_endpoint_credentials;",
+    "level" : 500,
+    "message" : "Invalid credentials payload for _iot_endpoint_credentials",
+    "timestamp" : "2026-08-24T12:31:10Z"
+  }, {
+    "category" : "device.log",
+    "level" : 100,
+    "message" : "State update defer 1993ms",
+    "timestamp" : "2026-08-24T12:31:10Z"
+  }, {
+    "category" : "device.log",
+    "level" : 100,
+    "message" : "State update defer 0ms",
+    "timestamp" : "2026-08-24T12:31:12Z"
+  }, {
+    "category" : "device.log",
+    "level" : 200,
+    "message" : "Update state 2026-08-24T12:31:12Z last_config 2026-08-24T12:31:08Z",
+    "timestamp" : "2026-08-24T12:31:12Z"
+  }, {
+    "category" : "device.log",
+    "detail" : "{\n  \"blobset\" : {\n    \"blobs\" : {\n      \"_iot_endpoint_credentials\" : {\n        \"generation\" : \"2026-08-24T12:31:05Z\",\n        \"phase\" : \"final\",\n        \"status\" : {\n          \"category\" : \"blobset.blob.parse\",\n          \"detail\" : \"udmi.lib.base.UdmiException: Invalid credentials payload for _iot_endpoint_credentials\\n\\tat daq.pubber.impl.blob.PubberBlobLifecycleHandler.stagePubberCredentialsUpdate(PubberBlobLifecycleHandler.java:173)\\n\\tat daq.pubber.impl.blob.PubberBlobLifecycleHandler.stageBlob(PubberBlobLifecycleHandler.java:102)\\n\\tat udmi.lib.client.host.PublisherHost.orchestrateTwoPhaseDeployment(PublisherHost.java:398)\\n\\tat udmi.lib.client.host.PublisherHost.lambda$evaluateAndDeployBlob$3(PublisherHost.java:365)\\n\\tat java.base/java.util.concurrent.CompletableFuture$AsyncRun.run(CompletableFuture.java:1804)\\n\\tat java.base/java.util.concurrent.CompletableFuture$AsyncRun.exec(CompletableFuture.java:1796)\\n\\tat java.base/java.util.concurrent.ForkJoinTask.doExec(ForkJoinTask.java:387)\\n\\tat java.base/java.util.concurrent.ForkJoinPool$WorkQueue.topLevelExec(ForkJoinPool.java:1312)\\n\\tat java.base/java.util.concurrent.ForkJoinPool.scan(ForkJoinPool.java:1843)\\n\\tat java.base/java.util.concurrent.ForkJoinPool.runWorker(ForkJoinPool.java:1808)\\n\\tat java.base/java.util.concurrent.ForkJoinWorkerThread.run(ForkJoinWorkerThread.java:188)\\n\",\n          \"level\" : 500,\n          \"message\" : \"Invalid credentials payload for _iot_endpoint_credentials\",\n          \"timestamp\" : \"2026-08-24T12:31:10Z\"\n        }\n      }\n    }\n  },\n  \"discovery\" : {\n    \"families\" : { }\n  },\n  \"localnet\" : {\n    \"families\" : {\n      \"bacnet\" : {\n        \"addr\" : \"27312\"\n      },\n      \"ether\" : {\n        \"addr\" : \"42:01:ac:11:23:ac\"\n      },\n      \"ipv4\" : {\n        \"addr\" : \"172.17.35.172\"\n      },\n      \"vendor\" : {\n        \"addr\" : \"28179023\"\n      }\n    }\n  },\n  \"pointset\" : {\n    \"points\" : {\n      \"filter_alarm_pressure_status\" : {\n        \"units\" : \"No-units\"\n      },\n      \"filter_differential_pressure_sensor\" : {\n        \"units\" : \"Degrees-Celsius\"\n      },\n      \"filter_differential_pressure_setpoint\" : {\n        \"units\" : \"Bars\",\n        \"value_state\" : \"applied\"\n      }\n    }\n  },\n  \"system\" : {\n    \"hardware\" : {\n      \"make\" : \"BOS\",\n      \"model\" : \"pubber\"\n    },\n    \"last_config\" : \"2026-08-24T12:31:08Z\",\n    \"operation\" : {\n      \"last_start\" : \"2026-08-24T12:30:41Z\",\n      \"mode\" : \"initial\",\n      \"operational\" : true,\n      \"restart_count\" : 1\n    },\n    \"serial_no\" : \"sequencer-17222\",\n    \"software\" : {\n      \"firmware\" : \"v1\",\n      \"system\" : \"v1\"\n    },\n    \"status\" : {\n      \"category\" : \"blobset.blob.parse\",\n      \"detail\" : \"udmi.lib.base.UdmiException: Invalid credentials payload for _iot_endpoint_credentials;\",\n      \"level\" : 500,\n      \"message\" : \"Invalid credentials payload for _iot_endpoint_credentials\",\n      \"timestamp\" : \"2026-08-24T12:31:10Z\"\n    }\n  },\n  \"timestamp\" : \"2026-08-24T12:31:12Z\",\n  \"version\" : \"1.5.7\"\n}",
+    "level" : 100,
+    "message" : "State update AHU-1 (key_rotation_invalid_payload)",
+    "timestamp" : "2026-08-24T12:31:12Z"
+  } ],
+  "metrics" : {
+    "mem_free_mb" : 76.926025390625,
+    "mem_total_mb" : 112.0
+  },
+  "timestamp" : "2026-08-24T12:31:13Z",
+  "version" : "1.5.7"
+}

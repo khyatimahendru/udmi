@@ -137,6 +137,8 @@ JVM
 JWT
 JWTs
 keygen
+keypair
+keypairs
 KNX
 kube
 kubectl
@@ -195,10 +197,14 @@ pagent
 parameterization
 parsers
 Pathing
+PEM
+PKCS
+plaintext
 pointname
 pointset
 pointsets
 postfix
+Pre
 prem
 Prem
 prepend
@@ -223,6 +229,7 @@ RDF
 Readme
 reconciler
 Reconciler
+reconnection
 REPL
 repo
 Responder

@@ -4,6 +4,7 @@ import static com.google.udmi.util.JsonUtil.asMap;
 import static udmi.schema.Category.BLOBSET_BLOB_APPLY;
 import static udmi.schema.Category.BLOBSET_BLOB_FETCH;
 import static udmi.schema.Category.BLOBSET_BLOB_PARSE;
+import static udmi.schema.Category.BLOBSET_BLOB_ROLLBACK;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -12,6 +13,7 @@ import java.util.function.Consumer;
 import udmi.lib.base.UdmiException;
 import udmi.lib.blob.intf.BlobLifecycleHandler;
 import udmi.lib.client.host.PublisherHost;
+import udmi.schema.BlobsetConfig.SystemBlobsets;
 import udmi.schema.Operation.SystemMode;
 
 /**
@@ -25,10 +27,13 @@ public class PubberBlobLifecycleHandler implements BlobLifecycleHandler {
    * The key used to identify the primary software module blob in the system state.
    */
   public static final String SOFTWARE_MODULE_KEY = "system";
+  public static final String CREDENTIALS_KEY =
+      SystemBlobsets.IOT_ENDPOINT_CREDENTIALS.value();
 
   private final PublisherHost host;
   private final MockGitModuleEmulator moduleEmulator;
   private final Map<String, Handlers> blobHandlers = new HashMap<>();
+  private String stagedCredentialTrigger;
 
   /**
    * Constructs a new handler and initializes the default module emulator.
@@ -48,6 +53,11 @@ public class PubberBlobLifecycleHandler implements BlobLifecycleHandler {
     blobHandlers.put(SOFTWARE_MODULE_KEY, new Handlers(
         this::stagePubberModuleUpdate,
         this::activatePubberModuleUpdate
+    ));
+
+    blobHandlers.put(CREDENTIALS_KEY, new Handlers(
+        this::stagePubberCredentialsUpdate,
+        this::activatePubberCredentialsUpdate
     ));
 
     updateModuleVersionInState();
@@ -146,6 +156,48 @@ public class PubberBlobLifecycleHandler implements BlobLifecycleHandler {
     host.logEvent(BLOBSET_BLOB_APPLY, "Restart required for " + blobName);
     host.notice("Post-processing Git OTA update. Restarting...");
     host.getDeviceManager().systemLifecycle(SystemMode.RESTART);
+  }
+
+  /**
+   * Validates and prepares a credentials / key rotation update.
+   */
+  private void stagePubberCredentialsUpdate(String blobName, String payload) {
+    Map<String, Object> payloadMap;
+    try {
+      payloadMap = asMap(payload);
+    } catch (Exception e) {
+      throw new UdmiException(BLOBSET_BLOB_PARSE, "Failed to parse blob payload for " + blobName);
+    }
+    String trigger = (String) payloadMap.get("trigger");
+    if ("invalid_payload".equals(trigger) || "corrupt".equals(trigger)) {
+      throw new UdmiException(BLOBSET_BLOB_PARSE, "Invalid credentials payload for " + blobName);
+    }
+    if (payloadMap.containsKey("encryption") || payloadMap.containsKey("key_data")) {
+      try {
+        udmi.lib.crypto.KeyDecryptor.decrypt(payload, null);
+      } catch (Exception e) {
+        if (!(e instanceof UdmiException)) {
+          throw new UdmiException(BLOBSET_BLOB_PARSE,
+              "Failed to decrypt credentials: " + e.getMessage(), e);
+        }
+        throw e;
+      }
+    }
+    this.stagedCredentialTrigger = trigger;
+    host.notice("Staged credentials update for " + blobName);
+  }
+
+  /**
+   * Finalizes the credentials update, verifying connection or rolling back.
+   */
+  private void activatePubberCredentialsUpdate(String blobName) {
+    host.logEvent(BLOBSET_BLOB_APPLY, "Applying credentials update for " + blobName);
+    if ("fail_reconnect".equals(stagedCredentialTrigger)) {
+      host.error("Simulated reconnection failure with new credentials; rolling back to backup key");
+      host.logEvent(BLOBSET_BLOB_ROLLBACK, "Restoring backup credentials for " + blobName);
+      throw new UdmiException(BLOBSET_BLOB_ROLLBACK, "Connection failed with new key, rolled back");
+    }
+    host.notice("Credentials rotated successfully for " + blobName);
   }
 
   /**
