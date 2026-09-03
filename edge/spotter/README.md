@@ -9,7 +9,7 @@ The **UDMI Spotter Agent** is the reference edge node for Operational Technology
 Spotter runs as a single unified process using the UDMI Python Client Library (`clientlib`), managing three core managers under a single device identity:
 
 1. **`LocalnetManager` & Pluggable Family Providers**:
-   - **`BacnetFamilyProvider`**: Performs active BACnet Who-Is / I-Am discovery, object enumeration, and UDP port extraction ([b/549909773](https://b.corp.google.com/issues/549909773)).
+   - **`BacnetFamilyProvider`**: Performs active BACnet Who-Is / I-Am discovery, object enumeration, and UDP port extraction.
    - **`EtherFamilyProvider`**: Performs Layer-2 Ethernet / ARP and ping discovery.
    - **`PassiveFamilyProvider`**: Listens for passive broadcast network traffic and extracts discovered device metadata.
 2. **`SpotterDiscoveryManager`**:
