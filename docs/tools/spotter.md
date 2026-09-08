@@ -86,7 +86,7 @@ Use the unified orchestrator script [bin/spotter](../../bin/spotter) located in 
   bin/udmi start sites/udmi_site_model //mqtt/localhost:46432
 
   # 2. Launch Spotter targeting the local broker
-  ./bin/spotter sites/udmi_site_model //mqtt/localhost:46432 DSN-1
+  ./bin/spotter sites/udmi_site_model //mqtt/localhost:46432 AHU-1
   ```
 * **Container Mode (using Configuration File)**:
   ```bash

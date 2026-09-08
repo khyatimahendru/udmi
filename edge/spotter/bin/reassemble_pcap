@@ -76,7 +76,7 @@ def reassemble_pcap(input_source: str, output_path: str) -> None:
 
   events = parse_stream_events(raw_content)
   if not events:
-    sys.exit("Error: No valid StreamEvent records with 'data' found in input.")
+    sys.exit("Error: No valid StreamsEvents records with 'data' found in input.")
 
   # Filter out records missing data
   valid_events = [e for e in events if e.get("data")]

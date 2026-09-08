@@ -31,8 +31,8 @@ All verification tests are categorised into **Unit Tests** and **Integration Tes
 - **Location**: [bin/](bin) & [tests/](tests)
 - **Executables**:
   - [test_container](bin/test_container): Validates container lifecycle isolation, volume mounting of configuration files, clean signal termination, and exit code propagation inside Docker.
-  - [test_pcap](bin/test_pcap): Validates remote-triggered PCAP packet capture diagnostics over MQTT streaming and verify binary reassembly via [reassemble_pcap](bin/reassemble_pcap).
-  - [test_parity](bin/test_parity): Runs co-existence integration testing against a simulated BACnet device on an isolated network, confirming functional parity with legacy discovery node.
+  - [test_pcap](bin/test_pcap): Validates remote-triggered PCAP packet capture diagnostics over MQTT streaming and verifies binary reassembly via [reassemble_pcap](bin/reassemble_pcap).
+  - [test_parity](bin/test_parity): Runs co-existence integration testing against a simulated BACnet device on an isolated network, confirming functional parity with legacy discovery nodes.
   - [compare_field_parity](bin/compare_field_parity): Automated utility to run sequential discovery parity scans or diff event logs on live field testbeds.
   - [test_resource_contention](bin/test_resource_contention): Validates Spotter process CPU, memory consumption, file descriptor limits, and telemetry latency under concurrent heavy workloads.
   - [test_fault_injection](bin/test_fault_injection): Validates network fault tolerance, streaming MQTT backoff recovery, and socket reconnect logic.
@@ -88,7 +88,8 @@ Tests must be executed under specific conditions to guarantee environment hygien
 - **Custom Docker Bridge Subnet**: Parity tests utilize an isolated docker bridge network named `parity-spotter-net` on subnet `192.168.12.0/24`. The host's gateway is defined as `192.168.12.254`. This subnet must not conflict with any existing network interfaces on the host.
 
 ### 2.2 Security & Certificates (mTLS)
-- The containerized local tests use the pre-generated CA from `sites/udmi_site_model/reflector/ca.crt` to authenticate clients. The local Mosquitto broker MUST run with a TLS listener configured on port `18883` validating client certificates.
+- **Prerequisites**: Certificates must be generated prior to running integration tests using `bin/setup_ca sites/udmi_site_model localhost` and `bin/keygen CERT sites/udmi_site_model/devices/AHU-1`. Test scripts fail fast if `sites/udmi_site_model/reflector/ca.crt` or client certificate pairs are missing.
+- **mTLS Validation**: The containerized local tests use the CA from `sites/udmi_site_model/reflector/ca.crt` to authenticate clients. The local Mosquitto broker MUST run with a TLS listener configured on port `18883` validating client certificates.
 
 ### 2.3 State Isolation & Sanitization
 Before executing a new test run, ensure that all residual state from prior runs is purged:
@@ -121,7 +122,7 @@ Stdout must show clean signal trapping, manager shutdown, and disconnection:
 ```
 2026-09-02 07:33:34,917|INFO|agent:handle_signal Signal 15 received. Shutting down Spotter...
 2026-09-02 07:33:34,917|INFO|device:stop Stopping device...
-2026-09-02 07:33:34,917|INFO|base_manager:stop Stopping manager: SystemManager
+2026-09-02 07:33:34,917|INFO|base_manager:stop Stopping manager: SpotterSystemManager
 2026-09-02 07:33:35,917|INFO|base_manager:stop Stopping manager: LocalnetManager
 2026-09-02 07:33:35,917|INFO|base_manager:stop Stopping manager: SpotterDiscoveryManager
 2026-09-02 07:33:37,400|INFO|device:on_disconnect Client disconnected cleanly.
@@ -174,8 +175,8 @@ Spotter adheres strictly to the UDMI edge security model:
 - **Zero Inbound Ports**: To ensure compliance with firewall-restricted OT environments (BMS networks, industrial VLANs), Spotter runs with zero exposed inbound HTTP/scrape ports.
 
 ### 7.2 Native UDMI Telemetry Model
-Host health metrics and system attributes are collected via host inspection (`/proc/meminfo`, `/proc/loadavg`, `/etc/os-release`) and published natively through `SystemManager`:
-- **Dynamic Metrics (`events/system`)**: Periodically published by `SystemManager.publish_metrics()` as `SystemEvents` payloads:
+Host health metrics and system attributes are collected via host inspection (`/proc/meminfo`, `/proc/loadavg`, `/etc/os-release`) and published natively through `SpotterSystemManager`:
+- **Dynamic Metrics (`events/system`)**: Periodically published by `SpotterSystemManager.publish_metrics()` as `SystemEvents` payloads:
   - `metrics.mem_total_mb`: Total host physical memory in megabytes.
   - `metrics.mem_free_mb`: Available/free host memory in megabytes.
   - `metrics.system_load`: System load average.

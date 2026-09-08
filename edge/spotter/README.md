@@ -10,20 +10,20 @@ Spotter runs as a single unified process using the UDMI Python Client Library (`
 
 1. **`LocalnetManager` & Pluggable Family Providers**:
    - **`BacnetFamilyProvider`**: Performs active BACnet Who-Is / I-Am discovery, object enumeration, and UDP port extraction.
-   - **`EtherFamilyProvider`**: Performs Layer-2 Ethernet / ARP and ping discovery.
+   - **`EtherFamilyProvider`**: Performs Layer-2 Ethernet / ARP, nmap XML host parsing, and ICMP ping sweeps.
    - **`PassiveFamilyProvider`**: Listens for passive broadcast network traffic and extracts discovered device metadata.
 2. **`SpotterDiscoveryManager`**:
    - Manages scheduled and on-demand discovery sweeps.
    - Streams live remote packet capture traces (`events/streams`) buffered in volatile memory with circuit-breaker protection (zero-disk streaming).
-3. **`SystemManager`**:
-   - Collects host metrics (CPU load, memory, OS distribution).
-   - Emits system state and periodic telemetry events (`events/system`).
+3. **`SpotterSystemManager`**:
+   - Collects host metrics (CPU load, memory, OS distribution) and emits periodic telemetry (`events/system`).
+   - Evaluates memory usage against safety thresholds (`check_safety_circuit_breaker`), throttling active discovery and packet captures to protect edge devices from kernel OOM termination.
 
 ```mermaid
 graph TD
     subgraph "Spotter Edge Process"
         AGENT["Spotter Core Agent (agent.py)"]
-        SYS["SystemManager (Host Telemetry & Health)"]
+        SYS["SpotterSystemManager (Host Telemetry & Health)"]
         DISC["SpotterDiscoveryManager (PCAP & Scheduling)"]
         LOC["LocalnetManager (Pluggable Providers)"]
         
@@ -141,6 +141,15 @@ Spotter includes a comprehensive suite of unit and integration tests located in 
 # Run the complete test suite (unit and integration)
 ./edge/spotter/bin/run_spotter_tests all
 ```
+
+### Key Integration Tests
+
+- **`test_container`**: Validates container lifecycle isolation, volume mounting of runtime configs, clean signal termination, and exit code propagation inside Docker.
+- **`test_pcap`**: Validates remote-triggered PCAP packet capture diagnostics over MQTT streaming and verifies binary reassembly via `reassemble_pcap`.
+- **`test_resource_contention`**: Validates process CPU, memory consumption, `/proc/PID/fd` file descriptor stability under load, and memory safety circuit breaker tripping.
+- **`test_fault_injection`**: Validates network fault tolerance, streaming MQTT backoff recovery, and socket reconnect logic under simulated broker resets.
+- **`test_parity`**: Runs co-existence integration testing against a simulated BACnet device on an isolated bridge network, confirming functional parity with legacy discovery nodes.
+- **`compare_field_parity`**: Automated CLI utility to run sequential discovery parity scans or diff event logs on live field testbeds without manual comparison.
 
 ### Automated Field Parity Verification ([bin/compare_field_parity](bin/compare_field_parity))
 
