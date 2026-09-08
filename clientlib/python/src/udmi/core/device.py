@@ -502,7 +502,11 @@ class Device:
             raise ConnectionResetException("Triggering Fallback Reset")
         raise error
 
-    def _publish_state(self, bypass_throttle: bool = False, blocking: Optional[bool] = None) -> None:
+    def _publish_state(
+        self,
+        bypass_throttle: bool = False,
+        blocking: Optional[bool] = None,
+    ) -> None:
         """
         Orchestration method to build and publish the State message.
         Gathers contributions from all managers.

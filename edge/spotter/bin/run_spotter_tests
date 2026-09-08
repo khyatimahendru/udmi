@@ -20,10 +20,10 @@ fi
 
 echo "=== Spotter Test Orchestrator (Mode: $MODE) ==="
 
-if [[ "$MODE" == "unit" || "$MODE" == "all" ]]; then
-    echo "--- Step 1: Ensuring environment setup ---"
-    "${SCRIPT_DIR}/setup_env" >/dev/null
+echo "--- Step 1: Ensuring environment setup ---"
+"${SCRIPT_DIR}/setup_env" >/dev/null
 
+if [[ "$MODE" == "unit" || "$MODE" == "all" ]]; then
     SPOTTER_PYTHON="${WORKSPACE_DIR}/edge/spotter/venv/bin/python3"
     echo "--- Step 2: Running Unit & Sandbox Self-Test Suites ---"
     (
