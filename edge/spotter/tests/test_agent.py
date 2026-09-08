@@ -301,7 +301,7 @@ class TestSpotterDiscoveryManager(unittest.TestCase):
     channel = call_args[0]
     event_model = call_args[1]
 
-    self.assertEqual(channel, "events/stream")
+    self.assertEqual(channel, "events/streams")
     self.assertEqual(event_model.event_no, 0)
     self.assertEqual(event_model.chunk_index, 0)
     self.assertEqual(event_model.total_chunks, 1)

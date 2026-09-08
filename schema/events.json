@@ -15,8 +15,8 @@
     "discovery": {
       "$ref": "file:events_discovery.json#"
     },
-    "stream": {
-      "$ref": "file:events_stream.json#"
+    "streams": {
+      "$ref": "file:events_streams.json#"
     }
   }
 }

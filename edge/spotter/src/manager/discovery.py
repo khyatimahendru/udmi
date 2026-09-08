@@ -2,7 +2,7 @@
 
 Extends standard DiscoveryManager to natively handle both active protocol sweeps
 (BACnet, Ether, Passive) and TRACE-level packet streaming (PCAP) over
-events/stream.
+events/streams.
 """
 
 import base64
@@ -18,7 +18,7 @@ from udmi.schema import (
     Entry,
     FamilyDiscoveryConfig,
     FamilyDiscoveryState,
-    StreamEvents,
+    StreamsEvents,
 )
 from udmi.schema.common import Depth
 from udmi.schema.state_discovery_family import Phase as DiscoveryPhase
@@ -37,7 +37,7 @@ class SpotterDiscoveryManager(DiscoveryManager):
   """Unified Discovery Manager for Spotter.
 
   Extends standard DiscoveryManager to handle active protocol sweeps and
-  TRACE packet streaming over events/stream with safety circuit breaker checks.
+  TRACE packet streaming over events/streams with safety circuit breaker checks.
   """
 
   def __init__(self, max_mem_pct: float = 85.0) -> None:
@@ -107,7 +107,7 @@ class SpotterDiscoveryManager(DiscoveryManager):
     super()._run_scan(family, provider)
 
   def _run_trace_capture(self, family: str, fam_config: Any) -> None:
-    """Executes ephemeral PCAP capture and streams chunks over events/stream."""
+    """Executes ephemeral PCAP capture and streams chunks over events/streams."""
     f_state = self._discovery_state.families.get(family)
     if not f_state:
       f_state = FamilyDiscoveryState()
@@ -226,7 +226,7 @@ class SpotterDiscoveryManager(DiscoveryManager):
       full_data = b"".join(captured_chunks)
 
       LOGGER.info(
-          "Capture complete (%d bytes). Emitting StreamEvents...",
+          "Capture complete (%d bytes). Emitting StreamsEvents...",
           len(full_data),
       )
       chunk_size = 128 * 1024  # 128KB chunks
@@ -242,7 +242,7 @@ class SpotterDiscoveryManager(DiscoveryManager):
         chunk_data = full_data[start:end]
         b64_data = base64.b64encode(chunk_data).decode()
 
-        chunk_event = StreamEvents(
+        chunk_event = StreamsEvents(
             timestamp=datetime.now(timezone.utc).isoformat(),
             version=UDMI_VERSION,
             session_id=session_id,
@@ -251,7 +251,7 @@ class SpotterDiscoveryManager(DiscoveryManager):
             total_chunks=total_chunks,
             data=b64_data,
         )
-        self.publish_event(chunk_event, "stream")
+        self.publish_event(chunk_event, "streams")
         LOGGER.info(
             "Published stream chunk %d/%d (event_no: %d, %d bytes)",
             idx + 1,

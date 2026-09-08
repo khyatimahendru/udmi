@@ -62,7 +62,7 @@ if [[ "$MODE" == "integration" || "$MODE" == "all" ]]; then
     "${SCRIPT_DIR}/test_fault_injection"
     echo "-- Network Resilience Integration: PASSED!"
 
-    if ${CONTAINER_ENGINE} network inspect spotter-parity-net >/dev/null 2>&1 || ${CONTAINER_ENGINE} network create --subnet=192.168.12.0/24 spotter-parity-net >/dev/null 2>&1; then
+    if ${CONTAINER_ENGINE} network inspect parity-spotter-net >/dev/null 2>&1 || ${CONTAINER_ENGINE} network create --subnet=192.168.12.0/24 parity-spotter-net >/dev/null 2>&1; then
         echo "--- Step 8: Running Discovery Parity Tests (test_parity) ---"
         echo "Building legacy discovery node container and simulated BACnet device image..."
         "${WORKSPACE_DIR}/misc/discoverynode/bin/build_container" test-discovery_node >/dev/null
@@ -73,7 +73,7 @@ if [[ "$MODE" == "integration" || "$MODE" == "all" ]]; then
         )
         echo "-- Discovery Parity: PASSED!"
     else
-        echo "WARNING: Skipping test_parity due to inability to initialize spotter-parity-net bridge network."
+        echo "WARNING: Skipping test_parity due to inability to initialize parity-spotter-net bridge network."
     fi
 fi
 

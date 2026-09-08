@@ -1,6 +1,6 @@
 {
   "$udmi_version": "1.5.7",
-  "title": "Stream Events",
+  "title": "Streams Events",
   "description": "Sequential data stream chunks for reliable transport over MQTT (e.g. PCAP traces, firmware blobs, reliable alarms, logs playback).",
   "$section": "Messages",
   "type": "object",

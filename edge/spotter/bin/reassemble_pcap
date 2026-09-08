@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Utility to reassemble UDMI events/stream chunks into a valid PCAP file.
+"""Utility to reassemble UDMI events/streams chunks into a valid PCAP file.
 
 Usage:
     bin/reassemble_pcap <input_file_or_stdin> <output_pcap_path>
 
 Supported input formats:
-    - Raw JSON array of StreamEvents: [ {"event_no": 0, "data": "..."}, ... ]
-    - JSON Lines (JSONL): One StreamEvent JSON object per line
+    - Raw JSON array of StreamsEvents: [ {"event_no": 0, "data": "..."}, ... ]
+    - JSON Lines (JSONL): One StreamsEvents JSON object per line
     - mosquitto_sub output: "<topic> <json_payload>"
     - Standard input (specify "-" as input file)
 """
@@ -26,7 +26,7 @@ PCAP_MAGIC_NUMBERS = [
 
 
 def parse_stream_events(raw_text: str):
-  """Parse StreamEvent objects from JSON array, JSONL, or mosquitto_sub."""
+  """Parse StreamsEvents objects from JSON array, JSONL, or mosquitto_sub."""
   raw_text = raw_text.strip()
   if not raw_text:
     return []

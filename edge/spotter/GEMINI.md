@@ -66,6 +66,7 @@ The startup orchestrator [spotter](../../bin/spotter) handles environment setup,
 
 ### 1.4 UDMI Infrastructure Orchestration & Connection Resilience
 Spotter connects to local or cloud-hosted UDMI infrastructure as an edge client node.
+- **Architectural Separation**: Barbican operates the central messaging bus and control plane (`etcd`, `mosquitto`, `udmis`), while Spotter runs as an edge client agent (analogous to Pubber). Keeping Spotter decoupled from the Barbican session preserves domain boundaries between edge hardware and central cloud/site management services.
 - **Local Infrastructure Pairing**: When testing against local services, start the core stack using the canonical orchestrator [bin/udmi](../../bin/udmi):
   ```bash
   # Start Barbican and Butler services
@@ -84,7 +85,7 @@ Tests must be executed under specific conditions to guarantee environment hygien
 
 ### 2.1 Network & Port Requirements
 - **BACnet Port 47808 Isolation**: BACnet discovery broadcasts to UDP port `47808`. If running tests locally, no other application (e.g., a bare-metal BACnet scanner or another running container) must be bound to port `47808` on the host.
-- **Custom Docker Bridge Subnet**: Parity tests utilize an isolated docker bridge network named `spotter-parity-net` on subnet `192.168.12.0/24`. The host's gateway is defined as `192.168.12.254`. This subnet must not conflict with any existing network interfaces on the host.
+- **Custom Docker Bridge Subnet**: Parity tests utilize an isolated docker bridge network named `parity-spotter-net` on subnet `192.168.12.0/24`. The host's gateway is defined as `192.168.12.254`. This subnet must not conflict with any existing network interfaces on the host.
 
 ### 2.2 Security & Certificates (mTLS)
 - The containerized local tests use the pre-generated CA from `sites/udmi_site_model/reflector/ca.crt` to authenticate clients. The local Mosquitto broker MUST run with a TLS listener configured on port `18883` validating client certificates.
@@ -96,7 +97,7 @@ Before executing a new test run, ensure that all residual state from prior runs 
 docker stop parity-legacy-node parity-spotter-node parity-bacnet-device 2>/dev/null
 
 # Remove the custom testing network
-docker network rm spotter-parity-net 2>/dev/null
+docker network rm parity-spotter-net 2>/dev/null
 ```
 
 ---

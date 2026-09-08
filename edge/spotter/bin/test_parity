@@ -79,7 +79,7 @@ class TestParity(unittest.TestCase):
   @classmethod
   def setUpClass(cls):
     cleanup_cmd = (
-        "docker ps -q --filter network=spotter-parity-net | xargs -r docker"
+        "docker ps -q --filter network=parity-spotter-net | xargs -r docker"
         " stop"
     )
     subprocess.run(
@@ -90,7 +90,7 @@ class TestParity(unittest.TestCase):
         check=False,
     )
     res = subprocess.run(
-        ["docker", "network", "inspect", "spotter-parity-net"],
+        ["docker", "network", "inspect", "parity-spotter-net"],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         check=False,
@@ -103,7 +103,7 @@ class TestParity(unittest.TestCase):
               "create",
               "--subnet=192.168.12.0/24",
               "--gateway=192.168.12.254",
-              "spotter-parity-net",
+              "parity-spotter-net",
           ],
           check=True,
       )
@@ -127,6 +127,21 @@ class TestParity(unittest.TestCase):
     ahu_pkcs8_src = os.path.join(ahu_dir, "rsa_private.pkcs8")
 
     # Copy client certs for AHU-1 to config dir
+    for cert_path in [
+        ca_src,
+        server_crt_src,
+        server_key_src,
+        ahu_key_src,
+        ahu_crt_src,
+        ahu_pkcs8_src,
+    ]:
+      if not os.path.exists(cert_path):
+        raise FileNotFoundError(
+            f"Prerequisite certificate/key missing: {cert_path}. Ensure"
+            " 'bin/setup_ca sites/udmi_site_model localhost' and 'bin/keygen"
+            " CERT sites/udmi_site_model/devices/AHU-1' have been run."
+        )
+
     shutil.copy(ca_src, os.path.join(self.test_dir.name, "ca.crt"))
     shutil.copy(
         ahu_key_src, os.path.join(self.test_dir.name, "rsa_private.pem")
@@ -134,53 +149,9 @@ class TestParity(unittest.TestCase):
     shutil.copy(
         ahu_pkcs8_src, os.path.join(self.test_dir.name, "rsa_private.pkcs8")
     )
-
-    target_crt = os.path.join(self.test_dir.name, "rsa_private.crt")
-    if os.path.exists(ahu_crt_src):
-      shutil.copy(ahu_crt_src, target_crt)
-    else:
-      reflector_key = os.path.join(site_dir, "reflector/rsa_private.pem")
-      csr_file = os.path.join(self.test_dir.name, "client.csr")
-      target_pem = os.path.join(self.test_dir.name, "rsa_private.pem")
-
-      subprocess.run(
-          [
-              "openssl",
-              "req",
-              "-new",
-              "-key",
-              target_pem,
-              "-out",
-              csr_file,
-              "-subj",
-              "/CN=AHU-1",
-          ],
-          check=True,
-          stdout=subprocess.DEVNULL,
-          stderr=subprocess.DEVNULL,
-      )
-
-      subprocess.run(
-          [
-              "openssl",
-              "x509",
-              "-req",
-              "-in",
-              csr_file,
-              "-CA",
-              ca_src,
-              "-CAkey",
-              reflector_key,
-              "-CAcreateserial",
-              "-out",
-              target_crt,
-              "-days",
-              "3650",
-          ],
-          check=True,
-          stdout=subprocess.DEVNULL,
-          stderr=subprocess.DEVNULL,
-      )
+    shutil.copy(
+        ahu_crt_src, os.path.join(self.test_dir.name, "rsa_private.crt")
+    )
 
     # 2. Start local Mosquitto broker with dual listeners:
     self.mosquitto_conf = os.path.join(self.test_dir.name, "mosquitto.conf")
@@ -232,7 +203,7 @@ allow_anonymous true
 
     # 3. Create docker network
     subprocess.run(
-        ["docker", "network", "rm", "spotter-parity-net"],
+        ["docker", "network", "rm", "parity-spotter-net"],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         check=False,
@@ -244,7 +215,7 @@ allow_anonymous true
             "create",
             "--subnet=192.168.12.0/24",
             "--gateway=192.168.12.254",
-            "spotter-parity-net",
+            "parity-spotter-net",
         ],
         check=True,
     )
@@ -256,7 +227,7 @@ allow_anonymous true
             "docker",
             "run",
             "--rm",
-            "--network=spotter-parity-net",
+            "--network=parity-spotter-net",
             "--ip=192.168.12.1",
             "-e",
             "BACNET_ID=12345",
@@ -283,7 +254,7 @@ allow_anonymous true
         check=False,
     )
     subprocess.run(
-        ["docker", "network", "rm", "spotter-parity-net"],
+        ["docker", "network", "rm", "parity-spotter-net"],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         check=False,
@@ -346,7 +317,7 @@ allow_anonymous true
             "docker",
             "run",
             "--rm",
-            "--network=spotter-parity-net",
+            "--network=parity-spotter-net",
             "--ip=192.168.12.2",
             "--name",
             container_name,

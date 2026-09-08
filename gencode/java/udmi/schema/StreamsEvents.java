@@ -9,13 +9,13 @@ import com.fasterxml.jackson.annotation.JsonPropertyOrder;
 
 
 /**
- * Stream Events
+ * Streams Events
  * <p>
  * Sequential data stream chunks for reliable transport over MQTT (e.g. PCAP traces, firmware blobs, reliable alarms, logs playback).
  * 
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
-public class StreamEvents {
+public class StreamsEvents {
 
     /**
      * RFC 3339 UTC timestamp the stream chunk event was generated
@@ -85,10 +85,10 @@ public class StreamEvents {
         if (other == this) {
             return true;
         }
-        if ((other instanceof StreamEvents) == false) {
+        if ((other instanceof StreamsEvents) == false) {
             return false;
         }
-        StreamEvents rhs = ((StreamEvents) other);
+        StreamsEvents rhs = ((StreamsEvents) other);
         return ((((((((this.chunk_index == rhs.chunk_index)||((this.chunk_index!= null)&&this.chunk_index.equals(rhs.chunk_index)))&&((this.data == rhs.data)||((this.data!= null)&&this.data.equals(rhs.data))))&&((this.event_no == rhs.event_no)||((this.event_no!= null)&&this.event_no.equals(rhs.event_no))))&&((this.session_id == rhs.session_id)||((this.session_id!= null)&&this.session_id.equals(rhs.session_id))))&&((this.version == rhs.version)||((this.version!= null)&&this.version.equals(rhs.version))))&&((this.total_chunks == rhs.total_chunks)||((this.total_chunks!= null)&&this.total_chunks.equals(rhs.total_chunks))))&&((this.timestamp == rhs.timestamp)||((this.timestamp!= null)&&this.timestamp.equals(rhs.timestamp))));
     }
 

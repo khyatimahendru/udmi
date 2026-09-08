@@ -10,13 +10,13 @@ if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
     echo "Validates remote-triggered PCAP packet capture diagnostics over MQTT streaming:"
     echo "1. Starts Mosquitto broker and udmi-spotter container."
     echo "2. Generates dummy traffic and publishes a Discovery TRACE configuration (depth: 'trace')."
-    echo "3. Asserts sequential StreamEvents chunks over events/stream and parses PCAP magic headers."
+    echo "3. Asserts sequential StreamsEvents chunks over events/streams and parses PCAP magic headers."
     echo "4. Verifies Level 200 status reports in the container's discovery state."
     echo ""
     echo "Prerequisites:"
     echo "- Requires local Docker daemon running."
     echo "- Requires udmi-spotter:latest image built."
-    echo "- Requires jq, openssl, and mosquitto-clients."
+    echo "- Requires jq and mosquitto-clients."
     exit 0
 fi
 
@@ -66,7 +66,7 @@ cleanup() {
     if [[ -n "$MOSQ_PID" ]]; then kill "$MOSQ_PID" 2>/dev/null || true; fi
     
     # Network cleanup
-    docker network rm spotter-parity-net >/dev/null 2>&1 || true
+    docker network rm parity-spotter-net >/dev/null 2>&1 || true
     
     # Temp dir cleanup
     rm -rf "$TEST_DIR"
@@ -76,12 +76,12 @@ cleanup() {
 trap cleanup EXIT
 
 echo "Preparing Docker network"
-docker ps -q --filter network=spotter-parity-net | xargs -r docker stop >/dev/null 2>&1 || true
-if ! docker network inspect spotter-parity-net >/dev/null 2>&1; then
+docker ps -q --filter network=parity-spotter-net | xargs -r docker stop >/dev/null 2>&1 || true
+if ! docker network inspect parity-spotter-net >/dev/null 2>&1; then
     docker network create \
         --subnet=192.168.12.0/24 \
         --gateway=192.168.12.254 \
-        spotter-parity-net >/dev/null
+        parity-spotter-net >/dev/null
 fi
 
 echo "Preparing certificates"
@@ -93,22 +93,18 @@ AHU_KEY_SRC="$WORKSPACE_DIR/sites/udmi_site_model/devices/AHU-1/rsa_private.pem"
 AHU_CRT_SRC="$WORKSPACE_DIR/sites/udmi_site_model/devices/AHU-1/rsa_private.crt"
 AHU_PKCS8_SRC="$WORKSPACE_DIR/sites/udmi_site_model/devices/AHU-1/rsa_private.pkcs8"
 
+for cert in "$CA_SRC" "$SERVER_CRT_SRC" "$SERVER_KEY_SRC" "$AHU_KEY_SRC" "$AHU_CRT_SRC" "$AHU_PKCS8_SRC"; do
+    if [[ ! -f "$cert" ]]; then
+        echo "ERROR: Prerequisite certificate/key missing: $cert" >&2
+        echo "Ensure 'bin/setup_ca sites/udmi_site_model localhost' and 'bin/keygen CERT sites/udmi_site_model/devices/AHU-1' have been run." >&2
+        exit 1
+    fi
+done
+
 cp "$CA_SRC" "$TEST_DIR/ca.crt"
 cp "$AHU_KEY_SRC" "$TEST_DIR/rsa_private.pem"
 cp "$AHU_PKCS8_SRC" "$TEST_DIR/rsa_private.pkcs8"
-
-TARGET_CRT="$TEST_DIR/rsa_private.crt"
-if [[ -f "$AHU_CRT_SRC" ]]; then
-    cp "$AHU_CRT_SRC" "$TARGET_CRT"
-else
-    REFLECTOR_KEY="$WORKSPACE_DIR/sites/udmi_site_model/reflector/rsa_private.pem"
-    CSR_FILE="$TEST_DIR/client.csr"
-    TARGET_PEM="$TEST_DIR/rsa_private.pem"
-    
-    openssl req -new -key "$TARGET_PEM" -out "$CSR_FILE" -subj "/CN=DSN-1" >/dev/null 2>&1
-    openssl x509 -req -in "$CSR_FILE" -CA "$CA_SRC" -CAkey "$REFLECTOR_KEY" \
-        -CAcreateserial -out "$TARGET_CRT" -days 3650 >/dev/null 2>&1
-fi
+cp "$AHU_CRT_SRC" "$TEST_DIR/rsa_private.crt"
 
 echo "Starting mosquitto broker with dual listeners"
 MOSQ_CONF="$TEST_DIR/mosquitto.conf"
@@ -166,14 +162,14 @@ MQTT_OUT="$TEST_DIR/mqtt.out"
 touch "$MQTT_OUT"
 mosquitto_sub -h 127.0.0.1 -p 1883 \
     -t "/r/ZZ-TRI-FECTA/d/DSN-1/state" \
-    -t "/r/ZZ-TRI-FECTA/d/DSN-1/events/stream" \
+    -t "/r/ZZ-TRI-FECTA/d/DSN-1/events/streams" \
     -F "%t %p" > "$MQTT_OUT" &
 MOSQ_SUB_PID=$!
 
 echo "Starting spotter agent container"
 docker run -d --rm \
     --cap-add=NET_RAW --cap-add=NET_ADMIN \
-    --network=spotter-parity-net \
+    --network=parity-spotter-net \
     --ip=192.168.12.2 \
     --name test-diagnostics-spotter \
     -v "${TEST_DIR}:/config_dir" \
@@ -247,9 +243,9 @@ while [[ $SECONDS -lt $END_TIME ]]; do
         fi
     fi
     
-    if grep -q '/events/stream' "$MQTT_OUT"; then
-        TOTAL=$(grep '/events/stream' "$MQTT_OUT" | head -n 1 | sed 's|^[^ ]* ||' | jq -r '.total_chunks')
-        COUNT=$(grep '/events/stream' "$MQTT_OUT" | wc -l)
+    if grep -q '/events/streams' "$MQTT_OUT"; then
+        TOTAL=$(grep '/events/streams' "$MQTT_OUT" | head -n 1 | sed 's|^[^ ]* ||' | jq -r '.total_chunks')
+        COUNT=$(grep '/events/streams' "$MQTT_OUT" | wc -l)
         if [[ -n "$TOTAL" && "$TOTAL" != "null" && $COUNT -ge $TOTAL ]]; then
             PCAP_DONE=1
         fi
@@ -269,7 +265,7 @@ if [[ $STATE_STOPPED -eq 0 ]]; then
     exit 1
 fi
 if [[ $PCAP_DONE -eq 0 ]]; then
-    echo "ERROR: Test timed out waiting for PCAP streaming chunks over MQTT events/stream"
+    echo "ERROR: Test timed out waiting for PCAP streaming chunks over MQTT events/streams"
     exit 1
 fi
 
@@ -281,7 +277,7 @@ if grep '/state' "$MQTT_OUT" | tail -n 1 | sed 's|^[^ ]* ||' | jq -e '.discovery
 fi
 
 echo "Reassembling pcap payload using reassemble_pcap utility"
-grep '/events/stream' "$MQTT_OUT" | sed 's|^[^ ]* ||' > "$TEST_DIR/stream_events.json"
+grep '/events/streams' "$MQTT_OUT" | sed 's|^[^ ]* ||' > "$TEST_DIR/stream_events.json"
 "${SCRIPT_DIR}/reassemble_pcap" "$TEST_DIR/stream_events.json" "$TEST_DIR/assembled.pcap"
 
 echo "Validating pcap payload size"

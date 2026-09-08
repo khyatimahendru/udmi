@@ -748,7 +748,8 @@ jobs:
       - name: Base setup
         run: |
           sudo bin/setup_base
-          bin/clone_model
+          bin/setup_ca sites/udmi_site_model localhost
+          bin/keygen CERT sites/udmi_site_model/devices/AHU-1
       - name: Run Spotter Unit Tests
         run: edge/spotter/bin/run_spotter_tests unit
       - name: Run Spotter Integration & Parity Tests
