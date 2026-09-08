@@ -55,6 +55,7 @@ cognisant
 comms
 Config
 config
+configs
 conn
 contextualise
 coreutils
@@ -65,6 +66,7 @@ cryptographically
 datapoint
 DBO
 DBP
+declaratively
 Deduplication
 deduplication
 designator
@@ -124,10 +126,12 @@ GlobalId
 googlegroups
 GraphQL
 hardcoded
+hoc
 hostname
 http
 https
 IAM
+ICMP
 idempotency
 idToken
 IFC
@@ -149,6 +153,7 @@ JDK
 JS
 JSON
 json
+JSONL
 JUnit
 JVM
 JWT
@@ -180,6 +185,7 @@ modbus
 monorepos
 mortem
 Mosquitto
+mosquitto
 MQTT
 mqtt
 MQTTS
@@ -206,6 +212,7 @@ Onboarding
 onboarding
 Ontologies
 ontologies
+OOM
 OPC
 Optionality
 optionality
@@ -217,8 +224,11 @@ pagent
 parameterization
 parsers
 Pathing
+pcap
+PCAP
 PID
 PIDs
+Pluggable
 pointname
 pointset
 pointsets
@@ -242,9 +252,11 @@ pubber
 publishTime
 PubSub
 pubsub
+py
 QoS
 QUDT
 RDF
+reachability
 Readme
 Reconciler
 reconciler
@@ -305,6 +317,7 @@ Tekton
 terraform
 terraformed
 testability
+testbeds
 timeseries
 TLS
 tmux
@@ -326,6 +339,7 @@ UDMIF
 udmif
 UDMIS
 udmis
+UDP
 UI
 uint
 unbuffered
