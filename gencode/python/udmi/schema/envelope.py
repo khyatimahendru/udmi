@@ -26,7 +26,7 @@ class SubFolder(Enum):
     validation = 'validation'
     blobset = 'blobset'
     monitoring = 'monitoring'
-    stream = 'stream'
+    streams = 'streams'
 
 
 class SubType(Enum):

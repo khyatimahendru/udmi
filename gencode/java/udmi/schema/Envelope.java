@@ -112,7 +112,7 @@ public class Envelope {
         VALIDATION("validation"),
         BLOBSET("blobset"),
         MONITORING("monitoring"),
-        STREAM("stream");
+        STREAMS("streams");
         private final String value;
         private final static Map<String, Envelope.SubFolder> CONSTANTS = new HashMap<String, Envelope.SubFolder>();
 

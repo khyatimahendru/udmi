@@ -36,8 +36,10 @@ def parse_stream_events(raw_text: str):
     try:
       data = json.loads(raw_text)
       if isinstance(data, list):
-        return data
+        return [item.get("payload", item) if (isinstance(item, dict) and "payload" in item and isinstance(item["payload"], dict)) else item for item in data]
       if isinstance(data, dict):
+        if "payload" in data and isinstance(data["payload"], dict) and "data" in data["payload"]:
+          return [data["payload"]]
         return [data]
     except json.JSONDecodeError:
       pass
@@ -56,8 +58,10 @@ def parse_stream_events(raw_text: str):
 
     try:
       obj = json.loads(payload)
-      if isinstance(obj, dict) and "data" in obj:
-        events.append(obj)
+      if isinstance(obj, dict):
+        inner = obj.get("payload") if (isinstance(obj.get("payload"), dict) and "data" in obj["payload"]) else obj
+        if "data" in inner:
+          events.append(inner)
     except json.JSONDecodeError:
       continue
 
