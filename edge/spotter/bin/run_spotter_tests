@@ -36,11 +36,17 @@ fi
 
 if [[ "$MODE" == "integration" || "$MODE" == "all" ]]; then
     SPOTTER_PYTHON="${WORKSPACE_DIR}/edge/spotter/venv/bin/python3"
-    echo "--- Step 3: Building udmi-spotter:latest Container Image ---"
-    CONTAINER_ENGINE="docker"
-    if ! command -v docker >/dev/null 2>&1 && command -v podman >/dev/null 2>&1; then
-        CONTAINER_ENGINE="podman"
+    CONTAINER_ENGINE="${CONTAINER_ENGINE:-}"
+    if [[ -z "${CONTAINER_ENGINE}" ]]; then
+        if command -v docker >/dev/null 2>&1; then
+            CONTAINER_ENGINE="docker"
+        elif command -v podman >/dev/null 2>&1; then
+            CONTAINER_ENGINE="podman"
+        else
+            CONTAINER_ENGINE="docker"
+        fi
     fi
+    export CONTAINER_ENGINE
     ${CONTAINER_ENGINE} build -t udmi-spotter:latest -f "${WORKSPACE_DIR}/edge/spotter/container/Dockerfile" "${WORKSPACE_DIR}" >/dev/null
 
     echo "--- Step 4: Running Container Lifecycle Integration Tests (test_container) ---"
@@ -62,7 +68,7 @@ if [[ "$MODE" == "integration" || "$MODE" == "all" ]]; then
     "${SCRIPT_DIR}/test_fault_injection"
     echo "-- Network Resilience Integration: PASSED!"
 
-    if ${CONTAINER_ENGINE} network inspect parity-spotter-net >/dev/null 2>&1 || ${CONTAINER_ENGINE} network create --subnet=192.168.12.0/24 parity-spotter-net >/dev/null 2>&1; then
+    if ${CONTAINER_ENGINE} network inspect parity-spotter-net >/dev/null 2>&1 || ${CONTAINER_ENGINE} network create --subnet=192.168.12.0/24 --gateway=192.168.12.254 parity-spotter-net >/dev/null 2>&1; then
         echo "--- Step 8: Running Discovery Parity Tests (test_parity) ---"
         echo "Building legacy discovery node container and simulated BACnet device image..."
         "${WORKSPACE_DIR}/misc/discoverynode/bin/build_container" test-discovery_node >/dev/null
