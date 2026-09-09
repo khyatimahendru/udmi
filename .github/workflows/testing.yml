@@ -753,4 +753,9 @@ jobs:
       - name: Run Spotter Unit Tests
         run: edge/spotter/bin/run_spotter_tests unit
       - name: Run Spotter Integration & Parity Tests
-        run: edge/spotter/bin/run_spotter_tests integration
+        run: |
+          MIN_DEVICES=${PARITY_TEST_MIN_DEVICES:-2}
+          MAX_DEVICES=${PARITY_TEST_MAX_DEVICES:-9}
+          export PARITY_TEST_NUM_DEVICES=$(( RANDOM % (MAX_DEVICES - MIN_DEVICES + 1) + MIN_DEVICES ))
+          echo "Configured PARITY_TEST_NUM_DEVICES=${PARITY_TEST_NUM_DEVICES} (random between ${MIN_DEVICES} and ${MAX_DEVICES})"
+          edge/spotter/bin/run_spotter_tests integration

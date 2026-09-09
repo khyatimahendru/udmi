@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""BACnet discovery parity tests between discoverynode & Spotter."""
+"""Multi-device discovery parity tests between discoverynode & Spotter."""
 
 import datetime
 import json
@@ -11,7 +11,6 @@ import tempfile
 import threading
 import time
 import unittest
-import paho.mqtt.client as mqtt
 
 _script_dir = os.path.dirname(os.path.abspath(__file__))
 _workspace_dir = os.path.abspath(os.path.join(_script_dir, "../../../"))
@@ -21,9 +20,15 @@ _curr_prefix = os.path.abspath(sys.prefix)
 if os.path.exists(_venv_python) and _curr_prefix != os.path.abspath(_venv_dir):
   os.execv(_venv_python, [_venv_python] + sys.argv)
 
+import paho.mqtt.client as mqtt  # pylint: disable=g-import-not-at-top
 
 sys.path.insert(0, os.path.join(_workspace_dir, "clientlib/python/src"))
 sys.path.insert(0, _workspace_dir)
+
+CONTAINER_ENGINE = os.environ.get("CONTAINER_ENGINE") or (
+    "podman" if shutil.which("podman") else "docker"
+)
+PARITY_TEST_NUM_DEVICES = int(os.environ.get("PARITY_TEST_NUM_DEVICES", "2"))
 
 
 def create_mqtt_client(client_id=None):
@@ -73,14 +78,29 @@ def clean_events(events):
   return cleaned
 
 
+def sort_discovery_events(events):
+  """Sorts events with start (0) first, devices by addr, and stop (<0) last."""
+  start_events = [e for e in events if e.get("event_no") == 0]
+  stop_events = [e for e in events if e.get("event_no", 0) < 0]
+  device_events = [
+      e
+      for e in events
+      if e.get("event_no", 0) > 0 or e.get("addr") is not None
+  ]
+  device_events.sort(key=lambda e: str(e.get("addr", "")))
+  for idx, dev_evt in enumerate(device_events, start=1):
+    dev_evt["event_no"] = idx
+  return start_events + device_events + stop_events
+
+
 class TestParity(unittest.TestCase):
   """Validates parity between discoverynode and Spotter container scans."""
 
   @classmethod
   def setUpClass(cls):
     cleanup_cmd = (
-        "docker ps -q --filter network=parity-spotter-net | xargs -r docker"
-        " stop"
+        f"{CONTAINER_ENGINE} ps -q --filter network=parity-spotter-net | xargs"
+        f" -r {CONTAINER_ENGINE} stop"
     )
     subprocess.run(
         cleanup_cmd,
@@ -90,7 +110,7 @@ class TestParity(unittest.TestCase):
         check=False,
     )
     res = subprocess.run(
-        ["docker", "network", "inspect", "parity-spotter-net"],
+        [CONTAINER_ENGINE, "network", "inspect", "parity-spotter-net"],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         check=False,
@@ -98,7 +118,7 @@ class TestParity(unittest.TestCase):
     if res.returncode != 0:
       subprocess.run(
           [
-              "docker",
+              CONTAINER_ENGINE,
               "network",
               "create",
               "--subnet=192.168.12.0/24",
@@ -112,6 +132,7 @@ class TestParity(unittest.TestCase):
     # pylint: disable=consider-using-with
     self.test_dir = tempfile.TemporaryDirectory()
     self.mqtt_port = 18883
+    self.mqtt_plain_port = 18884
 
     # 1. Get workspace paths for certificates
     workspace_dir = os.path.abspath(
@@ -153,35 +174,20 @@ class TestParity(unittest.TestCase):
         ahu_crt_src, os.path.join(self.test_dir.name, "rsa_private.crt")
     )
 
-    # 2. Start local Mosquitto broker with dual listeners:
+    # 2. Start local Mosquitto broker on unprivileged ports
     self.mosquitto_conf = os.path.join(self.test_dir.name, "mosquitto.conf")
     with open(self.mosquitto_conf, "w", encoding="utf-8") as f:
       f.write(f"""
-listener 1883 0.0.0.0
+listener {self.mqtt_plain_port} 0.0.0.0
 allow_anonymous true
 
-listener 18883 0.0.0.0
+listener {self.mqtt_port} 0.0.0.0
 cafile {ca_src}
 certfile {server_crt_src}
 keyfile {server_key_src}
 require_certificate true
 allow_anonymous true
 """)
-
-    # Stop background/system mosquitto if running
-    subprocess.run(
-        ["sudo", "systemctl", "stop", "mosquitto"],
-        stderr=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        check=False,
-    )
-    subprocess.run(
-        ["pkill", "-9", "mosquitto"],
-        stderr=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        check=False,
-    )
-    time.sleep(0.5)
 
     self.mosquitto_log_path = os.path.join(self.test_dir.name, "mosquitto.log")
     # pylint: disable=consider-using-with
@@ -193,7 +199,7 @@ allow_anonymous true
         stdout=self.mosquitto_log_file,
         stderr=self.mosquitto_log_file,
     )
-    time.sleep(2)
+    time.sleep(1.5)
 
     if self.mosquitto_proc.poll() is not None:
       self.mosquitto_log_file.close()
@@ -201,68 +207,84 @@ allow_anonymous true
         log_content = f.read()
       raise RuntimeError(f"Mosquitto failed to start:\n{log_content}")
 
-    # 3. Create docker network
-    subprocess.run(
-        ["docker", "network", "rm", "parity-spotter-net"],
+    # 3. Ensure network exists
+    res = subprocess.run(
+        [CONTAINER_ENGINE, "network", "inspect", "parity-spotter-net"],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         check=False,
     )
-    subprocess.run(
-        [
-            "docker",
-            "network",
-            "create",
-            "--subnet=192.168.12.0/24",
-            "--gateway=192.168.12.254",
-            "parity-spotter-net",
-        ],
-        check=True,
-    )
+    if res.returncode != 0:
+      subprocess.run(
+          [
+              CONTAINER_ENGINE,
+              "network",
+              "create",
+              "--subnet=192.168.12.0/24",
+              "--gateway=192.168.12.254",
+              "parity-spotter-net",
+          ],
+          check=True,
+      )
 
-    # 4. Start simulated BACnet device container
-    # pylint: disable=consider-using-with
-    self.bacnet_proc = subprocess.Popen(
-        [
-            "docker",
-            "run",
-            "--rm",
-            "--network=parity-spotter-net",
-            "--ip=192.168.12.1",
-            "-e",
-            "BACNET_ID=12345",
-            "-e",
-            "PYTHONUNBUFFERED=1",
-            "--name",
-            "parity-bacnet-device",
-            "test-bacnet-device:latest",
-        ],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+    # 4. Start N simulated BACnet devices
+    self.simulated_devices = []
+    print(
+        f"\n[TestParity] Starting {PARITY_TEST_NUM_DEVICES} simulated BACnet"
+        " device(s)..."
     )
+    for i in range(1, PARITY_TEST_NUM_DEVICES + 1):
+      ip = f"192.168.12.{10 + i}"
+      dev_id = 12340 + i
+      cname = f"parity-bacnet-device-{i}"
+      subprocess.run(
+          [CONTAINER_ENGINE, "stop", cname],
+          stdout=subprocess.DEVNULL,
+          stderr=subprocess.DEVNULL,
+          check=False,
+      )
+      proc = subprocess.Popen(
+          [
+              CONTAINER_ENGINE,
+              "run",
+              "--rm",
+              "--network=parity-spotter-net",
+              f"--ip={ip}",
+              "-e",
+              f"BACNET_ID={dev_id}",
+              "-e",
+              "PYTHONUNBUFFERED=1",
+              "--name",
+              cname,
+              "test-bacnet-device:latest",
+          ],
+          stdout=subprocess.DEVNULL,
+          stderr=subprocess.DEVNULL,
+      )
+      self.simulated_devices.append((cname, proc, dev_id, ip))
     time.sleep(3)
 
   def tearDown(self):
-    self.mosquitto_proc.terminate()
-    self.mosquitto_proc.wait()
-    self.mosquitto_log_file.close()
+    # Stop simulated devices
+    for cname, proc, _, _ in getattr(self, "simulated_devices", []):
+      subprocess.run(
+          [CONTAINER_ENGINE, "stop", cname],
+          stdout=subprocess.DEVNULL,
+          stderr=subprocess.DEVNULL,
+          check=False,
+      )
+      if proc:
+        try:
+          proc.wait(timeout=2)
+        except Exception:
+          pass
 
-    subprocess.run(
-        ["docker", "stop", "parity-bacnet-device"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        check=False,
-    )
-    subprocess.run(
-        ["docker", "network", "rm", "parity-spotter-net"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        check=False,
-    )
-
-    if self.mosquitto_proc:
+    if hasattr(self, "mosquitto_proc") and self.mosquitto_proc:
       self.mosquitto_proc.terminate()
-      self.mosquitto_proc.wait()
+      try:
+        self.mosquitto_proc.wait(timeout=2)
+      except Exception:
+        pass
 
     if hasattr(self, "mosquitto_log_file") and self.mosquitto_log_file:
       self.mosquitto_log_file.close()
@@ -275,6 +297,11 @@ allow_anonymous true
       container_name,
       client_id,
       config_file_in_container,
+      family="bacnet",
+      depth="system",
+      addrs=None,
+      scan_duration_sec=6,
+      settle_time=12,
   ):
     """Executes a container discovery run and collects emitted events."""
     if self.mosquitto_proc.poll() is not None:
@@ -302,7 +329,7 @@ allow_anonymous true
 
     client.on_connect = on_connect
     client.on_message = on_message
-    client.connect("127.0.0.1", 1883)
+    client.connect("127.0.0.1", self.mqtt_plain_port)
     client.loop_start()
 
     if not connected.wait(timeout=5):
@@ -311,10 +338,18 @@ allow_anonymous true
     client.subscribe(f"/r/ZZ-TRI-FECTA/d/{client_id}/events/discovery")
     client.subscribe(f"/r/ZZ-TRI-FECTA/d/{client_id}/state")
 
+    # Clean existing container name if running
+    subprocess.run(
+        [CONTAINER_ENGINE, "stop", container_name],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+
     # pylint: disable=consider-using-with
     container_proc = subprocess.Popen(
         [
-            "docker",
+            CONTAINER_ENGINE,
             "run",
             "--rm",
             "--network=parity-spotter-net",
@@ -333,30 +368,25 @@ allow_anonymous true
 
     try:
       timestamp = datetime_now_iso()
+      family_scan_cfg = {
+          "generation": timestamp,
+          "scan_duration_sec": scan_duration_sec,
+          "depth": depth,
+      }
+      if addrs:
+        family_scan_cfg["addrs"] = addrs
+
       config_payload = {
           "timestamp": timestamp,
           "discovery": {
               "families": {
-                  "bacnet": {
-                      "generation": timestamp,
-                      "scan_duration_sec": 5,
-                      "depth": "system",
-                  }
+                  family: family_scan_cfg,
               }
           },
       }
 
       success = False
       for _ in range(15):
-        if state_received.is_set():
-          time.sleep(0.5)
-          client.publish(
-              f"/r/ZZ-TRI-FECTA/d/{client_id}/config",
-              json.dumps(config_payload),
-              qos=1,
-          )
-          success = True
-          break
         client.publish(
             f"/r/ZZ-TRI-FECTA/d/{client_id}/config",
             json.dumps(config_payload),
@@ -382,25 +412,25 @@ allow_anonymous true
             f"Container {container_name} failed to publish state update."
         )
 
-      time.sleep(10)
+      time.sleep(settle_time)
     finally:
       subprocess.run(
-          ["docker", "stop", container_name],
+          [CONTAINER_ENGINE, "stop", container_name],
           stdout=subprocess.DEVNULL,
           stderr=subprocess.DEVNULL,
           check=False,
       )
       stdout, stderr = container_proc.communicate()
       print(f"\n[{container_name} STDOUT]:\n", stdout.decode())
-      print(f"\n[{container_name} STDERR]:\n", stderr.decode())
+      if stderr:
+        print(f"\n[{container_name} STDERR]:\n", stderr.decode())
 
       client.loop_stop()
       client.disconnect()
 
     return messages
 
-  def test_discovery_parity(self):
-    """Verifies matching discovery output between discoverynode and Spotter."""
+  def _prepare_configs(self):
     legacy_config = {
         "mqtt": {
             "device_id": "DSN-1",
@@ -418,9 +448,9 @@ allow_anonymous true
         "bacnet": {"ip": None, "port": None, "interface": None},
         "udmi": {
             "discovery": {
-                "ipv4": False,
+                "ipv4": True,
                 "vendor": False,
-                "ether": False,
+                "ether": True,
                 "bacnet": True,
             }
         },
@@ -450,58 +480,205 @@ allow_anonymous true
     with open(spotter_config_file, "w", encoding="utf-8") as f:
       f.write(json.dumps(spotter_config))
 
-    print("\n--- Running Parity Test: Legacy Discovery Container ---")
+  def test_01_bacnet_multi_device_discovery_parity(self):
+    """Verifies BACnet system discovery parity across N simulated devices."""
+    self._prepare_configs()
+    expected_dev_ids = [
+        str(dev_id) for _, _, dev_id, _ in self.simulated_devices
+    ]
+
+    num_devs = len(self.simulated_devices)
+    scan_dur = max(6, 2 + num_devs * 2)
+    settle_t = max(10, 4 + num_devs * 3)
+
+    print(
+        f"\n--- [Test 1] Running Legacy Discovery: BACnet depth=system"
+        f" (devices={num_devs}, scan={scan_dur}s, settle={settle_t}s) ---"
+    )
     legacy_events = self.run_discovery_test(
         "test-discovery_node:latest",
-        "parity-legacy-node",
+        "parity-legacy-node-system",
         "DSN-1",
         "/config_dir/legacy_config.json",
+        family="bacnet",
+        depth="system",
+        scan_duration_sec=scan_dur,
+        settle_time=settle_t,
     )
 
-    print("\n--- Running Parity Test: New Spotter Container ---")
+    print(
+        f"\n--- [Test 1] Running Spotter Discovery: BACnet depth=system"
+        f" (devices={num_devs}, scan={scan_dur}s, settle={settle_t}s) ---"
+    )
     spotter_events = self.run_discovery_test(
         "udmi-spotter:latest",
-        "parity-spotter-node",
+        "parity-spotter-node-system",
         "DSN-1",
         "/config_dir/spotter_config.json",
+        family="bacnet",
+        depth="system",
+        scan_duration_sec=scan_dur,
+        settle_time=settle_t,
     )
 
-    legacy_clean = clean_events(legacy_events)
-    spotter_clean = clean_events(spotter_events)
+    legacy_clean = sort_discovery_events(clean_events(legacy_events))
+    spotter_clean = sort_discovery_events(clean_events(spotter_events))
 
-    print("\nLegacy Events Collected:")
-    print(json.dumps(legacy_clean, indent=2))
-    print("\nSpotter Events Collected:")
-    print(json.dumps(spotter_clean, indent=2))
+    print(f"\nDiscovered simulated BACnet device IDs: {expected_dev_ids}")
+    print(f"Legacy total events: {len(legacy_clean)}")
+    print(f"Spotter total events: {len(spotter_clean)}")
 
-    self.assertGreater(
-        len(legacy_clean), 2, "No devices discovered by legacy container"
+    # 1. Verify start & stop markers
+    self.assertTrue(
+        any(e.get("event_no") == 0 for e in legacy_clean),
+        "Legacy missing start marker 0",
     )
-    self.assertGreater(
-        len(spotter_clean), 2, "No devices discovered by spotter container"
+    self.assertTrue(
+        any(e.get("event_no") == 0 for e in spotter_clean),
+        "Spotter missing start marker 0",
+    )
+    self.assertTrue(
+        any(e.get("event_no", 0) < 0 for e in legacy_clean),
+        "Legacy missing finish marker < 0",
+    )
+    self.assertTrue(
+        any(e.get("event_no", 0) < 0 for e in spotter_clean),
+        "Spotter missing finish marker < 0",
     )
 
-    legacy_devices = [e for e in legacy_clean if e.get("addr") == "12345"]
-    spotter_devices = [e for e in spotter_clean if e.get("addr") == "12345"]
+    # 2. Verify all simulated devices are present in both
+    for dev_id in expected_dev_ids:
+      leg_match = [e for e in legacy_clean if e.get("addr") == dev_id]
+      spt_match = [e for e in spotter_clean if e.get("addr") == dev_id]
+      self.assertEqual(
+          len(leg_match), 1, f"Legacy failed to discover device {dev_id}"
+      )
+      self.assertEqual(
+          len(spt_match), 1, f"Spotter failed to discover device {dev_id}"
+      )
+
+      # Verify system metadata parity
+      leg_sys = leg_match[0].get("system", {})
+      spt_sys = spt_match[0].get("system", {})
+      self.assertEqual(leg_sys.get("hardware"), spt_sys.get("hardware"))
+      self.assertEqual(leg_sys.get("ancillary"), spt_sys.get("ancillary"))
+
+    # 3. Verify total event parity
     self.assertEqual(
-        len(legacy_devices),
-        1,
-        "Legacy container failed to discover BACnet device 12345",
+        legacy_clean, spotter_clean, "System discovery events do not match!"
     )
-    self.assertEqual(
-        len(spotter_devices),
-        1,
-        "Spotter container failed to discover BACnet device 12345",
+    print("\nSUCCESS: BACnet multi-device system discovery parity achieved!")
+
+  def test_02_bacnet_point_enumeration_parity(self):
+    """Verifies BACnet point reference enumeration parity across N devices."""
+    self._prepare_configs()
+    expected_dev_ids = [
+        str(dev_id) for _, _, dev_id, _ in self.simulated_devices
+    ]
+
+    num_devs = len(self.simulated_devices)
+    scan_dur = max(7, 3 + num_devs * 2)
+    settle_t = max(12, 5 + num_devs * 3)
+
+    print(
+        f"\n--- [Test 2] Running Legacy Discovery: BACnet depth=refs"
+        f" (devices={num_devs}, scan={scan_dur}s, settle={settle_t}s) ---"
+    )
+    legacy_events = self.run_discovery_test(
+        "test-discovery_node:latest",
+        "parity-legacy-node-refs",
+        "DSN-1",
+        "/config_dir/legacy_config.json",
+        family="bacnet",
+        depth="refs",
+        scan_duration_sec=scan_dur,
+        settle_time=settle_t,
     )
 
-    self.assertEqual(
-        legacy_clean,
-        spotter_clean,
-        "Discovery events do not match between containers!",
+    print(
+        f"\n--- [Test 2] Running Spotter Discovery: BACnet depth=refs"
+        f" (devices={num_devs}, scan={scan_dur}s, settle={settle_t}s) ---"
     )
-    print("\nSUCCESS: Functional parity achieved!")
+    spotter_events = self.run_discovery_test(
+        "udmi-spotter:latest",
+        "parity-spotter-node-refs",
+        "DSN-1",
+        "/config_dir/spotter_config.json",
+        family="bacnet",
+        depth="refs",
+        scan_duration_sec=scan_dur,
+        settle_time=settle_t,
+    )
+
+    legacy_clean = sort_discovery_events(clean_events(legacy_events))
+    spotter_clean = sort_discovery_events(clean_events(spotter_events))
+
+    print(f"\nLegacy refs events: {len(legacy_clean)}")
+    print(f"Spotter refs events: {len(spotter_clean)}")
+
+    # 1. Verify markers
+    self.assertTrue(any(e.get("event_no") == 0 for e in legacy_clean))
+    self.assertTrue(any(e.get("event_no") == 0 for e in spotter_clean))
+    self.assertTrue(any(e.get("event_no", 0) < 0 for e in legacy_clean))
+    self.assertTrue(any(e.get("event_no", 0) < 0 for e in spotter_clean))
+
+    # 2. Verify all simulated devices are present and have points enumerated
+    expected_points = {"AI:0", "AV:0", "BI:0", "MSV:0"}
+    for dev_id in expected_dev_ids:
+      leg_match = [e for e in legacy_clean if e.get("addr") == dev_id]
+      spt_match = [e for e in spotter_clean if e.get("addr") == dev_id]
+      self.assertEqual(len(leg_match), 1, f"Legacy missing device {dev_id}")
+      self.assertEqual(len(spt_match), 1, f"Spotter missing device {dev_id}")
+
+      leg_refs = leg_match[0].get("refs", {})
+      spt_refs = spt_match[0].get("refs", {})
+
+      self.assertTrue(
+          expected_points.issubset(set(leg_refs.keys())),
+          f"Legacy missing expected points on {dev_id}",
+      )
+      self.assertTrue(
+          expected_points.issubset(set(spt_refs.keys())),
+          f"Spotter missing expected points on {dev_id}",
+      )
+
+      # Verify point attributes parity (name, type, description, units, possible_values)
+      for pt_id in expected_points:
+        lp = leg_refs[pt_id]
+        sp = spt_refs[pt_id]
+        self.assertEqual(
+            lp.get("name"),
+            sp.get("name"),
+            f"Point {pt_id} name mismatch on {dev_id}",
+        )
+        self.assertEqual(
+            lp.get("type"),
+            sp.get("type"),
+            f"Point {pt_id} type mismatch on {dev_id}",
+        )
+        self.assertEqual(
+            lp.get("description"),
+            sp.get("description"),
+            f"Point {pt_id} description mismatch on {dev_id}",
+        )
+        if "units" in lp:
+          self.assertEqual(
+              lp.get("units"),
+              sp.get("units"),
+              f"Point {pt_id} units mismatch on {dev_id}",
+          )
+        if "possible_values" in lp:
+          self.assertEqual(
+              lp.get("possible_values"),
+              sp.get("possible_values"),
+              f"Point {pt_id} possible_values mismatch on {dev_id}",
+          )
+
+    print(
+        "\nSUCCESS: BACnet point reference enumeration parity achieved across"
+        " all devices!"
+    )
 
 
 if __name__ == "__main__":
   unittest.main()
-
