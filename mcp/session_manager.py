@@ -115,12 +115,6 @@ class SessionManager:
         run_dir = os.path.join(self.instances_dir, session_name)
         info_path = os.path.join(run_dir, "session_info.json")
 
-        if site_model.startswith("//"):
-            raise ValueError(
-                f"'{site_model}' is a target project spec, not a site model directory. "
-                f"For cloud endpoints, use run_sequencer_test(..., target_spec='{site_model}') instead."
-            )
-
         site_model_path = os.path.abspath(os.path.join(self.udmi_root, site_model))
         if not os.path.isdir(site_model_path):
             site_model_path = os.path.abspath(site_model)
@@ -167,8 +161,7 @@ class SessionManager:
 
         filter_str = (" " + " ".join(filter_flags)) if filter_flags else ""
 
-        # Build start_local command
-        main_log_file = os.path.join(run_dir, "main.log")
+        # Build udmi start command
         start_cmd = (
             f"export UDMI_ROOT='{self.udmi_root}' && "
             f"export UDMI_RUN_DIR='{run_dir}' && "
@@ -176,9 +169,8 @@ class SessionManager:
             f"export ETCD_PORT='{etcd_port}' && "
             f"export INFLUX_PORT='{influx_port}' && "
             f"export POSTGRES_PORT='{postgres_port}' && "
-            f"export UDMI_NO_SUDO='true' && "
             f"cd '{self.udmi_root}' && "
-            f"bin/start_local block '{site_model_path}' '{project_spec}'{filter_str} 2>&1 | tee '{main_log_file}'"
+            f"bin/udmi start block '{site_model_path}' '{project_spec}'{filter_str}"
         )
 
         # Launch in background tmux session
@@ -281,7 +273,7 @@ class SessionManager:
     def terminate_test_setup(
         self, test_id: str, clean_workspace: bool = True
     ) -> Dict[str, Any]:
-        """Terminate an active test setup, its child background daemons, and its tmux session."""
+        """Terminate an active test setup and its tmux session."""
         session_name = self.sanitize_session_name(test_id)
         run_dir = os.path.join(self.instances_dir, session_name)
 
@@ -293,15 +285,6 @@ class SessionManager:
                 check=False,
             )
             time.sleep(0.5)
-
-        # Forcefully terminate any orphan child processes tied to this instance workspace
-        if os.path.isdir(run_dir):
-            subprocess.run(
-                ["pkill", "-9", "-f", run_dir],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=False,
-            )
 
         if clean_workspace and os.path.isdir(run_dir):
             shutil.rmtree(run_dir, ignore_errors=True)
@@ -360,19 +343,9 @@ class SessionManager:
     def get_test_logs(
         self, test_id: str, window: str = "main", lines: int = 100
     ) -> str:
-        """Capture recent pane logs from a named semantic tmux window or fallback log file."""
+        """Capture recent pane logs from a named semantic tmux window."""
         session_name = self.sanitize_session_name(test_id)
-        run_dir = os.path.join(self.instances_dir, session_name)
-        main_log_file = os.path.join(run_dir, "main.log")
-
         if not self.is_session_active(session_name):
-            if os.path.isfile(main_log_file):
-                try:
-                    with open(main_log_file, "r", encoding="utf-8", errors="replace") as f:
-                        all_lines = f.readlines()
-                        return "".join(all_lines[-lines:])
-                except Exception:
-                    pass
             raise RuntimeError(f"Session '{session_name}' for test_id '{test_id}' is not active.")
 
         # Reject numerical indices to enforce semantic window tags
@@ -445,346 +418,3 @@ class SessionManager:
             time.sleep(0.5)
 
         return False
-
-    def validate_session_command(self, command: str) -> None:
-        """Validate command against security policy and allowlisted executables."""
-        if not command or not command.strip():
-            raise ValueError("Command string cannot be empty.")
-
-        clean_cmd = command.strip()
-
-        # Reject dangerous shell injection tokens
-        disallowed_patterns = [
-            r"\bsudo\b",
-            r"\bsu\b",
-            r"\bcurl\b",
-            r"\bwget\b",
-            r"\bmkfifo\b",
-            r"\bnc\b",
-            r"\bncat\b",
-            r"/dev/tcp",
-            r"chmod\s+777\s+/",
-            r"rm\s+-rf\s+/[^\s]*",
-            r":\(\)\s*\{",
-        ]
-        for pat in disallowed_patterns:
-            if re.search(pat, clean_cmd, re.IGNORECASE):
-                raise ValueError(
-                    f"Command rejected: contains disallowed security token matching '{pat}'."
-                )
-
-        # Check subcommands split by &&, ;, or |
-        subcommands = re.split(r"&&|;|\|", clean_cmd)
-        allowed_prefixes = (
-            "bin/",
-            "java",
-            "python",
-            "python3",
-            "venv/bin/python",
-            "venv/bin/python3",
-            "pytest",
-            "export",
-            "cd",
-            "echo",
-        )
-
-        for sub in subcommands:
-            s = sub.strip()
-            if not s:
-                continue
-            # Remove leading environment variable assignments e.g. "FOO=BAR bin/sequencer"
-            s_no_env = re.sub(r"^[A-Za-z0-9_]+=[^\s]+\s+", "", s).strip()
-            if not any(s_no_env.startswith(prefix) for prefix in allowed_prefixes):
-                raise ValueError(
-                    f"Command segment '{s}' rejected: executable must start with an approved prefix: {allowed_prefixes}"
-                )
-
-    def start_session_process(
-        self,
-        test_id: str,
-        window: str,
-        command: str,
-        env: Optional[Dict[str, str]] = None,
-    ) -> Dict[str, Any]:
-        """Launch a command or test process inside a named semantic window of an active session."""
-        self.validate_session_command(command)
-
-        session_name = self.sanitize_session_name(test_id)
-        if not self.is_session_active(session_name):
-            raise RuntimeError(f"Session '{session_name}' for test_id '{test_id}' is not active.")
-
-        if str(window).strip().isdigit():
-            raise ValueError(
-                f"Window parameter must be a semantic tag (e.g. 'sequencer', 'dut'), not a numerical index '{window}'."
-            )
-
-        run_dir = os.path.join(self.instances_dir, session_name)
-        info = self.get_session_info(test_id) or {}
-        ports = info.get("ports", {})
-        mqtt_port = ports.get("mqtt", self.derive_port_block(test_id))
-
-        env_exports = [
-            f"export UDMI_ROOT='{self.udmi_root}'",
-            f"export UDMI_RUN_DIR='{run_dir}'",
-            f"export MQTT_PORT='{mqtt_port}'",
-            f"export UDMI_NO_SUDO='true'",
-        ]
-        if env:
-            for k, v in env.items():
-                env_exports.append(f"export {k}='{v}'")
-
-        full_cmd = f"{' && '.join(env_exports)} && cd '{self.udmi_root}' && {command}"
-
-        existing_windows = self.list_test_windows(test_id)
-        if window in existing_windows:
-            subprocess.run(
-                ["tmux", "send-keys", "-t", f"{session_name}:{window}", full_cmd, "C-m"],
-                check=True,
-            )
-        else:
-            subprocess.run(
-                [
-                    "tmux",
-                    "new-window",
-                    "-t",
-                    session_name,
-                    "-n",
-                    window,
-                    f"bash -c {json.dumps(full_cmd)}",
-                ],
-                check=True,
-            )
-
-        return {
-            "status": "STARTED",
-            "test_id": test_id,
-            "session_name": session_name,
-            "window": window,
-            "command": command,
-        }
-
-    def run_sequencer_test(
-        self,
-        test_name: str,
-        device_id: str = "AHU-1",
-        target_spec: Optional[str] = None,
-        site_model: str = "sites/udmi_site_model",
-        session_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """Launch a sequencer test against a local or cloud endpoint."""
-        # Handle accidental swap where user or model passed //... as site_model
-        if site_model.startswith("//") and not target_spec:
-            target_spec = site_model
-            site_model = "sites/udmi_site_model"
-
-        site_model_path = os.path.abspath(os.path.join(self.udmi_root, site_model))
-        if not os.path.isdir(site_model_path):
-            site_model_path = os.path.abspath(site_model)
-        if not os.path.isdir(site_model_path):
-            raise ValueError(f"Site model directory not found: {site_model}")
-
-        # Determine target project spec
-        is_cloud = False
-        if target_spec and (
-            any(target_spec.startswith(p) for p in ("//gbos", "//gcp", "//gref", "//iotcore", "//reflect"))
-            or (target_spec.startswith("//") and not re.match(r"^//mqtt/(?:localhost|127\.0\.0\.1)", target_spec, re.IGNORECASE))
-        ):
-            is_cloud = True
-            resolved_target = target_spec
-            sess_name = self.sanitize_session_name(session_id or f"cloud_{device_id}_{test_name}")
-        elif target_spec and target_spec.startswith("//"):
-            resolved_target = target_spec
-            sess_name = self.sanitize_session_name(session_id or f"test_{device_id}_{test_name}")
-        else:
-            active_info = self.get_session_info(session_id) if session_id else None
-            if active_info and "project_spec" in active_info:
-                resolved_target = active_info["project_spec"]
-                sess_name = self.sanitize_session_name(session_id)
-            else:
-                active_setups = self.list_test_setups()
-                if active_setups:
-                    first_sess = active_setups[0].get("test_id", "")
-                    first_info = self.get_session_info(first_sess) or {}
-                    resolved_target = first_info.get("project_spec")
-                    sess_name = self.sanitize_session_name(first_sess)
-                else:
-                    resolved_target = None
-                    sess_name = self.sanitize_session_name(session_id or f"test_{device_id}_{test_name}")
-
-        # If not cloud and no active session/target, ensure local test setup
-        if not is_cloud and not resolved_target:
-            setup_info = self.ensure_test_setup(test_id=sess_name, site_model=site_model, dut_device_id=device_id)
-            resolved_target = setup_info["project_spec"]
-
-        # Ensure session exists (for cloud or background execution)
-        run_dir = os.path.join(self.instances_dir, sess_name)
-        os.makedirs(os.path.join(run_dir, "out"), exist_ok=True)
-        os.makedirs(os.path.join(run_dir, "var"), exist_ok=True)
-
-        if not self.is_session_active(sess_name):
-            subprocess.run(
-                ["tmux", "new-session", "-d", "-s", sess_name, "-n", "sequencer"],
-                check=True,
-            )
-            subprocess.run(
-                ["tmux", "set-option", "-t", sess_name, "remain-on-exit", "on"],
-                check=False,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-
-        cmd = f"bin/sequencer '{site_model_path}' '{resolved_target}' '{device_id}' '{test_name}'"
-        res = self.start_session_process(test_id=sess_name, window="sequencer", command=cmd)
-
-        return {
-            "status": "LAUNCHED",
-            "test_name": test_name,
-            "device_id": device_id,
-            "site_model": site_model,
-            "target_spec": resolved_target,
-            "session_id": sess_name,
-            "window": "sequencer",
-            "command": cmd,
-            "is_cloud": is_cloud,
-            "message": (
-                f"Launched sequencer test '{test_name}' for device '{device_id}' against '{resolved_target}' "
-                f"in session '{sess_name}' (window: 'sequencer')."
-            ),
-        }
-
-    def query_database(
-        self,
-        test_id: str,
-        database_type: str,
-        query: str,
-    ) -> Dict[str, Any]:
-        """Execute a read-only query against InfluxDB or PostgreSQL of an active test session."""
-        db_type = database_type.lower().strip()
-        if db_type not in ("influx", "postgres"):
-            raise ValueError(f"Unsupported database_type: '{database_type}'. Must be 'influx' or 'postgres'.")
-
-        # Safety check: enforce read-only query
-        forbidden_keywords = [
-            "insert", "update", "delete", "drop", "alter", "create",
-            "truncate", "grant", "revoke", "copy", "replace", "vacuum"
-        ]
-        query_words = set(re.findall(r"\b[a-zA-Z]+\b", query.lower()))
-        for kw in forbidden_keywords:
-            if kw in query_words:
-                raise ValueError(f"Mutating query rejected. Only read-only queries are permitted (found '{kw}').")
-
-        info = self.get_session_info(test_id) or {}
-        ports = info.get("ports", {})
-
-        if db_type == "influx":
-            influx_port = ports.get("influx")
-            if not influx_port:
-                influx_port = self.derive_port_block(test_id) + 2
-
-            import urllib.parse
-            import urllib.request
-            params = urllib.parse.urlencode({"db": "udmi", "q": query})
-            url = f"http://127.0.0.1:{influx_port}/query?{params}"
-            try:
-                req = urllib.request.Request(url, method="GET")
-                with urllib.request.urlopen(req, timeout=3.0) as resp:
-                    data = json.loads(resp.read().decode("utf-8"))
-                    return {
-                        "status": "SUCCESS",
-                        "test_id": test_id,
-                        "database_type": "influx",
-                        "query": query,
-                        "results": data.get("results", []),
-                    }
-            except Exception as e:
-                return {
-                    "status": "ERROR",
-                    "test_id": test_id,
-                    "database_type": "influx",
-                    "query": query,
-                    "error": str(e),
-                }
-
-        elif db_type == "postgres":
-            pg_port = ports.get("postgres")
-            if not pg_port:
-                pg_port = self.derive_port_block(test_id) + 3
-
-            try:
-                import psycopg2
-                conn = psycopg2.connect(
-                    host="127.0.0.1",
-                    port=pg_port,
-                    dbname="udmi",
-                    user="postgres",
-                    connect_timeout=3,
-                )
-                try:
-                    with conn.cursor() as cur:
-                        cur.execute(query)
-                        if cur.description:
-                            columns = [desc[0] for desc in cur.description]
-                            rows = cur.fetchall()
-                            rows_dict = [dict(zip(columns, row)) for row in rows]
-                            return {
-                                "status": "SUCCESS",
-                                "test_id": test_id,
-                                "database_type": "postgres",
-                                "query": query,
-                                "columns": columns,
-                                "results": rows_dict,
-                            }
-                        return {
-                            "status": "SUCCESS",
-                            "test_id": test_id,
-                            "database_type": "postgres",
-                            "query": query,
-                            "results": [],
-                        }
-                finally:
-                    conn.close()
-            except Exception as e:
-                return {
-                    "status": "ERROR",
-                    "test_id": test_id,
-                    "database_type": "postgres",
-                    "query": query,
-                    "error": str(e),
-                }
-
-    def publish_mqtt_message(
-        self,
-        test_id: str,
-        topic: str,
-        payload: str,
-    ) -> Dict[str, Any]:
-        """Publish a message to Mosquitto MQTT broker of an active test session."""
-        info = self.get_session_info(test_id) or {}
-        ports = info.get("ports", {})
-        mqtt_port = ports.get("mqtt")
-        if not mqtt_port:
-            mqtt_port = self.derive_port_block(test_id)
-
-        try:
-            import paho.mqtt.publish as publish
-            publish.single(
-                topic=topic,
-                payload=payload,
-                hostname="127.0.0.1",
-                port=mqtt_port,
-                auth={"username": "rocket", "password": "monkey"},
-            )
-            return {
-                "status": "PUBLISHED",
-                "test_id": test_id,
-                "topic": topic,
-                "payload": payload,
-            }
-        except Exception as e:
-            return {
-                "status": "ERROR",
-                "test_id": test_id,
-                "topic": topic,
-                "error": str(e),
-            }
-

@@ -26,10 +26,8 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.13'
-      - name: start and test local servers
-        run: |
-          bin/setup_base
-          bin/start_local +pubsub
+      - name: base setup
+        run: sudo bin/setup_base
       - name: bin/run_tests all_tests
         run: bin/run_tests all_tests
       - name: all test output
@@ -87,10 +85,10 @@ jobs:
           java-version: '21'
           cache: 'gradle'
       - name: base setup
-        run: bin/setup_base
+        run: sudo bin/setup_base
       - name: local setup
         run: |
-          bin/start_local sites/udmi_site_model $TARGET_PROJECT
+          bin/udmi start sites/udmi_site_model $TARGET_PROJECT
           bin/pull_messages ${TARGET_PROJECT}%ZZ-TRI-FECTA > /tmp/message_capture.log 2>&1 &
       - name: bin/test_automapper
         run: bin/test_automapper $TARGET_PROJECT
@@ -121,9 +119,9 @@ jobs:
           path: '*_udmi-support_*.tgz'
 
   baseline:
-    name: Baseline Tests
+    name: Baseline Sequences
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 15
     needs: automapping
     env:
       TARGET_PROJECT: //mqtt/localhost:9001
@@ -136,9 +134,9 @@ jobs:
           java-version: '21'
           cache: 'gradle'
       - name: base setup
-        run: bin/setup_base
+        run: sudo bin/setup_base
       - name: local setup
-        run: bin/start_local sites/udmi_site_model $TARGET_PROJECT
+        run: bin/udmi start sites/udmi_site_model $TARGET_PROJECT
       - name: registrar clean
         run: bin/test_regclean solo $TARGET_PROJECT
       - name: special sequences
@@ -191,9 +189,9 @@ jobs:
           java-version: '21'
           cache: 'gradle'
       - name: base setup
-        run: bin/setup_base
+        run: sudo bin/setup_base
       - name: local setup
-        run: bin/start_local sites/udmi_site_model $TARGET_PROJECT
+        run: bin/udmi start sites/udmi_site_model $TARGET_PROJECT
       - name: registrar clean
         run: bin/test_regclean $TARGET_PROJECT
       - name: sequence tests clean
@@ -250,11 +248,11 @@ jobs:
           cache: 'gradle'
       - name: base setup
         run: |
-          bin/setup_base
+          sudo bin/setup_base
           bin/registrar sites/udmi_site_model
       - name: local setup
         run: |
-          bin/start_local sites/udmi_site_model $TARGET_PROJECT
+          bin/udmi start sites/udmi_site_model $TARGET_PROJECT
           bin/pull_messages $TARGET_PROJECT > out/message_capture.log 2>&1 &
       - name: bin/test_etcd_prerun
         run: bin/test_etcd_prerun
@@ -307,7 +305,7 @@ jobs:
           $MOSQUITTO_CTRL listRoles || true
       - name: mosquitto logs
         if: ${{ !cancelled() }}
-        run: cat /var/log/mosquitto/mosquitto.log || true
+        run: cat var/mosquitto/log/mosquitto.log /var/log/mosquitto/mosquitto.log 2>/dev/null || true
       - name: support bundle
         if: ${{ !cancelled() }}
         run: bin/support ${{ github.repository_owner }}_${{ github.job }}_
@@ -333,9 +331,9 @@ jobs:
           java-version: '21'
           cache: 'gradle'
       - name: base setup
-        run: bin/setup_base
+        run: sudo bin/setup_base
       - name: local setup
-        run: bin/start_local sites/udmi_site_model $TARGET_PROJECT
+        run: bin/udmi start sites/udmi_site_model $TARGET_PROJECT
       - name: regclean
         run: bin/test_regclean $TARGET_PROJECT
       - name: bin/test_proxy
@@ -373,9 +371,9 @@ jobs:
           java-version: '21'
           cache: 'gradle'
       - name: base setup
-        run: bin/setup_base
+        run: sudo bin/setup_base
       - name: local setup
-        run: bin/start_local sites/udmi_site_model $TARGET_PROJECT
+        run: bin/udmi start sites/udmi_site_model $TARGET_PROJECT
       - name: regclean
         run: bin/test_regclean $TARGET_PROJECT
       - name: bin/test_blob_updates
@@ -408,7 +406,7 @@ jobs:
         with:
           python-version: '3.13'
       - name: Base setup
-        run: bin/setup_base
+        run: sudo bin/setup_base
       - name: Download all sharded support packages
         uses: actions/download-artifact@v8
         with:
@@ -450,7 +448,7 @@ jobs:
           cache: 'gradle'
       - name: Setup prerequisites
         run: |
-          bin/setup_base
+          sudo bin/setup_base
           ln -s sites/udmi_site_model/ site_model
           (cd site_model; git log -n 1)
           docker network create udminet --subnet 192.168.99.0/24
@@ -475,7 +473,7 @@ jobs:
             -v $PWD/var/etcd:/root/udmi/var/etcd \
             -v $PWD/var/mosquitto:/etc/mosquitto \
             -v $PWD/out:/root/udmi/out \
-            udmis udmi/bin/start_local block site_model/cloud_iot_config.json
+            udmis udmi/bin/udmi start block site_model //mqtt/localhost:8883
           for count in `seq 0 60`; do
             echo Waiting for UDMIS startup $((30 - count))
             [[ ! -f var/tmp/pod_ready.txt ]] || break
@@ -582,7 +580,7 @@ jobs:
           java-version: '21'
           cache: 'gradle'
       - name: Setup Base
-        run: bin/setup_base
+        run: sudo bin/setup_base
       - name: Run Bridgehead Test
         run: |
           bridgehead/tests/test_bridgehead
@@ -621,10 +619,10 @@ jobs:
           java-version: '21'
           cache: 'gradle'
       - name: Setup Base
-        run: bin/setup_base
+        run: sudo bin/setup_base
       - name: Start Local Services
         run: |
-          bin/start_local sites/udmi_site_model ${{ env.TARGET_PROJECT }}
+          bin/udmi start sites/udmi_site_model ${{ env.TARGET_PROJECT }}
       - name: Run Openbridge Test
         run: |
           bin/test_openbridge
@@ -652,7 +650,7 @@ jobs:
           python-version: '3.13'
       - name: Setup Base
         run: |
-          bin/setup_base
+          sudo bin/setup_base
           bin/clone_model
       - name: Run MCP Infrastructure Tests
         run: |
@@ -681,7 +679,7 @@ jobs:
         with:
           python-version: '3.13'
       - name: Setup Base
-        run: bin/setup_base
+        run: sudo bin/setup_base
       - name: Run GUMMI Tests
         run: |
           bin/test_gummi
@@ -692,3 +690,42 @@ jobs:
           name: gummi-logs
           path: |
             out/
+
+  groot:
+    name: Groot Distribution Tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      TARGET_PROJECT: //mqtt/localhost:18833
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+          cache: 'gradle'
+      - name: base setup
+        run: sudo bin/setup_base
+      - name: Run Groot Distribution Test
+        run: |
+          bin/test_groot ${{ env.TARGET_PROJECT }}
+      - name: Base UDMIS Log
+        if: ${{ !cancelled() }}
+        run: cat out/udmis.log || true
+      - name: Instance 1 Log
+        if: ${{ !cancelled() }}
+        run: cat out/udmis_1.log || true
+      - name: Instance 2 Log
+        if: ${{ !cancelled() }}
+        run: cat out/udmis_2.log || true
+      - name: Instance 3 Log
+        if: ${{ !cancelled() }}
+        run: cat out/udmis_3.log || true
+      - name: Upload logs
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: groot-logs
+          path: |
+            out/udmis*.log
+
