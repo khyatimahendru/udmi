@@ -52,6 +52,26 @@ graph TD
 
 ---
 
+## Edge Configuration & Compatibility
+
+Spotter natively accepts both canonical UDMI configurations and production configurations supplied to legacy edge discovery nodes:
+
+### 1. Static Configuration Overlays (`configs_dir`)
+When `configs_dir` is specified in the primary configuration (e.g. `/opt/discovery_node/configs/extra.d`), Spotter automatically scans and recursively merges all JSON overlay files alphabetically upon startup.
+
+### 2. Protocol Discovery Controls
+- **Family Enablement Toggles**: `udmi.discovery.bacnet`, `udmi.discovery.ether`, and `udmi.discovery.ipv4` selectively enable or disable discovery providers via boolean (`true`/`false`) or string (`"false"`, `"0"`, `"off"`) flags.
+- **Ethernet Concurrency**: `ether.ping_concurrency` configures the maximum parallel ICMP ping worker threads (default: `4`).
+- **Passive Sniffing & Subnet Exclusions**: `ip.subnet_filter` (CIDR format, e.g. `192.168.1.10/24`) and `ip.interface` configure the network capture interface and BPF exclusion filters for broadcast, gateway, and host addresses.
+
+### 3. Transparent Legacy Depth Normalization
+To maintain backward compatibility with legacy edge schedules without polluting the abstract UDMI schema, Spotter normalizes legacy strings at the edge ingestion boundary:
+- `"ping"` $\rightarrow$ `"entries"` (Host presence / IP addresses)
+- `"ports"` $\rightarrow$ `"details"` (Open TCP/UDP ports and attributes)
+- `"services"` $\rightarrow$ `"parts"` (Detailed service and point definitions)
+
+---
+
 ## Ephemeral PCAP & Streaming MQTT Pipeline
 
 Spotter processes diagnostic packet capture triggers sent declaratively over the UDMI discovery configuration channel (`config.discovery.families` with `depth: "trace"`):

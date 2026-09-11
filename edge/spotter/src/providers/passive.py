@@ -28,6 +28,17 @@ BACNET_BVLC_MARKER = b"\x81"
 BACNET_APDU_I_AM_START = b"\x10\x00\xc4"
 
 
+PRIVATE_IP_BPF_FILTER = (
+    "ip and ("
+    "src net 10.0.0.0/8 or src net 172.16.0.0/12 or src net 192.168.0.0/16 or "
+    "src net 100.64.0.0/10"
+    ") and ("
+    "dst net 10.0.0.0/8 or dst net 172.16.0.0/12 or dst net 192.168.0.0/16 or "
+    "dst net 100.64.0.0/10"
+    ")"
+)
+
+
 @dataclasses.dataclass(eq=True, frozen=True)
 class PassiveScanRecord:
   addr: str
@@ -52,11 +63,51 @@ class PassiveFamilyProvider(FamilyProvider):
     self._addresses_seen: Set[str] = set()
     self._device_records: Set[PassiveScanRecord] = set()
     self._records_published: Set[PassiveScanRecord] = set()
+    self._records_lock = threading.Lock()
 
     self._cancelled = threading.Event()
     self._sniffer = None
     self._queue_thread: Optional[threading.Thread] = None
     self._publisher_thread: Optional[threading.Thread] = None
+    self._event_count = 0
+    self._event_lock = threading.Lock()
+
+  def build_bpf_filter(self, subnet_filter: Optional[str] = None) -> str:
+    """Constructs the BPF filter string for Scapy packet capture.
+
+    Args:
+        subnet_filter: Optional CIDR notation string (e.g. '192.168.1.5/24').
+            If provided, builds a subnet filter excluding broadcast, gateway,
+            and own host IP. If None, falls back to private RFC1918 / RFC6598
+            ranges.
+
+    Returns:
+        BPF filter string for Scapy sniffer.
+    """
+    if not subnet_filter:
+      return PRIVATE_IP_BPF_FILTER
+
+    try:
+      iface = ipaddress.ip_interface(subnet_filter)
+      network = iface.network
+      bpf_filter = (
+          f"ip and src net {network} and (dst net {network} or"
+          " broadcast or multicast)"
+      )
+      bpf_filter += f" and not src host {network.network_address}"
+      if network.broadcast_address:
+        bpf_filter += f" and not src host {network.broadcast_address}"
+      if first_host := next(network.hosts(), None):
+        bpf_filter += f" and not src host {first_host}"
+      if iface.ip not in (network.network_address, first_host):
+        bpf_filter += f" and not src host {iface.ip}"
+      return bpf_filter
+    except ValueError:
+      LOGGER.warning("Invalid subnet filter: %s", subnet_filter)
+      return (
+          f"ip and src net {subnet_filter} and (dst net {subnet_filter} or"
+          " broadcast or multicast)"
+      )
 
   def start_scan(
       self,
@@ -69,9 +120,12 @@ class PassiveFamilyProvider(FamilyProvider):
       return
 
     self._cancelled.clear()
-    self._addresses_seen.clear()
-    self._device_records.clear()
-    self._records_published.clear()
+    with self._records_lock:
+      self._addresses_seen.clear()
+      self._device_records.clear()
+      self._records_published.clear()
+    with self._event_lock:
+      self._event_count = 0
 
     generation = getattr(discovery_config, "generation", None)
     scan_duration_sec = getattr(discovery_config, "scan_duration_sec", None)
@@ -83,14 +137,17 @@ class PassiveFamilyProvider(FamilyProvider):
         generation,
     )
 
-    bpf_filter = "ip"
-    if self.subnet_filter:
-      try:
-        iface = ipaddress.ip_interface(self.subnet_filter)
-        network = iface.network
-        bpf_filter = f"ip and src net {network}"
-      except ValueError:
-        LOGGER.warning("Invalid subnet filter: %s", self.subnet_filter)
+    # Emit start event (event_no: 0)
+    publish_func(
+        "self",
+        DiscoveryEvents(
+            generation=generation,
+            family="ipv4",
+            event_no=0,
+        ),
+    )
+
+    bpf_filter = self.build_bpf_filter(self.subnet_filter)
 
     self._queue_thread = threading.Thread(
         target=self._queue_worker,
@@ -125,6 +182,16 @@ class PassiveFamilyProvider(FamilyProvider):
       LOGGER.error("Failed to start Scapy sniffer: %s", err)
     finally:
       self.stop_scan()
+      with self._event_lock:
+        count = self._event_count
+      publish_func(
+          "self",
+          DiscoveryEvents(
+              generation=generation,
+              family="ipv4",
+              event_no=-(count + 1),
+          ),
+      )
 
   def stop_scan(self) -> None:
     """Stops the active passive sniffer."""
@@ -152,10 +219,11 @@ class PassiveFamilyProvider(FamilyProvider):
             mac = None
             if scapy.layers.inet.Ether in packet:
               mac = packet[scapy.layers.inet.Ether].src
-            self._addresses_seen.add(src_ip)
-            self._device_records.add(
-                PassiveScanRecord(addr=src_ip, mac=mac)
-            )
+            with self._records_lock:
+              self._addresses_seen.add(src_ip)
+              self._device_records.add(
+                  PassiveScanRecord(addr=src_ip, mac=mac)
+              )
       except queue.Empty:
         continue
 
@@ -165,8 +233,12 @@ class PassiveFamilyProvider(FamilyProvider):
       publish_func: Callable[[str, DiscoveryEvents], None],
   ) -> None:
     while not self._cancelled.is_set():
-      new_records = self._device_records - self._records_published
+      with self._records_lock:
+        new_records = set(self._device_records) - self._records_published
       for record in new_records:
+        with self._event_lock:
+          self._event_count += 1
+          event_no = self._event_count
         event = DiscoveryEvents(
             generation=generation,
             family="ipv4",
@@ -176,9 +248,11 @@ class PassiveFamilyProvider(FamilyProvider):
                 if record.mac
                 else None
             ),
+            event_no=event_no,
         )
         publish_func(record.addr, event)
-        self._records_published.add(record)
+        with self._records_lock:
+          self._records_published.add(record)
 
       time.sleep(self.publish_interval_sec)
 

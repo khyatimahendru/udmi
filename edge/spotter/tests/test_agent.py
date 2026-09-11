@@ -2,6 +2,7 @@
 """Unit tests for Spotter Agent configuration, managers, and discovery."""
 
 import hashlib
+import json
 import os
 import tempfile
 import unittest
@@ -9,6 +10,10 @@ from unittest.mock import MagicMock, patch
 
 from edge.spotter.src.agent import build_endpoint_config
 from edge.spotter.src.agent import calculate_local_password
+from edge.spotter.src.agent import load_config
+from edge.spotter.src.agent import merge_dicts
+from edge.spotter.src.agent import normalize_discovery_config
+from edge.spotter.src.agent import resolve_config_path
 from edge.spotter.src.agent import wait_for_broker_readiness
 from edge.spotter.src.manager.discovery import SpotterDiscoveryManager
 from edge.spotter.src.manager.system import SpotterSystemManager
@@ -167,6 +172,155 @@ class TestAgentConfig(unittest.TestCase):
 
     endpoint = build_endpoint_config(config)
     self.assertEqual(endpoint.client_id, "/r/ZZ-TRI-FECTA/d/custom-spotter-id")
+
+  def test_merge_dicts(self):
+    """Verifies recursive dictionary merging behavior."""
+    base = {"a": 1, "nested": {"k1": "v1", "k2": "v2"}}
+    override = {"b": 2, "nested": {"k2": "v2_new", "k3": "v3"}}
+    result = merge_dicts(base, override)
+    self.assertEqual(result["a"], 1)
+    self.assertEqual(result["b"], 2)
+    self.assertEqual(result["nested"]["k1"], "v1")
+    self.assertEqual(result["nested"]["k2"], "v2_new")
+    self.assertEqual(result["nested"]["k3"], "v3")
+
+  def test_normalize_discovery_config_legacy_depths(self):
+    """Verifies legacy discovery depths normalize to schema enums."""
+    payload = {
+        "timestamp": "2026-09-11T08:00:00Z",
+        "version": "1.5.7",
+        "discovery": {
+            "families": {
+                "ether": {"generation": "gen-1", "depth": "ping"},
+                "nmap": {"generation": "gen-2", "depth": "ports"},
+                "services_scan": {"generation": "gen-3", "depth": "services"},
+                "bacnet": {"generation": "gen-4", "depth": "system"},
+            },
+            "enumerations": {
+                "families": "ping",
+                "devices": "ports",
+                "points": "services",
+            },
+        },
+    }
+
+    normalized = normalize_discovery_config(payload)
+
+    # Families normalized
+    self.assertEqual(
+        normalized["discovery"]["families"]["ether"]["depth"], "entries"
+    )
+    self.assertEqual(
+        normalized["discovery"]["families"]["nmap"]["depth"], "details"
+    )
+    self.assertEqual(
+        normalized["discovery"]["families"]["services_scan"]["depth"], "parts"
+    )
+    self.assertEqual(
+        normalized["discovery"]["families"]["bacnet"]["depth"], "system"
+    )
+
+    # Enumerations normalized
+    self.assertEqual(
+        normalized["discovery"]["enumerations"]["families"], "entries"
+    )
+    self.assertEqual(
+        normalized["discovery"]["enumerations"]["devices"], "details"
+    )
+    self.assertEqual(
+        normalized["discovery"]["enumerations"]["points"], "parts"
+    )
+
+    # Verifies that Config.from_dict() parses cleanly without ValueError
+    parsed = Config.from_dict(normalized)
+    self.assertEqual(
+        parsed.discovery.families["ether"].depth, Depth.entries
+    )
+    self.assertEqual(
+        parsed.discovery.families["nmap"].depth, Depth.details
+    )
+    self.assertEqual(
+        parsed.discovery.families["services_scan"].depth, Depth.parts
+    )
+    self.assertEqual(
+        parsed.discovery.families["bacnet"].depth, Depth.system
+    )
+
+  def test_normalize_discovery_config_edge_cases(self):
+    """Verifies normalize_discovery_config handles non-dicts and case."""
+    # Non-dict inputs are preserved without error
+    self.assertIsNone(normalize_discovery_config(None))
+    self.assertEqual(normalize_discovery_config("not-a-dict"), "not-a-dict")
+
+    # Case insensitivity and unrecognized depths
+    payload = {
+        "discovery": {
+            "families": {
+                "ether": {"depth": "PING"},
+                "nmap": {"depth": "Ports"},
+                "custom": {"depth": "custom_depth"},
+            }
+        }
+    }
+    normalized = normalize_discovery_config(payload)
+    self.assertEqual(
+        normalized["discovery"]["families"]["ether"]["depth"], "entries"
+    )
+    self.assertEqual(
+        normalized["discovery"]["families"]["nmap"]["depth"], "details"
+    )
+    self.assertEqual(
+        normalized["discovery"]["families"]["custom"]["depth"], "custom_depth"
+    )
+
+  def test_load_config_with_configs_dir_overlay(self):
+    """Verifies load_config merges overlay files in configs_dir."""
+    extra_dir = os.path.join(self.test_dir.name, "extra.d")
+    os.makedirs(extra_dir, exist_ok=True)
+
+    base_config_path = os.path.join(self.test_dir.name, "base_config.json")
+    base_data = {
+        "mqtt": {"device_id": "DSN-1", "port": 1883},
+        "ether": {"ping_concurrency": 2},
+        "configs_dir": extra_dir,
+    }
+    with open(base_config_path, "w", encoding="utf-8") as f:
+      json.dump(base_data, f)
+
+    overlay_path = os.path.join(extra_dir, "01-override.json")
+    overlay_data = {
+        "mqtt": {"port": 8883},
+        "ether": {"ping_concurrency": 10},
+        "ip": {"subnet_filter": "10.0.0.0/24"},
+    }
+    with open(overlay_path, "w", encoding="utf-8") as f:
+      json.dump(overlay_data, f)
+
+    merged = load_config(base_config_path)
+
+    self.assertEqual(merged["mqtt"]["device_id"], "DSN-1")
+    self.assertEqual(merged["mqtt"]["port"], 8883)
+    self.assertEqual(merged["ether"]["ping_concurrency"], 10)
+    self.assertEqual(merged["ip"]["subnet_filter"], "10.0.0.0/24")
+
+  def test_resolve_config_path_container_remapping(self):
+    """Verifies resolve_config_path handles container volume remapping."""
+    # 1. Relative path
+    res = resolve_config_path("/app/config", "certs/key.pem")
+    self.assertEqual(res, "/app/config/certs/key.pem")
+
+    # 2. Existing file
+    test_file = os.path.join(self.test_dir.name, "test.pem")
+    with open(test_file, "w", encoding="utf-8") as f:
+      f.write("key")
+    self.assertEqual(
+        resolve_config_path(self.test_dir.name, test_file), test_file
+    )
+
+    # 3. Missing host path remapped to container base_dir
+    non_existent_host_path = "/opt/discovery_node/configs/test.pem"
+    remapped = resolve_config_path(self.test_dir.name, non_existent_host_path)
+    self.assertEqual(remapped, test_file)
 
   def test_metrics_rate_sec_default_and_override(self):
     """Verifies system metrics rate default and dynamic update."""

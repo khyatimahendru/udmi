@@ -334,7 +334,7 @@ class BacnetFamilyProvider(FamilyProvider):
         )
         return event
 
-    if depth_val in ("refs", "details", "parts"):
+    if depth_val in ("refs", "parts"):
       refs = self.enumerate_refs(f"{device_address} {device_id}")
       if refs:
         event.refs = refs

@@ -9,7 +9,9 @@ from edge.spotter.src.providers.bacnet import BacnetFamilyProvider
 from edge.spotter.src.providers.ether import EtherFamilyProvider
 from edge.spotter.src.providers.ether import get_mac_for_ip
 from edge.spotter.src.providers.ether import parse_nmap_xml
+from edge.spotter.src.providers.passive import PassiveFamilyProvider
 from edge.spotter.src.providers.passive import PassiveScanRecord
+from edge.spotter.src.providers.passive import PRIVATE_IP_BPF_FILTER
 from udmi.schema import FamilyDiscoveryConfig
 
 
@@ -96,12 +98,15 @@ class TestEtherFamilyProvider(unittest.TestCase):
         config, lambda dev_id, evt: published.append((dev_id, evt))
     )
 
-    self.assertEqual(len(published), 1)
-    dev_id, event = published[0]
+    self.assertEqual(len(published), 3)
+    self.assertEqual(published[0][1].event_no, 0)
+    dev_id, event = published[1]
     self.assertEqual(dev_id, "10.0.0.1")
     self.assertEqual(event.family, "ether")
     self.assertEqual(event.families["ipv4"].addr, "10.0.0.1")
     self.assertIsNone(event.addr)
+    self.assertEqual(event.event_no, 1)
+    self.assertEqual(published[2][1].event_no, -2)
 
   @patch("edge.spotter.src.providers.ether.get_mac_for_ip")
   @patch("subprocess.run")
@@ -124,12 +129,15 @@ class TestEtherFamilyProvider(unittest.TestCase):
         config, lambda dev_id, evt: published.append((dev_id, evt))
     )
 
-    self.assertEqual(len(published), 1)
-    dev_id, event = published[0]
+    self.assertEqual(len(published), 3)
+    self.assertEqual(published[0][1].event_no, 0)
+    dev_id, event = published[1]
     self.assertEqual(dev_id, "10.0.0.1")
     self.assertEqual(event.family, "ether")
     self.assertEqual(event.addr, "00:50:b6:ed:5f:77")
     self.assertEqual(event.families["ipv4"].addr, "10.0.0.1")
+    self.assertEqual(event.event_no, 1)
+    self.assertEqual(published[2][1].event_no, -2)
 
   def test_get_mac_for_ip(self):
     """Verifies ARP cache file parsing and MAC address lookup."""
@@ -183,6 +191,17 @@ class TestEtherFamilyProvider(unittest.TestCase):
     self.assertEqual(hosts[0].ports[0].port_number, 80)
     self.assertEqual(hosts[0].ports[0].service_name, "http")
 
+  def test_ping_concurrency_clamping(self):
+    """Verifies ping_concurrency clamps to at least 1."""
+    provider_zero = EtherFamilyProvider(ping_concurrency=0)
+    self.assertEqual(provider_zero.ping_concurrency, 1)
+
+    provider_neg = EtherFamilyProvider(ping_concurrency=-5)
+    self.assertEqual(provider_neg.ping_concurrency, 1)
+
+    provider_custom = EtherFamilyProvider(ping_concurrency=8)
+    self.assertEqual(provider_custom.ping_concurrency, 8)
+
 
 class TestPassiveFamilyProvider(unittest.TestCase):
   """Unit tests for PassiveFamilyProvider."""
@@ -193,6 +212,61 @@ class TestPassiveFamilyProvider(unittest.TestCase):
     r2 = PassiveScanRecord(addr="10.0.0.5", mac="00:11:22:33:44:55")
     records = {r1, r2}
     self.assertEqual(len(records), 1)
+
+  def test_build_bpf_filter_default(self):
+    """Verifies that default BPF filter matches private IP subnets."""
+    provider = PassiveFamilyProvider()
+    bpf = provider.build_bpf_filter()
+    self.assertEqual(bpf, PRIVATE_IP_BPF_FILTER)
+
+  def test_build_bpf_filter_with_subnet(self):
+    """Verifies subnet BPF filter excludes network, broadcast, and gateway."""
+    provider = PassiveFamilyProvider(subnet_filter="192.168.1.50/24")
+    bpf = provider.build_bpf_filter(provider.subnet_filter)
+
+    self.assertIn("src net 192.168.1.0/24", bpf)
+    self.assertIn("and not src host 192.168.1.0", bpf)
+    self.assertIn("and not src host 192.168.1.255", bpf)
+    self.assertIn("and not src host 192.168.1.1", bpf)
+    self.assertIn("and not src host 192.168.1.50", bpf)
+
+  def test_build_bpf_filter_invalid(self):
+    """Verifies graceful fallback on invalid subnet string."""
+    provider = PassiveFamilyProvider(subnet_filter="invalid_subnet")
+    bpf = provider.build_bpf_filter(provider.subnet_filter)
+    self.assertIn("src net invalid_subnet", bpf)
+
+  @patch("edge.spotter.src.providers.passive.scapy")
+  def test_passive_scan_markers_and_lifecycle(self, mock_scapy):
+    """Verifies start event (0) and finish marker emission in passive scan."""
+    mock_sniffer = MagicMock()
+    mock_scapy.sendrecv.AsyncSniffer.return_value = mock_sniffer
+
+    provider = PassiveFamilyProvider(interface="eth0")
+    config = FamilyDiscoveryConfig(
+        generation="2026-09-11T09:00:00Z", scan_duration_sec=1
+    )
+
+    published = []
+
+    def mock_publish(addr, event):
+      published.append((addr, event))
+      # Stop immediately on start event to test finish marker
+      if event.event_no == 0:
+        provider.stop_scan()
+
+    provider.start_scan(config, mock_publish)
+
+    self.assertGreaterEqual(len(published), 2)
+    # Start marker
+    self.assertEqual(published[0][0], "self")
+    self.assertEqual(published[0][1].event_no, 0)
+    self.assertEqual(published[0][1].family, "ipv4")
+
+    # Finish marker
+    self.assertEqual(published[-1][0], "self")
+    self.assertEqual(published[-1][1].event_no, -1)
+    self.assertEqual(published[-1][1].family, "ipv4")
 
 
 if __name__ == "__main__":

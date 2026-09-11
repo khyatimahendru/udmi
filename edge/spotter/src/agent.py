@@ -9,6 +9,7 @@ import hashlib
 import json
 import logging
 import os
+import pathlib
 import signal
 import socket
 import sys
@@ -53,12 +54,156 @@ except ImportError:
 LOGGER = logging.getLogger("spotter_agent")
 
 
+def merge_dicts(
+    base: Dict[str, Any], override: Dict[str, Any]
+) -> Dict[str, Any]:
+  """Recursively merges two dictionaries.
+
+  Args:
+      base: Base configuration dictionary to be updated.
+      override: Configuration dictionary with overriding values.
+
+  Returns:
+      The recursively merged dictionary.
+  """
+  for key, value in override.items():
+    if isinstance(value, dict) and key in base and isinstance(base[key], dict):
+      base[key] = merge_dicts(base[key], value)
+    else:
+      base[key] = value
+  return base
+
+
+def load_config(config_file: str) -> Dict[str, Any]:
+  """Reads config file and merges overlay configs from configs_dir if set.
+
+  Args:
+      config_file: Path to the primary JSON configuration file.
+
+  Returns:
+      The merged configuration dictionary.
+  """
+  with open(config_file, "r", encoding="utf-8") as f:
+    config = json.load(f)
+
+  base_dir = os.path.dirname(os.path.abspath(config_file))
+  configs_dir = config.get("configs_dir")
+  if configs_dir:
+    if not os.path.isdir(configs_dir):
+      candidate = resolve_config_path(base_dir, configs_dir)
+      if candidate and os.path.isdir(candidate):
+        configs_dir = candidate
+      else:
+        base_candidate = os.path.join(base_dir, os.path.basename(configs_dir))
+        if os.path.isdir(base_candidate):
+          configs_dir = base_candidate
+
+  if configs_dir and os.path.isdir(configs_dir):
+    for extra_file in sorted(pathlib.Path(configs_dir).glob("*.json")):
+      try:
+        with open(extra_file, "r", encoding="utf-8") as f:
+          overlay = json.load(f)
+        config = merge_dicts(config, overlay)
+      except (json.JSONDecodeError, OSError) as err:
+        LOGGER.warning(
+            "Failed to load config overlay from %s: %s", extra_file, err
+        )
+  return config
+
+
+LEGACY_DEPTH_MAP: Dict[str, str] = {
+    "ping": "entries",
+    "ports": "details",
+    "services": "parts",
+}
+
+
+def normalize_discovery_config(payload: Dict[str, Any]) -> Dict[str, Any]:
+  """Normalizes legacy discovery depths from discovery_node configs.
+
+  Maps legacy depth strings ('ping', 'ports', 'services') to canonical
+  UDMI depth enums ('entries', 'details', 'parts') for families and
+  enumerations.
+
+  Args:
+      payload: Raw configuration dictionary from MQTT config channel.
+
+  Returns:
+      The normalized dictionary with canonical depth enums.
+  """
+  if not isinstance(payload, dict):
+    return payload
+  discovery = payload.get("discovery")
+  if isinstance(discovery, dict):
+    families = discovery.get("families")
+    if isinstance(families, dict):
+      for fam_name, fam_conf in families.items():
+        if isinstance(fam_conf, dict) and "depth" in fam_conf:
+          raw_depth = fam_conf["depth"]
+          if (
+              isinstance(raw_depth, str)
+              and raw_depth.lower() in LEGACY_DEPTH_MAP
+          ):
+            canonical = LEGACY_DEPTH_MAP[raw_depth.lower()]
+            LOGGER.info(
+                "Normalizing legacy discovery depth '%s' -> '%s' for family"
+                " '%s'",
+                raw_depth,
+                canonical,
+                fam_name,
+            )
+            fam_conf["depth"] = canonical
+    enumerations = discovery.get("enumerations")
+    if isinstance(enumerations, dict):
+      for enum_field, enum_val in enumerations.items():
+        if (
+            isinstance(enum_val, str)
+            and enum_val.lower() in LEGACY_DEPTH_MAP
+        ):
+          canonical = LEGACY_DEPTH_MAP[enum_val.lower()]
+          LOGGER.info(
+              "Normalizing legacy discovery depth '%s' -> '%s' for"
+              " enumeration '%s'",
+              enum_val,
+              canonical,
+              enum_field,
+          )
+          enumerations[enum_field] = canonical
+  return payload
+
+
 def resolve_config_path(
     base_dir: Optional[str], path: Optional[str]
 ) -> Optional[str]:
-  """Resolves relative config file path against base directory if provided."""
-  if path and base_dir and not os.path.isabs(path):
+  """Resolves config path against base directory, handling container mounts.
+
+  Args:
+      base_dir: Directory containing the primary config file.
+      path: File or directory path specified in configuration.
+
+  Returns:
+      Resolved path on the filesystem.
+  """
+  if not path:
+    return path
+  if base_dir and not os.path.isabs(path):
     return os.path.normpath(os.path.join(base_dir, path))
+  if base_dir and os.path.isabs(path) and not os.path.exists(path):
+    # Check if basename or relative sub-path exists under base_dir
+    rel_candidate = os.path.normpath(
+        os.path.join(base_dir, os.path.basename(path))
+    )
+    if os.path.exists(rel_candidate):
+      LOGGER.info("Remapped missing config path %s -> %s", path, rel_candidate)
+      return rel_candidate
+    parts = pathlib.Path(path).parts
+    for i in range(1, len(parts)):
+      sub_candidate = os.path.normpath(os.path.join(base_dir, *parts[i:]))
+      if os.path.exists(sub_candidate):
+        LOGGER.info(
+            "Remapped missing config path %s -> %s", path, sub_candidate
+        )
+        return sub_candidate
   return path
 
 
@@ -177,9 +322,8 @@ def main():
   )
   args = parser.parse_args()
 
-  # Read config
-  with open(args.config_file, "r", encoding="utf-8") as f:
-    config = json.load(f)
+  # Read config (and merge overlays if configs_dir is set)
+  config = load_config(args.config_file)
 
   # Normalize relative certificate and key paths against the config directory
   base_dir = os.path.dirname(os.path.abspath(args.config_file))
@@ -298,16 +442,52 @@ def main():
       metrics_rate_sec=metrics_rate_sec,
   )
 
+  def is_truthy(val: Any) -> bool:
+    if val is None:
+      return True
+    if isinstance(val, bool):
+      return val
+    if isinstance(val, str):
+      return val.lower() not in ("false", "0", "no", "off")
+    return bool(val)
+
+  discovery_cfg = config.get("udmi", {}).get("discovery", {})
+  bacnet_enabled = is_truthy(discovery_cfg.get("bacnet", True))
+  ether_enabled = is_truthy(discovery_cfg.get("ether", True))
+  ipv4_enabled = is_truthy(discovery_cfg.get("ipv4", True))
+
   localnet_manager = LocalnetManager()
-  bacnet_cfg = config.get("bacnet", {})
-  bacnet_ip = bacnet_cfg.get("ip")
-  bacnet_port = bacnet_cfg.get("port")
-  localnet_manager.register_provider(
-      "bacnet",
-      BacnetFamilyProvider(bacnet_ip=bacnet_ip, bacnet_port=bacnet_port),
-  )
-  localnet_manager.register_provider("ether", EtherFamilyProvider())
-  localnet_manager.register_provider("ipv4", PassiveFamilyProvider())
+
+  if bacnet_enabled:
+    bacnet_cfg = config.get("bacnet", {})
+    bacnet_ip = bacnet_cfg.get("ip")
+    bacnet_port = bacnet_cfg.get("port")
+    localnet_manager.register_provider(
+        "bacnet",
+        BacnetFamilyProvider(bacnet_ip=bacnet_ip, bacnet_port=bacnet_port),
+    )
+
+  if ether_enabled:
+    ether_cfg = config.get("ether", {})
+    try:
+      ping_concurrency = int(ether_cfg.get("ping_concurrency", 4))
+    except (ValueError, TypeError):
+      ping_concurrency = 4
+    localnet_manager.register_provider(
+        "ether",
+        EtherFamilyProvider(ping_concurrency=ping_concurrency),
+    )
+
+  if ipv4_enabled:
+    ip_cfg = config.get("ip", {})
+    subnet_filter = ip_cfg.get("subnet_filter")
+    interface = ip_cfg.get("interface")
+    localnet_manager.register_provider(
+        "ipv4",
+        PassiveFamilyProvider(
+            interface=interface, subnet_filter=subnet_filter
+        ),
+    )
 
   discovery_manager = SpotterDiscoveryManager(
       max_mem_pct=circuit_breaker_mem_pct
@@ -320,6 +500,20 @@ def main():
       client_config=client_config,
       key_file=key_file,
   )
+
+  # Intercept and normalize legacy discovery depths from legacy
+  # discovery_node configs.
+  raw_handle_config = device.handle_config
+
+  def spotter_handle_config(
+      device_id: str, channel: str, payload: Dict[str, Any]
+  ) -> None:
+    normalize_discovery_config(payload)
+    raw_handle_config(device_id, channel, payload)
+
+  device.handle_config = spotter_handle_config
+  if device.dispatcher:
+    device.dispatcher.register_handler("config", spotter_handle_config)
 
   LOGGER.info("Spotter Agent running...")
 

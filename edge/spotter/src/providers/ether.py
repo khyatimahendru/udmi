@@ -112,10 +112,18 @@ class EtherFamilyProvider(FamilyProvider):
   """Pluggable Ethernet protocol discovery provider (Ping & Nmap)."""
 
   def __init__(self, ping_concurrency: int = 4) -> None:
-    self.ping_concurrency = ping_concurrency
+    """Initializes EtherFamilyProvider.
+
+    Args:
+        ping_concurrency: Maximum number of concurrent ping worker threads.
+            Guaranteed to be at least 1.
+    """
+    self.ping_concurrency = max(1, int(ping_concurrency))
     self._cancelled = threading.Event()
     self._active_proc: Optional[subprocess.Popen] = None
     self._lock = threading.Lock()
+    self._event_count = 0
+    self._event_lock = threading.Lock()
 
   def start_scan(
       self,
@@ -124,8 +132,13 @@ class EtherFamilyProvider(FamilyProvider):
   ) -> None:
     """Executes ping or nmap scan based on depth configuration."""
     self._cancelled.clear()
+    with self._event_lock:
+      self._event_count = 0
+
     generation = getattr(discovery_config, "generation", None)
-    depth = str(getattr(discovery_config, "depth", "ping")).lower()
+    raw_depth = getattr(discovery_config, "depth", "entries")
+    depth_val = getattr(raw_depth, "value", raw_depth)
+    depth = str(depth_val).lower() if depth_val else "entries"
     addrs = getattr(discovery_config, "addrs", None) or []
 
     LOGGER.info(
@@ -136,19 +149,48 @@ class EtherFamilyProvider(FamilyProvider):
         addrs,
     )
 
+    # Emit start event (event_no: 0)
+    publish_func(
+        "self",
+        DiscoveryEvents(
+            generation=generation,
+            family="ether",
+            event_no=0,
+        ),
+    )
+
     if not addrs:
       LOGGER.warning("No target addresses provided for ether scan.")
+      publish_func(
+          "self",
+          DiscoveryEvents(
+              generation=generation,
+              family="ether",
+              event_no=-1,
+          ),
+      )
       return
 
-    if depth == "ping":
+    if depth in ("entries", "ping"):
       self._run_ping_scan(addrs, generation, publish_func)
-    elif depth in ("ports", "services", "details", "parts"):
+    elif depth in ("details", "ports", "services", "parts"):
       self._run_nmap_scan(addrs, depth, generation, publish_func)
     else:
       LOGGER.warning(
           "Unrecognized ether scan depth: '%s'. Defaulting to ping.", depth
       )
       self._run_ping_scan(addrs, generation, publish_func)
+
+    with self._event_lock:
+      count = self._event_count
+    publish_func(
+        "self",
+        DiscoveryEvents(
+            generation=generation,
+            family="ether",
+            event_no=-(count + 1),
+        ),
+    )
 
   def stop_scan(self) -> None:
     """Stops any active ether scan subprocess immediately."""
@@ -207,11 +249,15 @@ class EtherFamilyProvider(FamilyProvider):
       )
       if res.returncode == 0:
         mac = get_mac_for_ip(target_ip)
+        with self._event_lock:
+          self._event_count += 1
+          event_no = self._event_count
         event = DiscoveryEvents(
             generation=generation,
             family="ether",
             addr=mac,
             families={"ipv4": FamilyDiscovery(addr=target_ip)},
+            event_no=event_no,
         )
         publish_func(target_ip, event)
         return True
@@ -265,12 +311,16 @@ class EtherFamilyProvider(FamilyProvider):
                 for p in host.ports
             }
             mac = host.mac or get_mac_for_ip(host.ip)
+            with self._event_lock:
+              self._event_count += 1
+              event_no = self._event_count
             event = DiscoveryEvents(
                 generation=generation,
                 family="ether",
                 addr=mac,
                 families={"ipv4": FamilyDiscovery(addr=host.ip)},
                 refs=refs if refs else None,
+                event_no=event_no,
             )
             publish_func(host.ip, event)
 
