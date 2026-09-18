@@ -7,114 +7,143 @@ Supports:
 """
 
 import argparse
-import asyncio
 import json
 import os
 import sys
 from typing import Any, Dict, List, Optional
 
-from mcp.session_manager import SessionManager
-from mantis.tools.artifacts import extract_timeline
-from mantis.tools.diagnostics import diagnose_test_failure
-from mantis.tools.differential import compare_test_runs
-from mantis.tools.patcher import patch_site_model
-from mantis.tools.schemas import inspect_udmi_schema
-from mantis.tools.site_models import inspect_site_model
+from mcp.infra.session_manager import SessionManager
 
 
-from mantis.tools.registry import get_mcp_tools
 
-MCP_TOOLS = get_mcp_tools()
-
-
-from http.server import HTTPServer, BaseHTTPRequestHandler
-import urllib.parse
-
-
-class MCPHttpHandler(BaseHTTPRequestHandler):
-    """HTTP & SSE Request Handler for remote MCP transport."""
-
-    server_instance: Any = None
-
-    def log_message(self, format, *args):
-        """Suppress noisy default request logging to stderr."""
-        pass
-
-    def do_GET(self):
-        parsed = urllib.parse.urlparse(self.path)
-        if parsed.path == "/health":
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            self.wfile.write(
-                json.dumps({
-                    "status": "OK",
-                    "server": "udmi-test-infra",
-                    "version": "1.0.0",
-                    "tools_count": len(MCP_TOOLS),
-                }).encode("utf-8")
-            )
-        elif parsed.path == "/sse":
-            self.send_response(200)
-            self.send_header("Content-Type", "text/event-stream")
-            self.send_header("Cache-Control", "no-cache")
-            self.send_header("Connection", "keep-alive")
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            endpoint_msg = "event: endpoint\ndata: /message\n\n"
-            self.wfile.write(endpoint_msg.encode("utf-8"))
-            self.wfile.flush()
-        else:
-            self.send_response(404)
-            self.end_headers()
-
-    def do_POST(self):
-        parsed = urllib.parse.urlparse(self.path)
-        if parsed.path in ("/message", "/rpc", "/"):
-            content_length = int(self.headers.get("Content-Length", 0))
-            body = self.rfile.read(content_length).decode("utf-8")
-            try:
-                req = json.loads(body)
-                resp = self.server_instance.handle_request(req)
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Access-Control-Allow-Origin", "*")
-                self.end_headers()
-                if resp is not None:
-                    self.wfile.write(json.dumps(resp).encode("utf-8"))
-            except Exception as e:
-                self.send_response(500)
-                self.send_header("Content-Type", "application/json")
-                self.end_headers()
-                err = {
-                    "jsonrpc": "2.0",
-                    "id": None,
-                    "error": {"code": -32603, "message": str(e)},
-                }
-                self.wfile.write(json.dumps(err).encode("utf-8"))
-        else:
-            self.send_response(404)
-            self.end_headers()
-
-    def do_OPTIONS(self):
-        self.send_response(200)
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
-        self.end_headers()
+MCP_TOOLS = [
+    {
+        "name": "ensure_test_setup",
+        "description": (
+            "Ensures that an isolated local UDMI test infrastructure stack (Mosquitto broker, "
+            "UDMIS control plane, etcd, influxd, postgresql, and optional DUT) is running inside a "
+            "tmux session, healthy, and ready for UUFI client traffic."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "test_id": {
+                    "type": "string",
+                    "description": "Unique test run identifier (e.g. 'gummi_dev_1', 'suite_pointset').",
+                },
+                "site_model": {
+                    "type": "string",
+                    "description": "Path to the target site model directory.",
+                    "default": "sites/udmi_site_model",
+                },
+                "dut_device_id": {
+                    "type": "string",
+                    "description": "Optional device ID to automatically launch as a Pubber DUT.",
+                },
+                "dut_serial_no": {
+                    "type": "string",
+                    "description": "Optional serial number for the emulated DUT.",
+                },
+                "exclude": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of canonical sub-services to exclude (e.g. ['udmis', 'influxdb']).",
+                },
+                "added": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of optional sub-services to add (e.g. ['validator', 'spotter']).",
+                },
+                "clean": {
+                    "type": "boolean",
+                    "description": "Whether to clean existing state before startup (default: true).",
+                    "default": True,
+                },
+                "timeout_seconds": {
+                    "type": "integer",
+                    "description": "Maximum seconds to wait for stack readiness (default: 150).",
+                    "default": 150,
+                },
+            },
+            "required": ["test_id"],
+        },
+    },
+    {
+        "name": "terminate_test_setup",
+        "description": "Terminates the test infrastructure and tmux session associated with a test_id.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "test_id": {
+                    "type": "string",
+                    "description": "Identifier of the test session to terminate.",
+                },
+                "clean_workspace": {
+                    "type": "boolean",
+                    "description": "Whether to purge per-instance runtime storage (default: true).",
+                    "default": True,
+                },
+            },
+            "required": ["test_id"],
+        },
+    },
+    {
+        "name": "list_test_setups",
+        "description": "Lists all active UDMI test sessions and their connection details.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {},
+        },
+    },
+    {
+        "name": "list_test_windows",
+        "description": "Lists the available semantic window tags for an active test session (e.g. 'main', 'dut').",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "test_id": {
+                    "type": "string",
+                    "description": "Identifier of the active test session.",
+                },
+            },
+            "required": ["test_id"],
+        },
+    },
+    {
+        "name": "get_test_logs",
+        "description": (
+            "Captures live console output from a named semantic tmux window (e.g. 'main', 'dut') "
+            "for an active test session. The window MUST be specified using a semantic tag, not a numerical index."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "test_id": {
+                    "type": "string",
+                    "description": "Identifier of the test session.",
+                },
+                "window": {
+                    "type": "string",
+                    "description": "Semantic window tag (e.g. 'main', 'dut'). Numerical indices are not permitted.",
+                    "default": "main",
+                },
+                "lines": {
+                    "type": "integer",
+                    "description": "Number of lines to capture (default: 100).",
+                    "default": 100,
+                },
+            },
+            "required": ["test_id"],
+        },
+    },
+]
 
 
 class MCPServer:
-    """Handles JSON-RPC 2.0 MCP messages over stdio or HTTP/SSE with both sync and async support."""
+    """Handles JSON-RPC 2.0 MCP messages over stdio."""
 
     def __init__(self, session_mgr: SessionManager):
         self.session_mgr = session_mgr
-
-    def run_http(self, host: str = "127.0.0.1", port: int = 8080) -> HTTPServer:
-        """Create and bind HTTP/SSE server instance."""
-        MCPHttpHandler.server_instance = self
-        return HTTPServer((host, port), MCPHttpHandler)
 
     def run(self) -> None:
         """Main stdio loop for MCP protocol."""
@@ -137,101 +166,6 @@ class MCPServer:
                 sys.stdout.write(json.dumps(err_resp) + "\n")
                 sys.stdout.flush()
 
-    async def run_async(self) -> None:
-        """Asynchronous non-blocking stdio loop for MCP protocol."""
-        loop = asyncio.get_running_loop()
-        reader = asyncio.StreamReader()
-        protocol = asyncio.StreamReaderProtocol(reader)
-        await loop.connect_read_pipe(lambda: protocol, sys.stdin)
-
-        while True:
-            line_bytes = await reader.readline()
-            if not line_bytes:
-                break
-            line = line_bytes.decode("utf-8").strip()
-            if not line:
-                continue
-            try:
-                request = json.loads(line)
-                response = await self.handle_request_async(request)
-                if response is not None:
-                    sys.stdout.write(json.dumps(response) + "\n")
-                    sys.stdout.flush()
-            except Exception as e:
-                err_resp = {
-                    "jsonrpc": "2.0",
-                    "id": None,
-                    "error": {"code": -32603, "message": str(e)},
-                }
-                sys.stdout.write(json.dumps(err_resp) + "\n")
-                sys.stdout.flush()
-
-    async def handle_request_async(self, req: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Asynchronously processes an MCP request, delegating blocking tools to a background thread."""
-        req_id = req.get("id")
-        method = req.get("method")
-        params = req.get("params", {})
-
-        if method == "initialize":
-            return {
-                "jsonrpc": "2.0",
-                "id": req_id,
-                "result": {
-                    "protocolVersion": "2024-11-05",
-                    "capabilities": {"tools": {}},
-                    "serverInfo": {
-                        "name": "udmi-test-infra",
-                        "version": "1.0.0",
-                    },
-                },
-            }
-
-        if method == "notifications/initialized":
-            return None
-
-        if method == "ping":
-            return {"jsonrpc": "2.0", "id": req_id, "result": {}}
-
-        if method == "tools/list":
-            return {"jsonrpc": "2.0", "id": req_id, "result": {"tools": MCP_TOOLS}}
-
-        if method == "tools/call":
-            tool_name = params.get("name")
-            tool_args = params.get("arguments", {})
-            try:
-                loop = asyncio.get_running_loop()
-                result_data = await loop.run_in_executor(
-                    None, self.execute_tool, tool_name, tool_args
-                )
-                return {
-                    "jsonrpc": "2.0",
-                    "id": req_id,
-                    "result": {
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": json.dumps(result_data, indent=2) if not isinstance(result_data, str) else result_data,
-                            }
-                        ],
-                        "isError": False,
-                    },
-                }
-            except Exception as e:
-                return {
-                    "jsonrpc": "2.0",
-                    "id": req_id,
-                    "result": {
-                        "content": [{"type": "text", "text": f"Error: {e}"}],
-                        "isError": True,
-                    },
-                }
-
-        return {
-            "jsonrpc": "2.0",
-            "id": req_id,
-            "error": {"code": -32601, "message": f"Method not found: {method}"},
-        }
-
     def handle_request(self, req: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         req_id = req.get("id")
         method = req.get("method")
@@ -252,6 +186,7 @@ class MCPServer:
             }
 
         if method == "notifications/initialized":
+            # No response for notifications
             return None
 
         if method == "ping":
@@ -272,7 +207,7 @@ class MCPServer:
                         "content": [
                             {
                                 "type": "text",
-                                "text": json.dumps(result_data, indent=2) if not isinstance(result_data, str) else result_data,
+                                "text": json.dumps(result_data, indent=2),
                             }
                         ],
                         "isError": False,
@@ -295,8 +230,33 @@ class MCPServer:
         }
 
     def execute_tool(self, name: str, args: Dict[str, Any]) -> Any:
-        from mantis.tools.registry import execute_tool as reg_execute
-        return reg_execute(name=name, args=args, session_mgr=self.session_mgr)
+        if name == "ensure_test_setup":
+            return self.session_mgr.ensure_test_setup(
+                test_id=args["test_id"],
+                site_model=args.get("site_model", "sites/udmi_site_model"),
+                dut_device_id=args.get("dut_device_id"),
+                dut_serial_no=args.get("dut_serial_no"),
+                exclude=args.get("exclude"),
+                added=args.get("added"),
+                clean=args.get("clean", True),
+                timeout_seconds=args.get("timeout_seconds", 150),
+            )
+        if name == "terminate_test_setup":
+            return self.session_mgr.terminate_test_setup(
+                test_id=args["test_id"],
+                clean_workspace=args.get("clean_workspace", True),
+            )
+        if name == "list_test_setups":
+            return self.session_mgr.list_test_setups()
+        if name == "list_test_windows":
+            return self.session_mgr.list_test_windows(test_id=args["test_id"])
+        if name == "get_test_logs":
+            return self.session_mgr.get_test_logs(
+                test_id=args["test_id"],
+                window=args.get("window", "main"),
+                lines=args.get("lines", 100),
+            )
+        raise ValueError(f"Unknown tool: {name}")
 
 
 def main() -> None:
@@ -412,15 +372,6 @@ def main() -> None:
     # mcp subcommand
     subparsers.add_parser("mcp", help="Run in stdio MCP server mode")
 
-    # serve subcommand
-    serve_parser = subparsers.add_parser("serve", help="Run MCP server over HTTP/SSE")
-    serve_parser.add_argument(
-        "--port", "-p", type=int, default=8080, help="Port to listen on (default: 8080)"
-    )
-    serve_parser.add_argument(
-        "--host", "-H", type=str, default="127.0.0.1", help="Host to bind (default: 127.0.0.1)"
-    )
-
     args = parser.parse_args()
 
     session_mgr = SessionManager()
@@ -512,15 +463,6 @@ def main() -> None:
             test_id=args.test_id, window=args.window, lines=args.lines
         )
         print(logs)
-
-    elif args.command == "serve":
-        server = MCPServer(session_mgr)
-        httpd = server.run_http(host=args.host, port=args.port)
-        print(f"UDMI MCP HTTP/SSE Server running on http://{args.host}:{args.port}")
-        try:
-            httpd.serve_forever()
-        except KeyboardInterrupt:
-            httpd.server_close()
 
     else:
         # Default to MCP stdio mode if 'mcp' or no arguments
