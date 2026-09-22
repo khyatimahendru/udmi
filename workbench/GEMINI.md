@@ -1,6 +1,6 @@
 # UDMI Workbench UI Development Guidelines
 
-This document defines the architectural rules, UX engineering standards, and workflow principles for building the next-generation **UDMI Workbench UI** using CORGI (Catalog-driven Orchestration of Responsive Graphical Interfaces) design principles.
+This document defines the architectural rules, UX engineering standards, and workflow principles for building the **UDMI Workbench UI**.
 
 ---
 
@@ -14,9 +14,9 @@ This document defines the architectural rules, UX engineering standards, and wor
 
 ---
 
-## 2. CORGI UX Framework Standards
+## 2. UX Framework Standards
 
-All UI development in `workbench/` must follow the CORGI atomic hierarchy and catalog-driven design:
+All UI development in `workbench/` must follow the atomic component hierarchy:
 
 ### 2.1. Atomic Hierarchy
 * **Design Tokens (`theme.css` / tokens)**:
@@ -26,24 +26,30 @@ All UI development in `workbench/` must follow the CORGI atomic hierarchy and ca
 * **Atoms**:
   - Buttons (`M3Button`: Filled, Tonal, Outlined, Icon-only).
   - Badges & Chips (`StatusBadge`: `PRIMARY`, `CONTRIBUTING`, `REFUTED`, `UNRESOLVED`, `PASSED`, `FAILED`).
+  - Component Health Badges: `UP` (green), `INITIALIZING` (amber spinner), `DOWN` (grey), `ERROR` (red).
   - Form Inputs (`M3Input`, `M3Select`, `M3Toggle`).
 * **Molecules**:
   - `ToolCallBadge`: Collapsible tool execution chip displaying tool name, input params, duration, and output preview.
   - `ThoughtAccordion`: Collapsible reasoning disclosure displaying internal model thinking and phase transitions (`Actor -> Critic -> Arbitrator`).
+  - `MantisTriageTrigger`: Direct failure triage action button on failed test rows and in the artifact viewer.
+  - `SequencerFilterBar`: Consolidated filter bar containing Minimum Stage selector, bulk selection (`All`/`None`), and status filters (`Passed`/`Skipped`/`Failed`).
   - `MetricCard`: KPI summaries (compliance score %, total devices, pass rate, flakiness index).
   - `SearchBar`: Log & device filtering with keyboard shortcuts (`/`).
 * **Organisms**:
+  - `LocalSetupDrawer`: Persistent collapsible slide-out drawer on `/sequencer` managing local testbed lifecycle (`bin/udmi start/stop/restart`) and Pubber emulator instances.
+  - `TopologyCanvas`: Interactive SVG/node canvas rendering local pipeline topology (`DUT/Pubber -> Mosquitto Broker -> Local UDMIS Pod -> etcd State Store`) with live health indicators.
   - `DiagnosticDrawer`: Multi-turn conversational streaming feed with live token rendering, thought disclosure, and tool badges.
   - `HypothesisMatrix`: Interactive table comparing competing failure hypotheses with evidence-tier tags (`LOCAL_FILE`, `CLOUD`, `NONE`).
   - `ComplianceGrid`: Device x Test compliance matrix with sorting, filtering, and instant triage triggering.
-  - `TestbedCanvas`: Interactive SVG/DOT topology viewer with node inspection and live connection states.
-  - `LogTerminal`: High-performance, virtualized terminal viewer streaming live tmux pane buffers.
+  - `SiteRootsModal`: User authorization and allow-listing modal for custom site model directories outside the UDMI root.
+  - `ArtifactModal`: Interactive modal inspecting `RESULT.log`, `sequence.md`, `sequence.png`, and trace JSONs with direct Mantis triage trigger.
+  - `LogTerminal`: High-performance, virtualized terminal viewer streaming live tmux pane and service log buffers.
 * **Templates & Pages**:
-  - `/assistant`: Dedicated full-page general UDMI assistant workspace.
-  - `/triage/:sessionId`: Focused diagnostic investigation workspace for test failures.
-  - `/testbed`: Testbed and Cadre local stack manager.
+  - `/sequencer`: Core sequence runner and compliance testing workspace with integrated right-hand `LocalSetupDrawer`, `SequencerFilterBar`, and live logs.
+  - `/devices`: Device metadata, points, and message trace explorer.
+  - `/assistant`: Mantis Shrimp AI reasoning workspace with automated failure triage, tripartite audit, and return breadcrumb.
+  - `/diagnostics`: Real-time structured system logging and diagnostic ring buffer.
   - `/compliance`: Curated compliance matrix and scorecard.
-  - `/devices/:deviceId`: Device metadata, points, and message trace explorer.
   - `/catalog`: Curated menu of approved IoT devices.
 
 ### 2.2. Component Cataloging Rule
@@ -58,34 +64,43 @@ All UI development in `workbench/` must follow the CORGI atomic hierarchy and ca
 ## 3. Route-Driven Architecture & State Rules
 
 1. **First-Class URLs (No Monolithic Single-Screen Bloat)**:
-   - Every primary view must have a direct, bookmarkable URL.
-   - Full support for multi-tab workflows: an operator must be able to open `/testbed` on Monitor 1 and `/compliance` on Monitor 2 simultaneously.
-2. **Client-Side Routing (No Traditional Page Reloads)**:
+   - Every primary view must have a direct, bookmarkable URL (`/sequencer`, `/devices`, `/assistant`, `/diagnostics`, `/compliance`, `/catalog`).
+   - Full support for multi-tab workflows: an operator must be able to open `/sequencer` on Monitor 1 and `/assistant` on Monitor 2 simultaneously.
+2. **Client-Side Routing & View-Pane Caching (No DOM Destruction)**:
    - View transitions must occur client-side without full-page document reloads.
-   - Long-running SSE streams (Mantis reasoning loops, live sequencer test logs) must remain alive in memory when navigating between routes.
-3. **Global Assistant Drawer (`Cmd+K` / `Ctrl+K`)**:
-   - Mantis must be summonable as a slide-out drawer from any screen.
-   - **Context Inheritance**:
-     - From `/devices/AHU-1` → Drawer automatically sets `activeDevice = 'AHU-1'`.
-     - From `/compliance` → Drawer automatically sets active `siteModel`.
-     - From `/assistant` or standalone → Drawer operates in General Exploration Mode.
+   - Views are mounted inside dedicated `.view-pane` containers; navigating between views toggles pane visibility rather than tearing down DOM nodes.
+   - Long-running SSE streams (Mantis reasoning loops, live sequencer test logs), test execution state, and console logs remain alive and intact in memory when navigating between routes.
+3. **Local Test Setup Drawer (Sequencer Tab Integration)**:
+   - The local testbed substrate is integrated directly into `/sequencer` as a right-side collapsible drawer.
+   - Toggled via the `[🖥️ Local Setup]` button in the Sequencer header (with live health indicator dot) or `Cmd+Shift+L`.
+   - Allows operators to start/stop local unprivileged services (`//mqtt/localhost:18833`), launch simulated Pubber devices, and monitor component health without leaving the test runner.
+4. **Global Assistant Drawer & Deep Triage Routing**:
+   - Mantis is summonable from any screen via `Cmd+K` / `Ctrl+K`.
+   - Direct failure triage triggers from `/sequencer` navigate to `/assistant` with pre-bound test failure context and provide a `← Back to Sequencer` breadcrumb.
 
 ---
 
-## 4. Backend Integration Invariants (The 5 Contracts)
+## 4. Backend Integration Invariants (The Contracts)
 
-* **Contract 1 (MCP JSON-RPC)**:
-  - Do NOT create ad-hoc HTTP endpoints in custom servers.
-  - Call tools deterministically via `POST /message` or `POST /rpc` using standard JSON-RPC 2.0:
-    ```json
-    {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "inspect_site_model", "arguments": {"site_model": "sites/udmi_site_model"}}}
-    ```
+* **Contract 1 (MCP JSON-RPC & Deterministic Tool Operations)**:
+  - Deterministic tool calls go through standard JSON-RPC 2.0 via `POST /message` or `POST /rpc`.
+* **Local Testbed & Infrastructure Endpoints**:
+  - Manage local stack lifecycle via canonical endpoints:
+    - `POST /api/testbed/start`: Starts local infrastructure via `bin/udmi start` using unprivileged user-space ports (`//mqtt/localhost:18833`).
+    - `POST /api/testbed/stop`: Terminates local services via `bin/udmi stop`.
+    - `POST /api/testbed/restart`: Clean-slate restart (`bin/udmi restart`).
+    - `GET /api/testbed/status`: Returns health status and active ports for `mqtt_broker`, `udmis`, `etcd`, `pubber`.
+    - `POST /api/testbed/pubber/start` & `stop`: Runs or terminates background device simulator instances.
+    - `GET /api/testbed/logs`: Streams or queries recent component logs.
+* **Custom Site Model Roots Endpoints**:
+  - Secure directory allow-listing with user consent: `GET /api/site-roots`, `POST /api/site-roots/register`, `POST /api/site-roots/delete`.
+  - Supports dual layout conventions: `<site_dir>/cloud_iot_config.json` and `<site_dir>/udmi/cloud_iot_config.json` (canonical display: parent folder name).
 * **Contract 2 (Mantis Streaming Agent)**:
   - Connect to `POST /api/mantis/chat` via Server-Sent Events (`text/event-stream`).
   - Handle all canonical event types: `phase`, `thought`, `token`, `tool_call`, `tool_result`, `hypothesis_matrix`, `diagram`, `done`, `error`.
   - Support slash commands: `/status`, `/logs <window>`, `/clear`, `/export`, `/help`.
 * **Contract 3 (Real-Time Logs)**:
-  - Stream live console output from tmux window buffers via `GET /api/logs/stream?session_id=...&window=...`.
+  - Stream live console output from tmux window buffers via `GET /api/logs/stream?session_id=...&window=...` and sequencer runner streams via `/api/sequencer/run`.
   - Handle stream reconnection gracefully with exponential backoff.
 * **Contract 4 (Workspace State)**:
   - Maintain a centralized reactive state store conforming to `WorkspaceState` in `WORKBENCH_CONTRACTS.md`.
@@ -115,7 +130,7 @@ To prevent tight coupling, tangled state mutations, and unmaintainable "spaghett
 
 ```
 ┌────────────────────────────────────────────────────────────────────────────┐
-│ Layer 1: Pure Presentation (components/, .corgi/)                          │
+│ Layer 1: Pure Presentation (components/)                                   │
 │ - Stateless Atoms, Molecules, Organisms                                    │
 │ - Driven 100% by typed props & upward semantic event callbacks             │
 │ - FORBIDDEN: fetch(), EventSource, direct store mutation, route awareness  │

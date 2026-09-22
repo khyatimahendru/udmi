@@ -1,9 +1,12 @@
 """Mantis ReAct Cognitive Planner and Built-in Adversarial Critique Engine."""
 
 import json
+import logging
 import os
 import re
 from typing import Any, Callable, Dict, List, Optional, Tuple
+
+logger = logging.getLogger(__name__)
 
 from mantis.config import CONFIG, ModelTier, ProviderType
 from mantis.skills import SkillManager
@@ -17,12 +20,219 @@ from mantis.tools.differential import compare_test_runs
 from mantis.tools.patcher import patch_site_model
 from mantis.tools.schemas import inspect_udmi_schema, list_udmi_schemas
 from mantis.tools.site_models import inspect_site_model
-from mcp.session_manager import SessionManager
+from mantis.session import SessionManager
 
 
 from mantis.context import ContextManager
 from mantis.models import SessionContext
 from mantis.tools.diagnostics import diagnose_test_failure as deterministic_diagnose
+
+
+# Number of remaining ReAct steps at which the orchestrator begins warning the model
+# to converge, so it is never cut off mid-investigation without producing an answer.
+BUDGET_WARNING_THRESHOLD = 3
+
+# The only verdicts a hypothesis audit may use. There is deliberately no blanket
+# "CONFIRMED": it permitted every competing hypothesis to be endorsed at once,
+# which excludes nothing and is as unfalsifiable as dropping them. Ranking forces
+# the Actor to say which explanation actually accounts for the failure.
+HYPOTHESIS_VERDICTS = ("PRIMARY", "CONTRIBUTING", "REFUTED", "UNRESOLVED")
+
+# Subsystems whose behavior is a server-side runtime phenomenon. Their source shows
+# intent; only their logs show what happened. A verdict on one of these is allowed
+# without logs, but it must say so rather than presenting an inference as a finding.
+BACKEND_SUBSYSTEMS = ("udmis",)
+
+# Tiers reported by the get_udmis_runtime_logs tool, mirrored here as the vocabulary
+# an audit must use. NONE must additionally carry its qualifier so the reader can
+# tell a log-backed conclusion from a plausible reading of the source.
+RUNTIME_EVIDENCE_TIERS = ("LOCAL_FILE", "CLOUD", "NONE")
+RUNTIME_EVIDENCE_NONE_QUALIFIER = "source inference only"
+
+
+# Clause-joining phrases that show a hypothesis asserts more than one mechanism.
+# A compound hypothesis cannot be ranked as a unit: whichever half is best evidenced
+# carries the other into the verdict with it. Deliberately excludes a bare "and",
+# which routinely joins parts of a single mechanism ("routing and dispatch layer")
+# and would reject sound hypotheses.
+COMPOUND_HYPOTHESIS_MARKERS = (
+    " while ",
+    " whilst ",
+    " as well as ",
+    " in addition to ",
+    " combined with ",
+    " along with ",
+    " simultaneously ",
+    " and also ",
+    " plus ",
+    "; ",
+)
+
+
+def _compound_markers(text: str) -> List[str]:
+    """Returns the clause-joining markers found in a hypothesis, if any."""
+    padded = f" {text.lower()} "
+    return [marker.strip() for marker in COMPOUND_HYPOTHESIS_MARKERS if marker in padded]
+
+
+# Matches the `file:` URI scheme, with or without authority slashes.
+_FILE_URI_SCHEME = re.compile(r"\bfile:(?://)?")
+
+
+def _strip_file_uri_scheme(payload: str) -> str:
+    """Removes the `file:` URI scheme from a serialized tool response.
+
+    Vertex scans `function_response.response` for strings of the form
+    `file:<display_name>` and resolves them against the file parts attached to the
+    request. A tool result that merely *mentions* such a string therefore looks like
+    a dangling file reference, and the API rejects the entire request with
+    400 INVALID_ARGUMENT rather than ignoring it.
+
+    This is not hypothetical for UDMI: the schemas in `schema/` express every
+    cross-file reference as `"$ref": "file:common.json#/definitions/depth"`, so any
+    investigation that inspected a schema with a `$ref` — 66 of them do — killed the
+    whole run. Dropping the scheme is lossless for these values, because a JSON
+    Schema `$ref` of `common.json#/definitions/depth` resolves identically as a
+    relative reference, and for `file:///abs/path` it leaves the absolute path intact.
+    """
+    return _FILE_URI_SCHEME.sub("", payload)
+
+
+def _part_carries_content(part) -> bool:
+    """Whether a part carries anything the API will accept as content.
+
+    An empty text part is not content: a turn made only of those is rejected with
+    400 'must include at least one parts field'. Function calls, function responses
+    and thought signatures all count, the last because Vertex requires signatures to
+    survive the round-trip.
+    """
+    if (getattr(part, "text", None) or "").strip():
+        return True
+    return bool(
+        getattr(part, "function_call", None)
+        or getattr(part, "function_response", None)
+        or getattr(part, "thought_signature", None)
+    )
+
+
+def _coalesce_model_parts(parts):
+    """Rebuild a valid model turn from parts accumulated across stream chunks.
+
+    Streaming splits a single logical model response into many fragments: dozens of
+    partial text parts, plus (when thinking is enabled) a trailing part that carries
+    a thought_signature and no content at all. Replaying that raw list as conversation
+    history sends a model turn containing content-less parts, which the API rejects.
+
+    This merges consecutive text fragments into one part, passes function_call parts
+    through untouched, and folds any signature-only part's thought_signature onto the
+    most recent emitted part so the signature survives the round-trip. Vertex requires
+    thought_signature preservation, so signatures are never discarded: if one arrives
+    before any content exists to carry it, that part is kept verbatim.
+    """
+    from google.genai import types  # type: ignore  # lazy: SDK is optional offline
+
+    coalesced = []
+    pending_text = []
+
+    def flush_text():
+        if not pending_text:
+            return
+        merged = "".join(pending_text)
+        pending_text.clear()
+        coalesced.append(types.Part.from_text(text=merged))
+
+    for part in parts:
+        text = getattr(part, "text", None)
+        function_call = getattr(part, "function_call", None)
+        signature = getattr(part, "thought_signature", None)
+
+        if function_call:
+            flush_text()
+            coalesced.append(part)
+            continue
+
+        if text:
+            pending_text.append(text)
+            continue
+
+        if signature:
+            # Content-less part carrying only a thought signature.
+            flush_text()
+            if coalesced:
+                coalesced[-1].thought_signature = signature
+            else:
+                coalesced.append(part)
+            continue
+
+        # No text, no function call, no signature: carries nothing, so drop it.
+
+    flush_text()
+    return coalesced
+
+# Issued to the Actor on its first step, which runs with tool access withheld so that
+# scoping cannot be skipped. The resulting plan lands in the Actor's own model turn,
+# making it a self-authored commitment rather than an externally imposed instruction.
+SCOPING_DIRECTIVE = """[Orchestrator Directive — Scoping Step]
+Tool access is withheld for this turn. Before investigating, establish the blast radius
+of the reported problem and commit to a plan. Emit EXACTLY this structure and nothing else:
+
+FAILURE_SCOPE: <SINGLE_TARGET | TOTAL_OUTAGE | MULTI_TARGET_DEGRADATION | NOT_A_FAILURE>
+SCOPE_JUSTIFICATION: <one sentence citing the specific evidence of breadth in the report>
+COMPETING_HYPOTHESES:
+- H1: <hypothesis>
+- H2: <hypothesis>
+- H3: <hypothesis>
+REQUIRED_SUBSYSTEMS: <comma-separated repository directories you will examine>
+
+Rules for COMPETING_HYPOTHESES:
+- Each hypothesis must assert EXACTLY ONE mechanism in ONE subsystem. A hypothesis
+  that joins two claims ("X is misconfigured while Y leaks threads") cannot be ranked,
+  because whichever half is better evidenced drags the other into the verdict with it.
+- If you believe two mechanisms are both at work, that is two hypotheses. Give them
+  separate labels and let the audit rank them independently.
+
+Scope definitions:
+- SINGLE_TARGET: exactly one device/endpoint affected while peers are healthy.
+- TOTAL_OUTAGE: every operation fails with hard refusal (connection or auth).
+- MULTI_TARGET_DEGRADATION: several independent targets show timeouts, intermittent
+  errors, or slow responses. This implicates shared infrastructure, not the targets.
+- NOT_A_FAILURE: the request is informational rather than a defect report.
+
+Rules for REQUIRED_SUBSYSTEMS:
+- Name every subsystem on BOTH sides of any communication boundary implicated by the
+  report. A client that sends a request and a service that processes it are two
+  distinct subsystems, and both live in this repository.
+- Omit a subsystem ONLY if it is architecturally incapable of producing the symptom.
+  Do not omit one merely because you suspect another more strongly.
+- If FAILURE_SCOPE is MULTI_TARGET_DEGRADATION you MUST include the shared backend
+  subsystems that all affected targets depend on.
+- Use real top-level directory names from this repository.
+
+This plan is your own commitment. You will be held to it for the rest of the
+investigation, and you must examine every subsystem you list here.
+
+Your final answer will be rejected unless it includes a "Hypothesis Resolution Audit"
+that assigns every hypothesis above exactly one verdict:
+- PRIMARY: this is the root cause. EXACTLY ONE hypothesis may be PRIMARY.
+- CONTRIBUTING: real and evidenced, but a secondary effect rather than the cause.
+- REFUTED: excluded. You must name the evidence that excludes it.
+- UNRESOLVED: your evidence cannot decide. You must state what evidence would.
+
+Marking everything as a cause is not a resolution. The verdict for each hypothesis
+must rest on evidence that supports THAT hypothesis specifically: evidence showing a
+different hypothesis is true does not confirm this one.
+
+Backend behavior is a runtime phenomenon. Source code shows what the backend was
+meant to do; only its logs show what it did. Call get_udmis_runtime_logs to find out
+which tier of runtime evidence exists for this incident, and give every hypothesis
+about a backend subsystem its own declaration line in the audit:
+
+  RUNTIME_EVIDENCE: LOCAL_FILE | CLOUD | NONE (source inference only)
+
+Use the tier that tool reports. NONE is fully acceptable and is expected for an
+older incident: it means the logs that would prove the mechanism no longer exist and
+you are arguing from the source, which may still be the correct conclusion. What is
+not acceptable is stating an inference as though it were an observation."""
 
 
 class MantisAgent:
@@ -85,8 +295,17 @@ class MantisAgent:
         prompt: str,
         context: Optional[SessionContext] = None,
         stream_callback: Optional[Callable[[str], None]] = None,
+        event_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
     ) -> str:
-        """Executes a natural language prompt with stateful multi-turn conversational memory."""
+        """Executes a natural language prompt with stateful multi-turn conversational memory.
+
+        `stream_callback` receives prose as it is generated. `event_callback`, when
+        supplied, additionally receives structured records describing what the agent
+        is doing: see `_run_llm` for the emitted record types. Both are optional and
+        independent; the CLI passes neither, a plain streaming caller passes only the
+        first, and a UI that needs to render phases and tool activity passes both.
+        The structured channel exists so such a UI never has to scrape the prose.
+        """
         q = prompt.strip()
         if context is not None:
             ctx_mgr = ContextManager(context=context, udmi_root=self.udmi_root)
@@ -97,25 +316,16 @@ class MantisAgent:
 
         ctx_mgr.add_user_message(q)
 
-        # If LLM API credentials are configured, try generative client
+        # If LLM API credentials are configured, execute generative pipeline (fail fast on error)
         if self.config.provider in (ProviderType.VERTEX_AI, ProviderType.AI_STUDIO) or self.client is not None:
-            try:
-                res = self._run_llm(q, context_mgr=ctx_mgr, stream_callback=stream_callback)
-                ctx_mgr.add_assistant_message(res)
-                return res
-            except Exception as e:
-                # Graceful fallback to deterministic engine on network/API/ADC failure
-                fallback_msg = (
-                    f"[Note: AI Provider '{self.config.provider.value}' unavailable ({e}).\n"
-                    f"To use Vertex AI, ensure ADC is authenticated: 'gcloud auth application-default login'\n"
-                    f"Or export an API key: 'export GEMINI_API_KEY=\"your-key\"'\n"
-                    f"Switching to deterministic engine]\n"
-                )
-                if stream_callback:
-                    stream_callback(fallback_msg)
-                res = fallback_msg + self._run_deterministic(q, context_mgr=ctx_mgr, stream_callback=stream_callback)
-                ctx_mgr.add_assistant_message(res)
-                return res
+            res = self._run_llm(
+                q,
+                context_mgr=ctx_mgr,
+                stream_callback=stream_callback,
+                event_callback=event_callback,
+            )
+            ctx_mgr.add_assistant_message(res)
+            return res
 
         res = self._run_deterministic(q, context_mgr=ctx_mgr, stream_callback=stream_callback)
         ctx_mgr.add_assistant_message(res)
@@ -203,13 +413,24 @@ class MantisAgent:
 
         # 3. Test Execution Triggering
         if "run " in q_lower and (" on " in q_lower or " for " in q_lower or "test " in q_lower) and not ("why" in q_lower or "fail" in q_lower):
-            test_id = self._extract_word(query, r"run\s+(?:test\s+)?([a-z0-9_]{4,})", default=active_test or "pointset_publish")
-            device_id = self._extract_word(query, r"(?:device\s+|for\s+(?:device\s+)?|on\s+(?:device\s+)?)([A-Za-z0-9_-]{3,})", default=active_dev or "AHU-1")
+            test_id = self._extract_word(query, r"run\s+(?:test\s+)?([a-z0-9_]{4,})", default=active_test)
+            device_id = self._extract_word(
+                query,
+                r"(?:device\s+|dut\s+|(?:for|on)\s+device\s+)([A-Za-z0-9_-]{3,})|(?:for|on)\s+([A-Za-z0-9]+[-_][A-Za-z0-9_-]+)",
+                default=active_dev,
+            )
             target_spec = self._extract_word(query, r"(//[a-zA-Z0-9_\-\./:\+@]+)", default=None)
             site = self._extract_word(query, r"(sites/[a-zA-Z0-9_\-\./]+)", default=active_site or "sites/udmi_site_model")
+
+            if not test_id or not device_id:
+                out = "Mantis: Please specify both the test name and device ID to execute (e.g. `bin/mantis \"Run <test_name> for device <device_id>\"`)."
+                emit(out)
+                return out
             
             if target_spec:
-                res = self.session_mgr.run_sequencer_test(
+                from mantis.tools.sequencer import run_sequencer_test
+                res = run_sequencer_test(
+                    session_mgr=self.session_mgr,
                     test_name=test_id,
                     device_id=device_id,
                     target_spec=target_spec,
@@ -252,7 +473,9 @@ class MantisAgent:
                 
                 cmd = f"bin/sequencer '{site}' '{project_spec}' '{device_id}' '{test_id}'"
                 try:
-                    self.session_mgr.start_session_process(
+                    from mantis.tools.process import start_session_process
+                    start_session_process(
+                        session_mgr=self.session_mgr,
                         test_id=target_sess,
                         window="sequencer",
                         command=cmd,
@@ -276,9 +499,22 @@ class MantisAgent:
 
         # 4. Diagnostic Triage / Root Cause Analysis
         if "why did" in q_lower or "fail" in q_lower or "diagnos" in q_lower or "triage" in q_lower:
-            device_id = self._extract_word(query, r"(?:device\s+|for\s+(?:device\s+)?|on\s+(?:device\s+)?)([A-Za-z0-9_-]{3,})", default=active_dev or "AHU-1")
-            test_id = self._extract_word(query, r"(?:did|run\s+(?:test\s+)?|test\s+)([a-z0-9_]{4,})", default=active_test or "pointset_publish")
+            device_id = self._extract_word(
+                query,
+                r"(?:device\s+|dut\s+|(?:for|on)\s+device\s+)([A-Za-z0-9_-]{3,})|(?:for|on)\s+([A-Za-z0-9]+[-_][A-Za-z0-9_-]+)",
+                default=active_dev,
+            )
+            test_id = self._extract_word(
+                query,
+                r"(?:did|run\s+(?:test\s+)?|test\s+)([a-z0-9_]{4,})",
+                default=active_test,
+            )
             site = self._extract_word(query, r"(sites/[a-zA-Z0-9_\-\./]+)", default=active_site or "sites/udmi_site_model")
+
+            if not device_id or not test_id:
+                out = "Mantis: Please specify both the device ID and test name to diagnose (e.g. `bin/mantis \"Diagnose test <test_name> on device <device_id>\"`)."
+                emit(out)
+                return out
 
             if context_mgr:
                 context_mgr.context.active_device_id = device_id
@@ -343,26 +579,35 @@ class MantisAgent:
 
         # 7. Configuration & Metadata Patching
         if "set " in q_lower or "patch" in q_lower or "update " in q_lower:
-            device = self._extract_word(query, r"(?:for|device)\s+([A-Z0-9_-]{3,})", default=active_dev or "AHU-1")
-            site = self._extract_word(query, r"(sites/[a-zA-Z0-9_\-\./]+)", default=active_site)
+            device = self._extract_word(
+                query,
+                r"(?:device\s+|dut\s+|(?:for|on)\s+device\s+)([A-Za-z0-9_-]{3,})|(?:for|on)\s+([A-Za-z0-9]+[-_][A-Za-z0-9_-]+)",
+                default=active_dev,
+            )
+            site = self._extract_word(query, r"((?:sites/|/)[a-zA-Z0-9_\-\./]+)", default=active_site or "sites/udmi_site_model")
+            patch_data = self._parse_patch_data(query)
 
-            # Check sample_rate_sec
-            sr_match = re.search(r"sample_rate_sec\s*(?:to|=)?\s*([0-9]+)", query, re.IGNORECASE)
-            patch_data: Dict[str, Any] = {}
-            if sr_match:
-                rate = int(sr_match.group(1))
-                patch_data = {"pointset": {"sample_rate_sec": rate}}
-            elif "nostate" in q_lower:
-                patch_data = {"testing": {"nostate": True}}
+            if not device:
+                out = "Mantis: Please specify the device ID to patch (e.g. `bin/mantis \"Set sample_rate_sec to 10 for device <device_id>\"`)."
+                emit(out)
+                return out
 
             if patch_data:
-                res = patch_site_model(site_model=site, device_id=device, patch_data=patch_data)
-                out = (
-                    f"### Applied Configuration Patch for `{device}`\n"
-                    f"* **File**: `{res.get('file')}`\n"
-                    f"* **Backup Created**: `{res.get('backup')}`\n"
-                    f"* **Diff**:\n```diff\n{res.get('diff')}```"
+                res = patch_site_model(
+                    site_model=site,
+                    device_id=device,
+                    patch_data=patch_data,
+                    udmi_root=self.udmi_root,
                 )
+                if res.get("status") in ("SUCCESS", "PATCHED"):
+                    out = (
+                        f"### Applied Configuration Patch for `{device}`\n"
+                        f"* **File**: `{res.get('file')}`\n"
+                        f"* **Backup Created**: `{res.get('backup')}`\n"
+                        f"* **Diff**:\n```diff\n{res.get('diff')}```"
+                    )
+                else:
+                    out = f"Error applying configuration patch: {res.get('error')}"
             else:
                 out = f"Could not parse configuration patch fields from '{query}'."
             emit(out)
@@ -385,6 +630,140 @@ class MantisAgent:
             emit(out)
             return out
 
+        # 10. Golden Baseline & Anti-Cheating Verification
+        if "golden" in q_lower or "baseline" in q_lower or "anti-cheating" in q_lower or "anti cheating" in q_lower:
+            from mantis.tools.golden import verify_golden_baseline
+            m = re.search(r"(?:for|baseline|golden)\s+(?:baseline\s+)?(?:for\s+)?['\"]?([a-zA-Z0-9_\-\.]+)", query, re.IGNORECASE)
+            baseline_name = m.group(1).strip() if m else "validator"
+            if baseline_name.lower() in ("golden", "baseline", "for", "with", "the", "a", "an"):
+                baseline_name = "validator"
+            baseline_name = os.path.splitext(os.path.basename(baseline_name))[0]
+            emit(f"Mantis: Verifying golden baseline for '{baseline_name}' with anti-cheating audit...\n")
+            res = verify_golden_baseline(baseline_name=baseline_name, udmi_root=self.udmi_root)
+            out = res.get("report", "")
+            emit(out)
+            return out
+
+        # 11. Architecture & Topology Diagrams
+        if "topology" in q_lower or ("diagram" in q_lower and ("site" in q_lower or "arch" in q_lower or "device" in q_lower or "network" in q_lower)):
+            from mantis.tools.visualization import generate_topology_diagram
+            site = self._extract_word(query, r"(sites/[a-zA-Z0-9_\-\./]+)", default=active_site)
+            device = self._extract_word(query, r"(?:device|for)\s+([A-Z0-9_-]{3,})", default=active_dev)
+            fmt = "both"
+            if "mermaid" in q_lower and "dot" not in q_lower:
+                fmt = "mermaid"
+            elif "dot" in q_lower and "mermaid" not in q_lower:
+                fmt = "dot"
+            emit(f"Mantis: Generating site topology diagram for '{site}'...\n")
+            res = generate_topology_diagram(site_model=site, focus_device=device, format=fmt, udmi_root=self.udmi_root)
+            if res.get("status") == "SUCCESS":
+                out = (
+                    f"### Site Topology: `{site}` ({res.get('device_count')} devices, {res.get('gateway_count')} gateways)\n\n"
+                    f"{res.get('rendered')}"
+                )
+            else:
+                out = f"Error generating topology diagram: {res.get('error')}"
+            emit(out)
+            return out
+
+        # 12. Sequence Diagrams
+        if "sequence diagram" in q_lower or ("diagram" in q_lower and ("sequence" in q_lower or "run" in q_lower or "flow" in q_lower or "timeline" in q_lower)):
+            from mantis.tools.visualization import generate_sequence_diagram
+            runs = discover_test_runs(udmi_root=self.udmi_root)
+            run_dir = runs[0]["path"] if runs else os.path.join(self.udmi_root, "out")
+            fmt = "both"
+            if "mermaid" in q_lower and "dot" not in q_lower:
+                fmt = "mermaid"
+            elif "dot" in q_lower and "mermaid" not in q_lower:
+                fmt = "dot"
+            emit(f"Mantis: Generating sequence diagram from '{run_dir}'...\n")
+            res = generate_sequence_diagram(run_dir=run_dir, format=fmt, udmi_root=self.udmi_root)
+            if res.get("status") == "SUCCESS":
+                out = f"### Sequence Execution Flow\n\n{res.get('rendered')}"
+            else:
+                out = f"Error generating sequence diagram: {res.get('error')}"
+            emit(out)
+            return out
+
+        # 13. Codebase & Documentation Exploration
+        if any(w in q_lower for w in ("doc for", "guide for", "spec for", "locate doc", "find spec")):
+            from mantis.tools.codebase import locate_udmi_doc
+            topic = self._extract_word(query, r"(?:for|spec|doc|guide)\s+([a-zA-Z0-9_\-\.]+)", default="writeback")
+            res = locate_udmi_doc(topic=topic, udmi_root=self.udmi_root)
+            docs = res.get("documents", []) if isinstance(res, dict) else []
+            if docs:
+                lines = [f"### UDMI Documentation for '{topic}':"]
+                for d in docs:
+                    lines.append(f"* **[{d['title']}](file://{d['file']})** (`{d['file']}`)\n  {d.get('preview', '')}")
+                out = "\n".join(lines)
+            else:
+                out = f"No documentation found for topic '{topic}'."
+            emit(out)
+            return out
+
+        if "search" in q_lower or "grep" in q_lower:
+            from mantis.tools.codebase import search_codebase
+            m = re.search(r"(?:search|grep)\s+(?:for\s+)?['\"]?([^'\"]+)['\"]?", query, re.IGNORECASE)
+            term = m.group(1).strip() if m else query
+            res = search_codebase(query=term, max_results=10, udmi_root=self.udmi_root)
+            matches = res.get("matches", []) if isinstance(res, dict) else []
+            if matches:
+                lines = [f"### Codebase search results for '{term}':"]
+                for r in matches[:10]:
+                    lines.append(f"* `{r['file']}:{r['line']}`: {r.get('snippet', '')}")
+                out = "\n".join(lines)
+            else:
+                out = f"No matches found for '{term}'."
+            emit(out)
+            return out
+
+        if "inspect test" in q_lower or "sequencer test" in q_lower:
+            from mantis.tools.codebase import inspect_sequencer_test
+            test_name = self._extract_word(query, r"(?:test|for)\s+([a-z0-9_]{4,})", default=active_test or "pointset_publish")
+            res = inspect_sequencer_test(test_name=test_name, udmi_root=self.udmi_root)
+            if res.get("status") == "SUCCESS":
+                out = (
+                    f"### Sequencer Test: `{res['test_name']}`\n"
+                    f"* **Class**: `{res['class_name']}` ({res['file_path']})\n"
+                    f"* **Features**: {', '.join(res.get('features', []))}\n"
+                    f"* **Assertions**: {', '.join(res.get('assertions', []))}\n"
+                    f"* **Code Snippet**:\n```java\n{res.get('method_code', '')[:800]}\n```"
+                )
+            else:
+                out = f"Error inspecting sequencer test: {res.get('error')}"
+            emit(out)
+            return out
+
+        # 14. Message Traces & Log Anomalies
+        if "trace" in q_lower or "payload" in q_lower:
+            from mantis.tools.artifacts import inspect_message_trace
+            runs = discover_test_runs(udmi_root=self.udmi_root)
+            run_dir = runs[0]["path"] if runs else os.path.join(self.udmi_root, "out")
+            res = inspect_message_trace(run_dir=run_dir, udmi_root=self.udmi_root)
+            if res:
+                out = f"### Recorded Message Traces in `{run_dir}` ({len(res)} traces found)\n"
+                for t in res[:5]:
+                    out += f"* **{t['message_type']}** (`{t['trace_file']}`):\n```json\n{json.dumps(t['payload'], indent=2)[:300]}\n```\n"
+            else:
+                out = f"No message traces found in `{run_dir}`."
+            emit(out)
+            return out
+
+        if "anomal" in q_lower:
+            from mantis.tools.artifacts import detect_log_anomalies
+            runs = discover_test_runs(udmi_root=self.udmi_root)
+            run_dir = runs[0]["path"] if runs else os.path.join(self.udmi_root, "out")
+            res = detect_log_anomalies(run_dir=run_dir, udmi_root=self.udmi_root)
+            if res.get("status") == "SUCCESS":
+                anoms = res.get("anomalies", [])
+                out = f"### Log Anomaly Analysis for `{run_dir}` ({len(anoms)} anomalies detected)\n"
+                for a in anoms:
+                    out += f"* **[{a['severity']}] {a['type']}**: {a['message']}\n"
+            else:
+                out = f"Error detecting anomalies: {res.get('error')}"
+            emit(out)
+            return out
+
         # Default fallback: Answer with skill references
         skills_summary = self.skills.get_system_prompt_catalog()
         out = (
@@ -394,6 +773,36 @@ class MantisAgent:
         )
         emit(out)
         return out
+
+    def classify_intent_tier(self, prompt: str) -> ModelTier:
+        """Classifies user intent into Flash Tier (fast lookups, schemas, log slicing, entities)
+        or Pro Tier (deep diagnostic reasoning, adversarial critique, differential analysis, patching)."""
+        p = prompt.strip().lower()
+
+        # Pro indicators (deep reasoning, failure diagnosis, diffs, patches, triage, adversarial critique)
+        pro_indicators = [
+            "why", "diagnos", "root cause", "fail", "error", "triage", "troubleshoot",
+            "diff", "compare", "patch", "fix", "remediat", "critic", "adversar",
+            "investigat", "correlat", "post-mortem", "broken", "divergence",
+            "provision", "ensure", "sequencer", "run test", "start stack",
+            "golden", "baseline", "anti-cheating"
+        ]
+        if any(ind in p for ind in pro_indicators):
+            return ModelTier.PRO
+
+        # Flash indicators (simple schema lookups, log slicing, entity extraction, status checks, listing)
+        flash_indicators = [
+            "schema", "list schema", "inspect schema",
+            "log", "slice log", "extract log", "tail log", "show log",
+            "extract", "entities", "metadata", "list runs", "list devices", "devices", "show devices",
+            "show site", "inspect site", "site_model", "site model", "status", "version", "help",
+            "summarize", "condense", "lookup"
+        ]
+        if any(ind in p for ind in flash_indicators):
+            return ModelTier.FLASH
+
+        # Default to PRO for open-ended or complex reasoning
+        return ModelTier.PRO
 
     async def run_async(
         self,
@@ -434,11 +843,40 @@ class MantisAgent:
             except Exception as e:
                 last_err = e
                 err_str = str(e).lower()
-                # Check for transient / retryable API errors (429, 503, ResourceExhausted, RateLimit)
-                if attempt < max_retries - 1 and any(
-                    w in err_str
-                    for w in ("429", "503", "resource_exhausted", "quota", "timeout", "unavailable", "rate limit")
-                ):
+
+                is_retryable = False
+                status_code = getattr(e, "code", None) or getattr(e, "status_code", None)
+                if status_code in (429, 503, 504):
+                    is_retryable = True
+                elif isinstance(e, (ConnectionError, TimeoutError)):
+                    is_retryable = True
+                else:
+                    try:
+                        from google.genai.errors import APIError as GenaiAPIError  # type: ignore
+                        if isinstance(e, GenaiAPIError) and e.code in (429, 503, 504):
+                            is_retryable = True
+                    except ImportError:
+                        pass
+                    try:
+                        from google.api_core.exceptions import (  # type: ignore
+                            TooManyRequests,
+                            ServiceUnavailable,
+                            ResourceExhausted,
+                            DeadlineExceeded,
+                        )
+                        if isinstance(e, (TooManyRequests, ServiceUnavailable, ResourceExhausted, DeadlineExceeded)):
+                            is_retryable = True
+                    except ImportError:
+                        pass
+
+                if not is_retryable:
+                    if any(
+                        w in err_str
+                        for w in ("429", "503", "resource_exhausted", "quota exceeded", "rate limit")
+                    ):
+                        is_retryable = True
+
+                if attempt < max_retries - 1 and is_retryable:
                     jitter = random.uniform(0.8, 1.2)
                     sleep_time = (base_delay * (2**attempt)) * jitter
                     time.sleep(sleep_time)
@@ -447,14 +885,272 @@ class MantisAgent:
         if last_err:
             raise last_err
 
+    def _resolve_required_subsystems(self, plan_text: str) -> Tuple[List[str], List[str]]:
+        """Parses REQUIRED_SUBSYSTEMS from a scoping plan and resolves it against the repo.
+
+        Returns (resolved, rejected). Directories that do not exist are rejected rather
+        than silently trusted, so a hallucinated name never becomes a coverage target.
+        """
+        resolved: List[str] = []
+        rejected: List[str] = []
+        match = re.search(r"REQUIRED_SUBSYSTEMS\s*:\s*(.+)", plan_text, re.IGNORECASE)
+        if not match:
+            return resolved, rejected
+        for raw_item in re.split(r"[,\n]+", match.group(1)):
+            candidate = raw_item.strip().strip("`\'\"*[]").lstrip("/")
+            if not candidate:
+                continue
+            top_dir = candidate.split("/")[0]
+            if top_dir in resolved or top_dir in rejected:
+                continue
+            if os.path.isdir(os.path.join(self.udmi_root, top_dir)):
+                resolved.append(top_dir)
+            else:
+                rejected.append(top_dir)
+        return resolved, rejected
+
+    def _parse_competing_hypotheses(self, plan_text: str) -> List[str]:
+        """Parses the labelled hypotheses the Actor committed to during scoping.
+
+        Only lines of the form '- H<n>: <text>' under COMPETING_HYPOTHESES are
+        recognized. Requiring the explicit label keeps the later resolution check a
+        structural match rather than a fuzzy comparison of restated prose.
+        """
+        block = re.search(
+            r"COMPETING_HYPOTHESES\s*:\s*(.*?)(?:\n\s*REQUIRED_SUBSYSTEMS\s*:|\Z)",
+            plan_text,
+            re.IGNORECASE | re.DOTALL,
+        )
+        if not block:
+            return []
+        hypotheses: List[str] = []
+        for line in block.group(1).splitlines():
+            match = re.match(r"\s*[-*]?\s*H(\d+)\s*[:.)-]\s*(.+)", line.strip())
+            if match:
+                hypotheses.append(match.group(2).strip())
+        return hypotheses
+
+    def _hypothesis_verdicts(
+        self, answer_text: str, hypothesis_count: int
+    ) -> Dict[int, Optional[str]]:
+        """Extracts the verdict rendered for each committed hypothesis.
+
+        Returns a mapping of 1-based label to verdict, or None where the answer
+        rendered no verdict at all for that hypothesis.
+        """
+        verdicts: Dict[int, Optional[str]] = {}
+        alternatives = "|".join(HYPOTHESIS_VERDICTS)
+        for index in range(1, hypothesis_count + 1):
+            # The verdict must belong to THIS hypothesis: no other H<n> label may
+            # appear between the label and the verdict, otherwise a neighbouring
+            # hypothesis's verdict would satisfy this one. The scan spans lines
+            # because the audit is normally rendered as markdown, with the verdict
+            # on a nested bullet underneath the restated hypothesis rather than
+            # inline with it; a single-line scan silently marked every such answer
+            # as unresolved and sent a correctly audited answer back for rework.
+            pattern = rf"H{index}\b(?:(?!\bH\d)[\s\S]){{0,400}}?\b({alternatives})\b"
+            match = re.search(pattern, answer_text, re.IGNORECASE)
+            verdicts[index] = match.group(1).upper() if match else None
+        return verdicts
+
+    def _runtime_evidence_declarations(
+        self, answer_text: str, hypothesis_count: int
+    ) -> Dict[int, Optional[str]]:
+        """Extracts the runtime-evidence tier declared for each committed hypothesis.
+
+        Returns a mapping of 1-based label to declared tier, or None where the answer
+        made no declaration. As with verdicts, no other H<n> label may intervene
+        between the label and its declaration, so a neighbour's declaration cannot be
+        borrowed. Unlike verdicts the match may span lines, because the declaration is
+        normally written underneath the hypothesis rather than inline.
+        """
+        declarations: Dict[int, Optional[str]] = {}
+        alternatives = "|".join(RUNTIME_EVIDENCE_TIERS)
+        for index in range(1, hypothesis_count + 1):
+            pattern = (
+                rf"H{index}\b(?:(?!\bH\d)[\s\S]){{0,800}}?"
+                rf"RUNTIME_EVIDENCE\s*:\s*({alternatives})\b"
+            )
+            match = re.search(pattern, answer_text, re.IGNORECASE)
+            declarations[index] = match.group(1).upper() if match else None
+        return declarations
+
+    def _audit_violations(
+        self,
+        answer_text: str,
+        hypothesis_count: int,
+        hypothesis_subsystems: Optional[Dict[int, List[str]]] = None,
+        read_subsystems: Optional[set] = None,
+        obtained_evidence_tiers: Optional[set] = None,
+    ) -> List[str]:
+        """Returns the reasons an answer's hypothesis audit is unacceptable.
+
+        Four distinct failures are caught. First, a hypothesis left with no verdict:
+        the Actor raises a correct hypothesis during scoping and then abandons it.
+        Second, a non-discriminating audit: marking every hypothesis as a cause
+        excludes nothing and is as unfalsifiable as dropping them, so exactly one
+        must be ranked PRIMARY. Third, a decisive verdict on a subsystem whose source
+        was never read, which launders an assumption into an authoritative finding.
+        Fourth, a verdict on backend behavior that does not say whether it rests on
+        runtime logs or on reading the source. Arguing a backend cause from source
+        alone is legitimate and often unavoidable for an older incident, but it must
+        be labelled as such rather than narrated as an observation.
+        """
+        if hypothesis_count <= 0:
+            return []
+        verdicts = self._hypothesis_verdicts(answer_text, hypothesis_count)
+        violations: List[str] = []
+
+        missing = [index for index, verdict in verdicts.items() if verdict is None]
+        if missing:
+            violations.append(
+                f"No verdict given for {', '.join(f'H{i}' for i in missing)}. Every "
+                f"hypothesis needs one of: {', '.join(HYPOTHESIS_VERDICTS)}."
+            )
+
+        primaries = [index for index, verdict in verdicts.items() if verdict == "PRIMARY"]
+        if len(primaries) > 1:
+            violations.append(
+                f"{', '.join(f'H{i}' for i in primaries)} are all marked PRIMARY. Exactly one "
+                f"hypothesis may be PRIMARY; rank the others CONTRIBUTING or REFUTED."
+            )
+        elif not primaries and not missing:
+            violations.append(
+                "No hypothesis is marked PRIMARY. Identify which one is the root cause, or "
+                "mark it UNRESOLVED and state what evidence would settle it."
+            )
+
+        # A decisive verdict requires having looked. Grepping a directory is not
+        # examining it: the Actor refuted a backend hypothesis on the strength of a
+        # single search and zero file reads, asserting specific runtime behavior of
+        # code it never opened. UNRESOLVED remains available when it has not looked.
+        for index, verdict in verdicts.items():
+            if verdict not in ("PRIMARY", "REFUTED"):
+                continue
+            named = hypothesis_subsystems.get(index, []) if hypothesis_subsystems else []
+            unread = [s for s in named if s not in (read_subsystems or set())]
+            if unread:
+                violations.append(
+                    f"H{index} is marked {verdict} but you never read any source in "
+                    f"{', '.join(unread)}, which is the subsystem it is about. Read that code "
+                    f"before ruling on it, or mark H{index} UNRESOLVED."
+                )
+
+        # Backend conclusions must state their evidentiary basis. The tier itself is
+        # not constrained: NONE is acceptable and expected once an incident outlives
+        # its logs. What is rejected is leaving the basis unstated.
+        declarations = self._runtime_evidence_declarations(answer_text, hypothesis_count)
+        for index, verdict in verdicts.items():
+            if verdict is None or verdict == "UNRESOLVED":
+                continue
+            named = hypothesis_subsystems.get(index, []) if hypothesis_subsystems else []
+            backend = [s for s in named if s in BACKEND_SUBSYSTEMS]
+            if not backend:
+                continue
+            declared = declarations.get(index)
+            if declared is None:
+                violations.append(
+                    f"H{index} is marked {verdict} and concerns {', '.join(backend)}, whose "
+                    f"behavior is only visible at runtime, but it declares no evidence basis. "
+                    f"Add a line 'RUNTIME_EVIDENCE: "
+                    f"{' | '.join(RUNTIME_EVIDENCE_TIERS)}' to H{index}, using the tier "
+                    f"get_udmis_runtime_logs reported. NONE is acceptable: it states that the "
+                    f"logs proving this no longer exist and the mechanism is read from source."
+                )
+            elif declared == "NONE" and RUNTIME_EVIDENCE_NONE_QUALIFIER not in answer_text.lower():
+                violations.append(
+                    f"H{index} declares RUNTIME_EVIDENCE: NONE without its qualifier. Write "
+                    f"'RUNTIME_EVIDENCE: NONE ({RUNTIME_EVIDENCE_NONE_QUALIFIER})' so the "
+                    f"reader can tell this conclusion is read from the source rather than "
+                    f"observed in logs."
+                )
+            elif declared in ("LOCAL_FILE", "CLOUD") and declared not in (
+                obtained_evidence_tiers or set()
+            ):
+                # The declaration is checkable, so it is checked. A model that has
+                # read no logs will still narrate source analysis as observation if
+                # only a prompt forbids it.
+                obtained = (
+                    ", ".join(sorted(obtained_evidence_tiers))
+                    if obtained_evidence_tiers
+                    else "none"
+                )
+                violations.append(
+                    f"H{index} declares RUNTIME_EVIDENCE: {declared}, but no "
+                    f"get_udmis_runtime_logs call returned that tier during this "
+                    f"investigation (tiers actually obtained: {obtained}). Either cite the "
+                    f"log content you retrieved, or declare 'RUNTIME_EVIDENCE: NONE "
+                    f"({RUNTIME_EVIDENCE_NONE_QUALIFIER})'."
+                )
+        return violations
+
+    def _hypothesis_subsystems(
+        self, hypotheses: List[str], known_subsystems: List[str]
+    ) -> Dict[int, List[str]]:
+        """Maps each hypothesis to the contracted subsystems it explicitly names.
+
+        Matching is a literal word-boundary search for directory names the scoping
+        step already resolved against the repository, so no inference is involved.
+        """
+        mapping: Dict[int, List[str]] = {}
+        for index, text in enumerate(hypotheses, start=1):
+            named = [
+                subsystem
+                for subsystem in known_subsystems
+                if re.search(rf"\b{re.escape(subsystem)}\b", text, re.IGNORECASE)
+            ]
+            mapping[index] = named
+        return mapping
+
+
+
+    def _append_model_turn(self, contents, types, parts, emit) -> bool:
+        """Appends a model turn, refusing to replay one that carries no content.
+
+        A streamed turn can coalesce to nothing when the model emits only blank text
+        parts. Replaying that sends a Content with no parts, which Vertex rejects
+        outright ('must include at least one parts field'), aborting the run and
+        handing control to the fallback engine. The empty turn is dropped and
+        reported instead: history stays valid and the loop can continue.
+        """
+        usable = [part for part in parts if _part_carries_content(part)]
+        if not usable:
+            emit(
+                "\n[Mantis Warning] The model returned a turn with no usable content. "
+                "It is not being replayed as history.\n"
+            )
+            return False
+        contents.append(types.Content(role="model", parts=usable))
+        return True
+
     def _run_llm(
         self,
         prompt: str,
         context_mgr: Optional[ContextManager] = None,
         stream_callback: Optional[Callable[[str], None]] = None,
-        max_steps: int = 10,
+        max_steps: int = 30,
+        tier: Optional[ModelTier] = None,
+        enable_tripartite: Optional[bool] = None,
+        enable_scoping: Optional[bool] = None,
+        event_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
     ) -> str:
-        """Executes multi-step ReAct planning using google-genai SDK, token metrics, and dynamic tool execution."""
+        """Executes multi-step ReAct planning using google-genai SDK, token metrics, and dynamic tool execution.
+
+        When `event_callback` is supplied it receives structured records mirroring the
+        prose already written to `stream_callback`. A consumer gets the same facts
+        without pattern-matching strings like '[Mantis ReAct Step 3]', which would
+        break the moment that wording changed. Record `type` is one of:
+
+          phase        {"phase": SCOPING|ACTOR|CRITIC|ARBITRATOR}
+          hypotheses   {"hypotheses": [str]}            the plan's committed H1..Hn
+          tool_call    {"call_id", "tool", "args", "step"}
+          tool_result  {"call_id", "tool", "status", "output"}
+          audit        {"hypotheses": [{"label","hypothesis","verdict"}]}
+          metrics      {"duration_sec", "steps", "tool_calls", "tripartite_status"}
+
+        Emission is best-effort: a raising callback is logged and swallowed, because a
+        consumer's rendering bug must not abort an investigation that is already running.
+        """
         import time
         from google import genai  # type: ignore
         from google.genai import types  # type: ignore
@@ -463,10 +1159,21 @@ class MantisAgent:
 
         start_time = time.time()
         metrics = ExecutionMetrics()
+        tool_executions: List[Dict[str, Any]] = []
 
         def emit(text: str) -> None:
             if stream_callback:
                 stream_callback(text)
+
+        def notify(record_type: str, **fields: Any) -> None:
+            if not event_callback:
+                return
+            try:
+                event_callback({"type": record_type, **fields})
+            except Exception as callback_error:  # never let a consumer abort the run
+                logger.warning(
+                    "event_callback raised on %s record: %s", record_type, callback_error
+                )
 
         if self.client:
             client = self.client
@@ -488,13 +1195,46 @@ class MantisAgent:
 
 UDMI Architecture & Test Conventions:
 - **Site Model (`site_model`)**: ALWAYS a local directory path (e.g. `sites/udmi_site_model` or `sites/faucetsdn`), NEVER a URI starting with `//`. Default is `sites/udmi_site_model`.
-- **Target Spec (`target_spec`)**: Target cloud or broker connection spec (e.g. `//gbos/bos-platform-dev/faucetsdn`, `//gcp/project/registry`, `//mqtt/localhost:18833`).
+- **Target Spec (`target_spec`)**: Target cloud or broker connection spec:
+  * Direct MQTT: `//mqtt/<host>[:<port>][/<namespace>]` (e.g. `//mqtt/localhost:18833`).
+  * Cloud Reflector: `//gbos/<project_id>[/<namespace>]` (routes through ClearBlade / `UDMI-REFLECT` registry).
+  * Direct Pub/Sub Reflector: `//gref/<project_id>[/<namespace>]+<user_name>` (direct Google Cloud Pub/Sub route).
 - **Test Execution**: To run sequencer tests, call `run_sequencer_test(test_name=..., device_id=..., target_spec=..., site_model=...)`.
-- **Cloud vs Local**: Cloud endpoints (`//gbos/...`, `//gcp/...`, `//iotcore/...`) do NOT require `ensure_test_setup` (which is only for local Docker/tmux infrastructure). `run_sequencer_test` executes against remote cloud endpoints directly.
+- **Cloud vs Local**: Cloud endpoints (`//gbos/...`, `//gref/...`, `//iotcore/...`) do NOT require `ensure_test_setup` (which is only for local Docker/tmux infrastructure). `run_sequencer_test` executes against remote cloud endpoints directly.
+
+Investigation Strategy Guidelines:
+- **Answer "did the device respond?" first**: For any failing sequencer test, establish
+  before anything else whether the device under test published a message of its own
+  during the run. `extract_timeline` reports this as `device_responded`, with the payload
+  files it inspected. A device that sent nothing explains a timeout completely, and no
+  theory about schemas, cadence, or firmware can be evaluated until this is settled.
+  Note that `configAcked` is injected by the backend: a state payload containing only
+  that proves the backend spoke, not the device.
+- **Never guess the device's nature**: You cannot tell from run artifacts whether a
+  device is physical hardware or an emulator (pubber). Unplugged hardware and an
+  emulator that was never started are identical on the wire. Report what the evidence
+  shows -- that the device did not respond -- and give remediation that covers both.
+- **Absence of an error is not evidence of health**: A log records what was attempted.
+  A device that never connects produces no transport error, no authentication failure,
+  and no schema violation. Never write that a subsystem is healthy, reachable, or
+  authenticated because its errors are missing; say the hypothesis was not assessed and
+  name what would settle it.
+- **Read the logs before reading the source**: Run directories contain `sequence.log`,
+  `device_system.log`, and the message payloads. `search_codebase` reads `.log` files,
+  but does not descend into run-output directories unless you pass one as `path_prefix`;
+  it returns those it skipped in `skipped_artifact_dirs`. Source code shows what a
+  component was meant to do, not what it did.
+- **Generalizing Searches**: When diagnosing external errors, recognize that literal error strings from external systems may not exist in the local repository. Generalize searches to the underlying transport, messaging, and service layers using tools like `search_codebase` and `read_udmi_file`.
+- **RCA Reporting Standard**: When diagnosing complex multi-component or transport failures, structure the diagnosis using a comprehensive Root Cause Analysis (RCA) format:
+  1. TL;DR (Executive summary of root cause and impact)
+  2. What Happened (Systemic Root Causes: client vs backend/transport factors)
+  3. Event Timeline / Sequence (e.g. Mermaid sequence diagram tracing component interactions)
+  4. Actionable Resolutions & Proposed Fixes
+- **Hypothesis Formulation**: Always formulate an evidence-grounded hypothesis before concluding your investigation.
 
 Follow the mandatory 3-Phase Cognitive Diagnostic Cycle:
 1. Phase 1: Evidence Harvesting (Use tools to inspect schemas, site models, extract timelines with timestamps, transaction IDs RC:..., cutoff thresholds).
-2. Phase 2: Built-in Adversarial Self-Audit (evaluate Claim-by-Claim Verification Matrix with CONFIRMED, REFUTED, or UNVERIFIED ASSUMPTION, and invalidate rival hypotheses).
+2. Phase 2: Built-in Adversarial Self-Audit (evaluate Claim-by-Claim Verification Matrix with CONFIRMED, REFUTED, NOT ASSESSED, or UNVERIFIED ASSUMPTION, and invalidate rival hypotheses). REFUTED requires a positive observation that excludes the hypothesis; use NOT ASSESSED when nothing you found bears on it.
 3. Phase 3: Verified Synthesis (emit concise report format with Root Cause, Evidence, Fix, and optional Visual Diagrams).
 
 Visual Diagram Guidelines:
@@ -510,22 +1250,71 @@ You have access to domain tools to inspect the environment, execute tests, query
         else:
             contents = [types.Content(role="user", parts=[types.Part.from_text(text=prompt)])]
 
-        model_name = self.config.get_model_for_tier(ModelTier.PRO)
+        if tier is None:
+            tier = self.classify_intent_tier(prompt)
+        model_name = self.config.get_model_for_tier(tier)
+
+        thinking_cfg = None
+        if self.config.thinking_level:
+            thinking_cfg = types.ThinkingConfig(thinking_level=self.config.thinking_level)
+
         config = types.GenerateContentConfig(
             system_instruction=system_instruction,
             tools=genai_tools if genai_tools else None,
             temperature=0.2,
+            thinking_config=thinking_cfg,
+        )
+        # Tool access is withheld on the scoping step so the Actor cannot skip it.
+        scoping_config = types.GenerateContentConfig(
+            system_instruction=system_instruction,
+            temperature=0.2,
+            thinking_config=thinking_cfg,
         )
 
         final_answer = ""
 
+        # The Actor scopes the problem itself on its first step, with tools withheld. The
+        # resulting plan becomes a self-authored model turn rather than an instruction
+        # handed to it, which carries far more weight in later turns.
+        run_scoping = enable_scoping if enable_scoping is not None else (tier == ModelTier.PRO)
+        required_subsystems: List[str] = []
+        competing_hypotheses: List[str] = []
+        # The resolution gate fires at most once, so a model that cannot comply
+        # still terminates instead of looping against the same rejection.
+        hypothesis_gate_applied = False
+        # Same bound for the scoping gate: one rejection of a compound hypothesis,
+        # then the plan stands as written whether or not the rewrite complied.
+        scoping_gate_applied = False
+        rescope_pending = False
+        # Subsystems whose SOURCE was actually opened, tracked separately from those
+        # merely searched. A grep tells you a symbol exists; it does not let you rule
+        # on how that subsystem behaves.
+        read_subsystems: set = set()
+        hypothesis_subsystems: Dict[int, List[str]] = {}
+        # Runtime-evidence tiers the log tool actually returned. A declaration of
+        # LOCAL_FILE or CLOUD is only credible if one of these calls produced it.
+        obtained_evidence_tiers: set = set()
+        if run_scoping:
+            contents.append(types.Content(role="user", parts=[types.Part.from_text(text=SCOPING_DIRECTIVE)]))
+
+        # Subsystems the Actor has actually examined, derived from tool arguments.
+        examined_subsystems: set = set()
+
+        # Step 1: Actor Phase (ReAct exploration & tool execution)
         for step in range(max_steps):
             metrics.total_steps += 1
             metrics.api_calls_count += 1
 
-            step_text = ""
+            # The first step is the scoping turn and runs without tools. A plan that was
+            # sent back for rewrite re-enters the same turn under the same conditions.
+            is_scoping_step = run_scoping and (step == 0 or rescope_pending)
+            rescope_pending = False
+            step_config = scoping_config if is_scoping_step else config
+            notify("phase", phase="SCOPING" if is_scoping_step else "ACTOR", step=step + 1)
+
             function_calls = []
-            candidate_content = None
+            step_text = ""
+            raw_model_parts = []
 
             if hasattr(client.models, "generate_content_stream") and stream_callback:
                 try:
@@ -534,38 +1323,61 @@ You have access to domain tools to inspect the environment, execute tests, query
                         "generate_content_stream",
                         model=model_name,
                         contents=contents,
-                        config=config,
+                        config=step_config,
                     )
                     for chunk in stream:
-                        chunk_text = getattr(chunk, "text", "") or ""
+                        if getattr(chunk, "function_calls", None):
+                            function_calls.extend(chunk.function_calls)
+                        chunk_text = ""
+                        if getattr(chunk, "candidates", None) and chunk.candidates:
+                            content = chunk.candidates[0].content
+                            if content and getattr(content, "parts", None):
+                                for part in content.parts:
+                                    raw_model_parts.append(part)
+                                    if getattr(part, "text", None):
+                                        chunk_text += part.text
+                                    if getattr(part, "function_call", None) and not function_calls:
+                                        function_calls.append(part.function_call)
+                        if not chunk_text and getattr(chunk, "text", None):
+                            chunk_text = chunk.text or ""
                         if chunk_text:
                             emit(chunk_text)
                             step_text += chunk_text
-                        if getattr(chunk, "function_calls", None):
-                            function_calls.extend(chunk.function_calls)
-                        if getattr(chunk, "candidates", None) and chunk.candidates:
-                            candidate_content = chunk.candidates[0].content
                         if getattr(chunk, "usage_metadata", None):
                             um = chunk.usage_metadata
                             metrics.prompt_tokens = getattr(um, "prompt_token_count", metrics.prompt_tokens) or 0
                             metrics.candidates_tokens = getattr(um, "candidates_token_count", metrics.candidates_tokens) or 0
                             metrics.total_tokens = getattr(um, "total_token_count", metrics.total_tokens) or 0
-                except Exception:
+                except Exception as stream_err:
+                    # Report why streaming failed. Swallowing this silently hides real
+                    # request errors and makes the non-streaming retry look like the
+                    # origin of any subsequent failure.
+                    emit(f"\n[Mantis Warning] Streaming call failed ({type(stream_err).__name__}: "
+                         f"{stream_err}); retrying without streaming.\n")
+                    # The stream may have failed partway through, leaving fragments of an
+                    # incomplete response behind. The retry below returns the full response,
+                    # so discard the partial state instead of appending a second copy onto it.
+                    raw_model_parts = []
+                    function_calls = []
+                    step_text = ""
                     response = self._call_api_with_retry(
                         client.models,
                         "generate_content",
                         model=model_name,
                         contents=contents,
-                        config=config,
+                        config=step_config,
                     )
-                    candidate_content = None
                     if getattr(response, "candidates", None) and response.candidates:
-                        candidate_content = response.candidates[0].content
-                        if candidate_content and candidate_content.parts:
-                            for part in candidate_content.parts:
+                        content = response.candidates[0].content
+                        if content and getattr(content, "parts", None):
+                            raw_model_parts.extend(content.parts)
+                            for part in content.parts:
                                 if getattr(part, "text", None):
                                     step_text += part.text
-                    function_calls = getattr(response, "function_calls", None) or []
+                                if getattr(part, "function_call", None) and not function_calls:
+                                    function_calls.append(part.function_call)
+                    if not function_calls and getattr(response, "function_calls", None):
+                        function_calls.extend(response.function_calls)
                     if getattr(response, "usage_metadata", None):
                         um = response.usage_metadata
                         metrics.prompt_tokens += getattr(um, "prompt_token_count", 0) or 0
@@ -579,15 +1391,15 @@ You have access to domain tools to inspect the environment, execute tests, query
                     "generate_content",
                     model=model_name,
                     contents=contents,
-                    config=config,
+                    config=step_config,
                 )
                 step_text = ""
                 function_calls = getattr(response, "function_calls", None) or []
-                candidate_content = None
                 if getattr(response, "candidates", None) and response.candidates:
-                    candidate_content = response.candidates[0].content
-                    if candidate_content and candidate_content.parts:
-                        for part in candidate_content.parts:
+                    content = response.candidates[0].content
+                    if content and getattr(content, "parts", None):
+                        raw_model_parts.extend(content.parts)
+                        for part in content.parts:
                             if getattr(part, "text", None):
                                 step_text += part.text
                             if getattr(part, "function_call", None) and not function_calls:
@@ -602,37 +1414,215 @@ You have access to domain tools to inspect the environment, execute tests, query
                 if step_text and not function_calls:
                     emit(step_text)
 
+            if is_scoping_step:
+                plan_text = (step_text or "").strip()
+                if not plan_text:
+                    raise RuntimeError("Mantis Actor returned an empty scoping plan.")
+
+                # Record the plan as the Actor's OWN turn, so it reads as a self-authored
+                # commitment for the remainder of the investigation.
+                if raw_model_parts:
+                    contents.append(
+                        types.Content(role="model", parts=_coalesce_model_parts(raw_model_parts))
+                    )
+                else:
+                    contents.append(
+                        types.Content(role="model", parts=[types.Part.from_text(text=plan_text)])
+                    )
+
+                required_subsystems, rejected = self._resolve_required_subsystems(plan_text)
+                if rejected:
+                    emit(
+                        f"\n[Mantis Scoping] Ignoring subsystems absent from the repository: "
+                        f"{', '.join(rejected)}\n"
+                    )
+                if not required_subsystems:
+                    emit("\n[Mantis Scoping] No resolvable subsystems declared; coverage tracking disabled.\n")
+                else:
+                    emit(f"\n[Mantis Scoping] Contracted subsystems: {', '.join(required_subsystems)}\n")
+
+                competing_hypotheses = self._parse_competing_hypotheses(plan_text)
+                notify("hypotheses", hypotheses=list(competing_hypotheses))
+
+                # A hypothesis that asserts two mechanisms cannot be ranked as a unit:
+                # the better-evidenced half carries the other into its verdict, which is
+                # how a well-evidenced client defect promoted an unexamined backend claim
+                # to PRIMARY. Send the plan back once and require separate labels.
+                compound = {
+                    index: markers
+                    for index, text in enumerate(competing_hypotheses, start=1)
+                    if (markers := _compound_markers(text))
+                }
+                if compound and not scoping_gate_applied:
+                    scoping_gate_applied = True
+                    rescope_pending = True
+                    detail = "; ".join(
+                        "H{0} joins clauses with {1}".format(
+                            index, ", ".join(repr(marker) for marker in markers)
+                        )
+                        for index, markers in sorted(compound.items())
+                    )
+                    emit(
+                        f"\n[Mantis Scoping] Plan rejected: {detail}. "
+                        f"Rewriting hypotheses as one mechanism each.\n"
+                    )
+                    contents.append(
+                        types.Content(
+                            role="user",
+                            parts=[
+                                types.Part.from_text(
+                                    text=(
+                                        "[Orchestrator Directive — Scoping Rejected]\n"
+                                        f"{detail}.\n"
+                                        "A hypothesis joining two mechanisms cannot be ranked: "
+                                        "whichever half is better evidenced drags the other into "
+                                        "the verdict with it, so the audit decides nothing.\n"
+                                        "Re-emit the ENTIRE scoping structure, splitting each "
+                                        "compound hypothesis into separate labels that each "
+                                        "assert exactly one mechanism in one subsystem. Keep the "
+                                        "mechanisms you believe in; give them their own labels "
+                                        "and let the audit rank them independently. Tools remain "
+                                        "withheld for this turn."
+                                    )
+                                )
+                            ],
+                        )
+                    )
+                    continue
+
+                hypothesis_subsystems = self._hypothesis_subsystems(
+                    competing_hypotheses, required_subsystems
+                )
+                if competing_hypotheses:
+                    emit(
+                        f"[Mantis Scoping] Tracking {len(competing_hypotheses)} hypotheses; "
+                        f"each must be ranked ({', '.join(HYPOTHESIS_VERDICTS)}) with exactly "
+                        f"one PRIMARY before the answer is accepted.\n"
+                    )
+
+                contents.append(
+                    types.Content(
+                        role="user",
+                        parts=[
+                            types.Part.from_text(
+                                text=(
+                                    "[Orchestrator Notice] Scoping accepted. Tool access is now restored. "
+                                    "Begin the investigation and honor the plan you just committed to."
+                                )
+                            )
+                        ],
+                    )
+                )
+                continue
+
             if not function_calls:
-                # Terminal step: Model emitted final answer
+                # Terminal step: Model emitted final answer. Before accepting it,
+                # require a hypothesis audit that both accounts for every hypothesis
+                # the Actor authored during scoping AND discriminates between them.
+                # Two failure modes are guarded: silently abandoning the hypothesis
+                # that happens to be correct, and endorsing all of them at once so
+                # that nothing is actually excluded.
+                violations = (
+                    self._audit_violations(
+                        step_text,
+                        len(competing_hypotheses),
+                        hypothesis_subsystems,
+                        read_subsystems,
+                        obtained_evidence_tiers,
+                    )
+                    if competing_hypotheses and not hypothesis_gate_applied
+                    else []
+                )
+                if violations:
+                    hypothesis_gate_applied = True
+                    emit(
+                        "\n[Mantis Gate] Answer rejected. "
+                        + " ".join(violations)
+                        + "\n"
+                    )
+                    self._append_model_turn(
+                        contents,
+                        types,
+                        _coalesce_model_parts(raw_model_parts)
+                        if raw_model_parts
+                        else [types.Part.from_text(text=step_text)],
+                        emit,
+                    )
+                    committed = "\n".join(
+                        f"- H{i}: {text}"
+                        for i, text in enumerate(competing_hypotheses, start=1)
+                    )
+                    contents.append(
+                        types.Content(
+                            role="user",
+                            parts=[
+                                types.Part.from_text(
+                                    text=(
+                                        "[Orchestrator Notice] Your answer is not accepted yet.\n"
+                                        + "\n".join(f"- {v}" for v in violations)
+                                        + "\n\nThese are the hypotheses you committed to during "
+                                        f"scoping:\n{committed}\n\n"
+                                        "You still have tool access. Investigate what you need, then "
+                                        "reissue your COMPLETE final answer including a "
+                                        "'Hypothesis Resolution Audit' section that assigns each "
+                                        f"hypothesis exactly one of: {', '.join(HYPOTHESIS_VERDICTS)}. "
+                                        "Exactly one may be PRIMARY. Cite evidence that supports that "
+                                        "specific hypothesis: evidence that another hypothesis is true "
+                                        "does not confirm this one."
+                                    )
+                                )
+                            ],
+                        )
+                    )
+                    continue
+
                 final_answer = step_text
                 break
 
-            # Append model turn with function calls
-            if candidate_content:
-                contents.append(candidate_content)
+            # Append model turn with accumulated function calls and text, preserving thought_signature
+            if raw_model_parts:
+                self._append_model_turn(
+                    contents, types, _coalesce_model_parts(raw_model_parts), emit
+                )
             else:
                 model_parts = []
                 if step_text:
                     model_parts.append(types.Part.from_text(text=step_text))
                 for fc in function_calls:
                     model_parts.append(types.Part.from_function_call(name=fc.name, args=fc.args or {}))
-                contents.append(types.Content(role="model", parts=model_parts))
+                self._append_model_turn(contents, types, model_parts, emit)
 
             # Execute tool calls
             response_parts = []
-            tool_call_sigs = []
-            should_break = False
-
             for call in function_calls:
                 call_name = call.name
                 call_args = dict(call.args) if call.args else {}
                 metrics.tool_calls[call_name] = metrics.tool_calls.get(call_name, 0) + 1
+
+                # Record which repository subsystems this call actually touched, so the
+                # orchestrator can tell the Actor what it has not yet looked at.
+                for arg_key in ("path_prefix", "file_path"):
+                    arg_val = call_args.get(arg_key)
+                    if isinstance(arg_val, str) and arg_val.strip():
+                        top_dir = arg_val.strip().lstrip("/").split("/")[0]
+                        examined_subsystems.add(top_dir)
+                        if call_name == "read_udmi_file":
+                            read_subsystems.add(top_dir)
+
+                call_id = f"{step + 1}-{call_name}-{metrics.tool_calls[call_name]}"
                 emit(f"\n[Mantis ReAct Step {step+1}] Calling `{call_name}` with {json.dumps(call_args)}\n")
+                notify(
+                    "tool_call",
+                    call_id=call_id,
+                    tool=call_name,
+                    args=call_args,
+                    step=step + 1,
+                )
 
                 if call_name == "ensure_test_setup":
                     emit("  -> Provisioning local UDMI stack (starting Mosquitto, etcd, InfluxDB, PostgreSQL, UDMIS)...\n")
                 elif call_name == "run_sequencer_test":
-                    emit(f"  -> Launching sequencer test '{call_args.get('test_name')}' for {call_args.get('device_id', 'AHU-1')} against {call_args.get('target_spec', 'local')}...\n")
+                    emit(f"  -> Launching sequencer test '{call_args.get('test_name')}' for {call_args.get('device_id', 'unknown_device')} against {call_args.get('target_spec', 'local')}...\n")
                 elif call_name == "start_session_process":
                     emit(f"  -> Launching process in window '{call_args.get('window', 'sequencer')}'...\n")
 
@@ -645,6 +1635,30 @@ You have access to domain tools to inspect the environment, execute tests, query
                     )
                 except Exception as err:
                     tool_output = {"status": "ERROR", "error": str(err)}
+
+                tool_executions.append({"tool": call_name, "args": call_args, "output": tool_output})
+                notify(
+                    "tool_result",
+                    call_id=call_id,
+                    tool=call_name,
+                    status=(
+                        tool_output.get("status", "SUCCESS")
+                        if isinstance(tool_output, dict)
+                        else "SUCCESS"
+                    ),
+                    output=tool_output,
+                )
+
+                # Record the runtime-evidence tier actually delivered, so a later
+                # claim of log-backed evidence can be checked against what was
+                # retrieved instead of being taken at face value.
+                if (
+                    call_name == "get_udmis_runtime_logs"
+                    and isinstance(tool_output, dict)
+                    and tool_output.get("status") == "SUCCESS"
+                    and tool_output.get("tier")
+                ):
+                    obtained_evidence_tiers.add(tool_output["tier"])
 
                 if isinstance(tool_output, dict):
                     if tool_output.get("status") == "READY":
@@ -665,6 +1679,22 @@ You have access to domain tools to inspect the environment, execute tests, query
                         emit(f"  -> Tool execution error: {tool_output.get('error')}\n")
 
                 resp_payload = tool_output if isinstance(tool_output, dict) else {"result": tool_output}
+                try:
+                    payload_str = _strip_file_uri_scheme(json.dumps(resp_payload, default=str))
+                    max_payload_chars = 30000
+                    if len(payload_str) > max_payload_chars:
+                        resp_payload = {
+                            "status": resp_payload.get("status", "SUCCESS") if isinstance(resp_payload, dict) else "SUCCESS",
+                            "truncated": True,
+                            "warning": f"Tool output exceeded {max_payload_chars} characters and was truncated by MantisAgent safety cap.",
+                            "truncated_snippet": payload_str[:max_payload_chars],
+                        }
+                    else:
+                        # Re-materialise from the sanitized text so the payload actually
+                        # sent is the one that was cleaned, not the original object.
+                        resp_payload = json.loads(payload_str)
+                except Exception:
+                    pass
                 response_parts.append(
                     types.Part.from_function_response(
                         name=call_name,
@@ -672,18 +1702,377 @@ You have access to domain tools to inspect the environment, execute tests, query
                     )
                 )
 
+            # Step Budget Awareness: inform the model how much exploration budget remains
+            # so it can converge on an answer instead of being cut off mid-investigation.
+            # Also surface any contracted subsystem it has not yet touched, which is the
+            # dominant cause of prematurely narrow diagnoses.
+            #
+            # These notices are plain text and must NOT be mixed into the function-response
+            # turn: a turn carrying function_response parts may contain nothing else, and
+            # violating that gets the whole turn rejected, which makes the request look as
+            # though it ends on the preceding model turn.
+            notices = []
+            steps_remaining = max_steps - (step + 1)
+            # Coverage is measured by files actually READ, not by subsystems touched.
+            # A grep reports that a symbol exists; it does not show what the code does.
+            # Crediting a search as examination is what previously let the coverage
+            # notice fall silent while the Actor had opened nothing in the subsystem.
+            unread = [s for s in required_subsystems if s not in read_subsystems]
+            if unread:
+                searched_only = [s for s in unread if s in examined_subsystems]
+                untouched = [s for s in unread if s not in examined_subsystems]
+                detail = []
+                if searched_only:
+                    detail.append(
+                        f"you have searched {', '.join(searched_only)} but have not opened "
+                        f"any file there"
+                    )
+                if untouched:
+                    detail.append(f"you have not touched {', '.join(untouched)} at all")
+                notices.append(
+                    f"[Orchestrator Notice] Contract coverage gap: {'; '.join(detail)}. "
+                    f"Your scoping phase declared these subsystems as required. Searching is "
+                    f"not examining: search_codebase results do not count as coverage. Read the "
+                    f"relevant implementation files with read_udmi_file, or explicitly justify "
+                    f"why they are architecturally irrelevant."
+                )
+            if steps_remaining <= BUDGET_WARNING_THRESHOLD:
+                notices.append(
+                    f"[Orchestrator Notice] Exploration budget: {steps_remaining} tool step(s) remaining "
+                    f"out of {max_steps}. Prioritize converging on a conclusion. "
+                    f"When the budget reaches 0 you will be required to answer from the evidence already gathered, "
+                    f"with no further tool access."
+                )
+
             contents.append(types.Content(role="user", parts=response_parts))
+            if notices:
+                contents.append(
+                    types.Content(
+                        role="user",
+                        parts=[types.Part.from_text(text="\n".join(notices))],
+                    )
+                )
 
         if not final_answer:
-            final_answer = "Mantis reached maximum tool execution steps without completing synthesis."
+            # Budget exhausted while the model was still calling tools. Force a terminal
+            # synthesis turn with tools disabled so the model must produce a real answer
+            # grounded in the evidence it already collected.
+            emit(
+                f"\n[Mantis Actor] Exploration budget ({max_steps} steps) exhausted. "
+                f"Forcing synthesis from collected evidence...\n"
+            )
+            synthesis_config = types.GenerateContentConfig(
+                system_instruction=system_instruction,
+                temperature=0.2,
+            )
+            # The resolution requirement must survive budget exhaustion. Without this
+            # the Actor can burn its whole budget and then answer through a path that
+            # never has to account for the hypotheses it committed to.
+            synthesis_directive = (
+                "[Orchestrator Directive] Your exploration budget is exhausted and tool access is "
+                "now revoked. You MUST now answer the user's original inquiry directly and completely, "
+                "using only the evidence already gathered above. Do not request further tools. "
+                "State clearly which conclusions are firmly grounded in the evidence and which remain "
+                "unverified hypotheses requiring follow-up."
+            )
+            if competing_hypotheses:
+                committed = "\n".join(
+                    f"- H{i}: {text}" for i, text in enumerate(competing_hypotheses, start=1)
+                )
+                synthesis_directive += (
+                    "\n\nYour answer MUST include a 'Hypothesis Resolution Audit' section "
+                    f"resolving every hypothesis you committed to during scoping:\n{committed}\n"
+                    f"Assign each one exactly one of: {', '.join(HYPOTHESIS_VERDICTS)}. "
+                    "EXACTLY ONE may be PRIMARY. Cite the evidence behind each verdict, and cite "
+                    "evidence that supports that specific hypothesis rather than a different one. "
+                    "If your evidence cannot decide, mark it UNRESOLVED and state exactly what "
+                    "evidence would settle it. Do not omit a hypothesis."
+                )
+                never_read = sorted(
+                    {
+                        subsystem
+                        for subsystems in hypothesis_subsystems.values()
+                        for subsystem in subsystems
+                        if subsystem not in read_subsystems
+                    }
+                )
+                if never_read:
+                    # Tools are already revoked here, so demanding a decisive verdict on
+                    # unexamined code would only invite an invented one.
+                    synthesis_directive += (
+                        f"\n\nYou never read any source in: {', '.join(never_read)}. Any "
+                        "hypothesis about those subsystems must be marked UNRESOLVED. Do not "
+                        "assert how code you did not read behaves."
+                    )
+                backend_named = sorted(
+                    {
+                        subsystem
+                        for subsystems in hypothesis_subsystems.values()
+                        for subsystem in subsystems
+                        if subsystem in BACKEND_SUBSYSTEMS
+                    }
+                )
+                if backend_named:
+                    if obtained_evidence_tiers:
+                        obtained_clause = (
+                            f"During this investigation get_udmis_runtime_logs returned only: "
+                            f"{', '.join(sorted(obtained_evidence_tiers))}. No other tier may be "
+                            f"declared."
+                        )
+                    else:
+                        obtained_clause = (
+                            "You obtained no runtime logs during this investigation, so the only "
+                            f"declaration available is 'RUNTIME_EVIDENCE: NONE "
+                            f"({RUNTIME_EVIDENCE_NONE_QUALIFIER})'."
+                        )
+                    synthesis_directive += (
+                        f"\n\nHypotheses about {', '.join(backend_named)} concern runtime "
+                        "behavior, so each must carry its own line stating the basis of its "
+                        f"verdict: 'RUNTIME_EVIDENCE: {' | '.join(RUNTIME_EVIDENCE_TIERS)}'. "
+                        f"{obtained_clause} Declaring NONE is an acceptable basis for a verdict, "
+                        "but it must be stated rather than implied. Do not describe source "
+                        "analysis as though it were an observation of runtime behavior."
+                    )
+            contents.append(
+                types.Content(
+                    role="user",
+                    parts=[types.Part.from_text(text=synthesis_directive)],
+                )
+            )
+            metrics.api_calls_count += 1
+            synthesis_resp = self._call_api_with_retry(
+                client.models,
+                "generate_content",
+                model=model_name,
+                contents=contents,
+                config=synthesis_config,
+            )
+            final_answer = getattr(synthesis_resp, "text", "") or ""
+            if getattr(synthesis_resp, "usage_metadata", None):
+                um = synthesis_resp.usage_metadata
+                metrics.prompt_tokens += getattr(um, "prompt_token_count", 0) or 0
+                metrics.candidates_tokens += getattr(um, "candidates_token_count", 0) or 0
+                metrics.total_tokens += getattr(um, "total_token_count", 0) or 0
+            if not final_answer.strip():
+                raise RuntimeError(
+                    f"Mantis Actor failed to produce an answer after {max_steps} exploration steps "
+                    f"and a forced synthesis turn. Collected {len(tool_executions)} tool execution(s)."
+                )
             emit(final_answer)
+
+        # ----------------------------------------------------------------------
+        # Tripartite Loop: Critic -> Arbitrator
+        # ----------------------------------------------------------------------
+        actor_answer = final_answer
+        run_tripartite = False
+        if enable_tripartite is True:
+            run_tripartite = True
+        elif enable_tripartite is None and tier == ModelTier.PRO:
+            if hasattr(client, "models") and hasattr(client.models, "responses"):
+                if len(client.models.responses) >= 2:
+                    run_tripartite = True
+            elif self.client is not None:
+                run_tripartite = False
+            else:
+                run_tripartite = True
+
+        if run_tripartite:
+            notify("phase", phase="CRITIC")
+            emit("\n[Mantis Critic] Initiating adversarial audit against UDMI codebase & schemas...\n")
+            pro_model_name = self.config.get_model_for_tier(ModelTier.PRO)
+
+            # 1. Critic Step
+            def _format_snippet(output_obj: Any) -> str:
+                s = str(output_obj)
+                if len(s) > 600:
+                    return s[:600] + f" ...[truncated {len(s) - 600} chars]"
+                return s
+
+            critic_summary = json.dumps(
+                [{"tool": e["tool"], "args": e["args"], "output_snippet": _format_snippet(e["output"])} for e in tool_executions],
+                indent=2,
+            )
+            critic_instruction = (
+                "You are the Mantis Critic. Your role is an adversarial, hyper-rigorous audit of the Actor's findings.\n"
+                "The UDMI codebase, schemas, and specifications are the Single Source of Truth (SSoT).\n"
+                "Audit the Actor's response against the tool evidence and UDMI specifications.\n"
+                "If the Actor produced a 'Hypothesis Resolution Audit', scrutinize each verdict "
+                "against the evidence cited FOR THAT HYPOTHESIS. A verdict is unsound when the "
+                "evidence actually supports a different hypothesis, when a hypothesis is ranked "
+                "PRIMARY on evidence that does not establish causation, or when a hypothesis is "
+                "marked REFUTED without evidence that excludes it. Report every such mismatch.\n"
+                "Backend hypotheses carry a 'RUNTIME_EVIDENCE:' declaration. Check it against "
+                "the tool evidence: a hypothesis declaring LOCAL_FILE or CLOUD must cite actual "
+                "log content, and one declaring NONE must not be narrated as though the behavior "
+                "was observed. A sound conclusion read from source is acceptable; describing an "
+                "inference as an observation is not.\n"
+                "Provide your critical audit in this format:\n"
+                "- Verified Claims: ...\n"
+                "- Unverified / Refuted Claims: ...\n"
+                "- Unsound Hypothesis Verdicts: ...\n"
+                "- Missing Context / Omissions: ...\n"
+                "- Recommendation for Arbitrator: ..."
+            )
+            critic_user = (
+                f"User Inquiry: {prompt}\n\n"
+                f"Actor's Proposed Response:\n{actor_answer}\n\n"
+                f"Empirical Tool Evidence Collected by Actor:\n{critic_summary}"
+            )
+            critic_config = types.GenerateContentConfig(
+                system_instruction=critic_instruction,
+                temperature=0.1,
+            )
+            critic_contents = [types.Content(role="user", parts=[types.Part.from_text(text=critic_user)])]
+
+            try:
+                metrics.api_calls_count += 1
+                critic_resp = self._call_api_with_retry(
+                    client.models,
+                    "generate_content",
+                    model=pro_model_name,
+                    contents=critic_contents,
+                    config=critic_config,
+                )
+                critic_text = getattr(critic_resp, "text", "") or ""
+                emit(f"\n[Mantis Critic Audit]\n{critic_text}\n")
+            except Exception as e:
+                logger.error(f"Critic audit failed: {e}")
+                critic_text = f"Critic audit skipped due to execution error: {e}"
+                metrics.tripartite_degraded = True
+                metrics.tripartite_status = "CRITIC_FAILED"
+
+            # 2. Arbitrator Step
+            notify("phase", phase="ARBITRATOR")
+            emit("\n[Mantis Arbitrator] Synthesizing verified final response...\n")
+            arbitrator_instruction = (
+                "You are the Mantis Arbitrator, the final authoritative voice of Mantis.\n"
+                "You evaluate the Actor's findings and the Critic's adversarial audit to produce the final, definitive response.\n"
+                "Tasks:\n"
+                "1. Reconcile any discrepancies between Actor and Critic.\n"
+                "2. Eliminate any ungrounded assumptions or incorrect claims.\n"
+                "3. Synthesize the final, verified, polished response to the user.\n"
+                "4. Preserve the Actor's 'Hypothesis Resolution Audit' as a section of your response.\n"
+                "   Keep every hypothesis, its verdict, its 'RUNTIME_EVIDENCE:' declaration, and the\n"
+                "   evidence cited. You may correct a verdict the Critic showed to be wrong, but you\n"
+                "   may not drop the section, omit a hypothesis, or remove a declaration: together\n"
+                "   they are the record of what was ruled out, why, and on what basis.\n"
+                "5. Autonomous Visualization: Decide if a diagram would substantially improve clarity:\n"
+                "   - If explaining network topology, architecture, or gateway-device relationships: Include a Graphviz DOT diagram (```dot ... ```) and/or Mermaid (```mermaid ... ```).\n"
+                "   - If explaining message sequences, state transitions, or transaction timelines: Include a Mermaid sequenceDiagram (```mermaid ... ```) and/or Graphviz DOT (```dot ... ```).\n"
+                "   - If a diagram is not helpful, do not include one."
+            )
+            arbitrator_user = (
+                f"User Inquiry: {prompt}\n\n"
+                f"Actor's Response:\n{actor_answer}\n\n"
+                f"Critic's Audit:\n{critic_text}\n\n"
+                "Produce the definitive, verified response, retaining the Hypothesis "
+                "Resolution Audit section."
+            )
+            arbitrator_config = types.GenerateContentConfig(
+                system_instruction=arbitrator_instruction,
+                temperature=0.2,
+            )
+            arbitrator_contents = [types.Content(role="user", parts=[types.Part.from_text(text=arbitrator_user)])]
+
+            try:
+                metrics.api_calls_count += 1
+                arbitrator_resp = self._call_api_with_retry(
+                    client.models,
+                    "generate_content",
+                    model=pro_model_name,
+                    contents=arbitrator_contents,
+                    config=arbitrator_config,
+                )
+                arbitrator_text = getattr(arbitrator_resp, "text", "") or ""
+                if competing_hypotheses and arbitrator_text:
+                    arb_violations = self._audit_violations(
+                        answer_text=arbitrator_text,
+                        hypothesis_count=len(competing_hypotheses),
+                        hypothesis_subsystems=hypothesis_subsystems,
+                        read_subsystems=read_subsystems,
+                        obtained_evidence_tiers=obtained_evidence_tiers,
+                    )
+                    if arb_violations:
+                        logger.warning(
+                            "Arbitrator output violated hypothesis audit rules: %s. Falling back to verified Actor answer.",
+                            arb_violations,
+                        )
+                        emit(
+                            f"\n[Mantis Arbitrator Warning: Output failed audit gates ({'; '.join(arb_violations)}); falling back to Actor answer]\n"
+                        )
+                        metrics.tripartite_degraded = True
+                        metrics.tripartite_status = "ARBITRATOR_GATE_VIOLATION"
+                        final_answer = actor_answer
+                    else:
+                        final_answer = arbitrator_text
+                else:
+                    final_answer = arbitrator_text or actor_answer
+            except Exception as e:
+                logger.error(f"Arbitrator failed to synthesize final answer: {e}")
+                emit(f"\n[Mantis Arbitrator Error: {e}; falling back to Actor answer]\n")
+                metrics.tripartite_degraded = True
+                metrics.tripartite_status = "ARBITRATOR_FAILED"
+                final_answer = actor_answer
 
         metrics.total_duration_sec = round(time.time() - start_time, 3)
         if context_mgr:
             context_mgr.context.metrics = metrics
             context_mgr.save_context()
 
+        # The audit is reported from the answer that is actually being returned, so a
+        # consumer never renders verdicts belonging to a draft that was discarded at
+        # an arbitrator gate. A hypothesis the answer left unranked is reported with a
+        # null verdict rather than being dropped or defaulted to a verdict nobody gave.
+        if competing_hypotheses:
+            resolved = self._hypothesis_verdicts(final_answer, len(competing_hypotheses))
+            notify(
+                "audit",
+                hypotheses=[
+                    {
+                        "label": f"H{index}",
+                        "hypothesis": text,
+                        "verdict": resolved.get(index),
+                    }
+                    for index, text in enumerate(competing_hypotheses, start=1)
+                ],
+            )
+
+        notify(
+            "metrics",
+            duration_sec=metrics.total_duration_sec,
+            steps=metrics.total_steps,
+            tool_calls=dict(metrics.tool_calls),
+            tripartite_status=getattr(metrics, "tripartite_status", None),
+        )
+
         return final_answer
+
+    def run_tripartite(
+        self,
+        prompt: str,
+        context: Optional[SessionContext] = None,
+        stream_callback: Optional[Callable[[str], None]] = None,
+    ) -> Dict[str, Any]:
+        """Explicitly executes the full Actor -> Critic -> Arbitrator tripartite loop and returns all stage outputs."""
+        if context is not None:
+            ctx_mgr = ContextManager(context=context, udmi_root=self.udmi_root)
+        else:
+            ctx_mgr = ContextManager(udmi_root=self.udmi_root)
+
+        final_text = self._run_llm(
+            prompt=prompt,
+            context_mgr=ctx_mgr,
+            stream_callback=stream_callback,
+            tier=ModelTier.PRO,
+            enable_tripartite=True,
+        )
+        status = "DEGRADED" if (ctx_mgr.context.metrics and getattr(ctx_mgr.context.metrics, "tripartite_degraded", False)) else "SUCCESS"
+        return {
+            "status": status,
+            "prompt": prompt,
+            "final_answer": final_text,
+            "metrics": ctx_mgr.context.metrics,
+        }
 
     # --------------------------------------------------------------------------
     # Helper Utilities
@@ -697,8 +2086,8 @@ You have access to domain tools to inspect the environment, execute tests, query
 
         manifest = ingest_res.get("manifest", {})
         site = manifest.get("site_name", "sites/udmi_site_model")
-        device = manifest.get("device_id", "AHU-1")
-        test = manifest.get("failed_test", "pointset_publish")
+        device = manifest.get("device_id") or "UNKNOWN_DEVICE"
+        test = manifest.get("failed_test") or "UNKNOWN_TEST"
 
         diag = self.diagnose_test_failure(
             test_id=test,
@@ -711,7 +2100,74 @@ You have access to domain tools to inspect the environment, execute tests, query
     def _extract_word(self, text: str, pattern: str, default: Optional[str] = None) -> Any:
         m = re.search(pattern, text, re.IGNORECASE)
         if m:
-            val = m.group(1).strip()
-            if val.lower() not in ("for", "with", "on", "at", "to", "in", "the", "a", "an", "of", "and", "is", "by", "from"):
+            val = (m.group(1) or (m.group(2) if len(m.groups()) >= 2 else None) or "").strip()
+            if val and val.lower() not in (
+                "for", "with", "on", "at", "to", "in", "the", "a", "an", "of", "and", "is",
+                "by", "from", "me", "us", "it", "them", "him", "her", "localhost", "cloud",
+                "broker", "server", "monday", "tuesday", "wednesday", "thursday", "friday",
+                "saturday", "sunday", "today", "yesterday", "tomorrow"
+            ):
                 return val
         return default
+
+    def _parse_patch_data(self, query: str) -> Dict[str, Any]:
+        """Robustly parses configuration patch fields from user instructions."""
+        # 1. Direct JSON payload in query
+        first_brace = query.find("{")
+        last_brace = query.rfind("}")
+        if first_brace != -1 and last_brace > first_brace:
+            try:
+                data = json.loads(query[first_brace : last_brace + 1])
+                if isinstance(data, dict):
+                    return data
+            except Exception:
+                pass
+
+        patch_data: Dict[str, Any] = {}
+
+        # 2. nostate flag
+        if "nostate" in query.lower():
+            patch_data.setdefault("testing", {})["nostate"] = True
+
+        # 3. Known shortcuts
+        sr_match = re.search(r"sample_rate_sec\s*(?:to|=)?\s*([0-9]+)", query, re.IGNORECASE)
+        if sr_match:
+            patch_data.setdefault("pointset", {})["sample_rate_sec"] = int(sr_match.group(1))
+
+        proxy_match = re.search(r"(?:proxy_id|gateway_id)\s*(?:to|=)?\s*['\"]?([A-Za-z0-9_-]+)['\"]?", query, re.IGNORECASE)
+        if proxy_match:
+            patch_data.setdefault("gateway", {})["gateway_id"] = proxy_match.group(1)
+
+        min_log_match = re.search(r"(?:min_loglevel|min_log_level|loglevel)\s*(?:to|=)?\s*([0-9]+)", query, re.IGNORECASE)
+        if min_log_match:
+            patch_data.setdefault("system", {})["min_loglevel"] = int(min_log_match.group(1))
+
+        # 4. General dot-notation or key-value assignments (e.g. "set system.min_loglevel to 200")
+        kv_matches = re.finditer(r"(?:set|patch|update)?\s*([a-zA-Z0-9_\.]+)\s*(?:to|=)\s*['\"]?([^'\"\s,;]+)['\"]?", query, re.IGNORECASE)
+        for m in kv_matches:
+            key_path = m.group(1).strip()
+            raw_val = m.group(2).strip()
+            if key_path.lower() in ("device", "for", "in", "site", "site_model"):
+                continue
+
+            val: Any = raw_val
+            if raw_val.lower() == "true":
+                val = True
+            elif raw_val.lower() == "false":
+                val = False
+            elif raw_val.isdigit():
+                val = int(raw_val)
+            else:
+                try:
+                    val = float(raw_val)
+                except ValueError:
+                    val = raw_val
+
+            # Build nested dict from dot-path
+            parts = key_path.split(".")
+            curr = patch_data
+            for p in parts[:-1]:
+                curr = curr.setdefault(p, {})
+            curr[parts[-1]] = val
+
+        return patch_data

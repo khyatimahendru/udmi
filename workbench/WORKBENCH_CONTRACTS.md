@@ -103,16 +103,103 @@ Workbench is structured as a route-driven application where every view and capab
 
 | URL Route | Primary Persona | Purpose & Capabilities |
 | :--- | :--- | :--- |
-| **`/assistant`** | Developer / Operator / Curator | **General UDMI Assistant & Q&A Workspace**: Open-ended exploration, schema queries (`configAcked`), specification navigation, and architectural guidance. Supports deep links such as `/assistant?q=What+is+configAcked+in+state`. |
-| **`/triage/:sessionId`** | Device Developer | **Diagnostic Investigation Workspace**: Deep-dive failure triage for a specific test run, hypothesis evaluation, and remediation diffs. |
-| **`/testbed`** | Test Lab Operator | **Testbed & Cadre Control**: Local/cloud stack lifecycle (Mosquitto, etcd, PostgreSQL, InfluxDB, UDMIS, ATN) and live tmux consoles. |
+| **`/sequencer`** | Device Developer / Test Lab Operator | **Sequencer Execution & Testbed Workspace**: Execute UDMI compliance sequences, inspect artifacts (`RESULT.log`, `sequence.md`, `sequence.png`), filter tests by minimum stage and result status, and manage the local test substrate via the integrated right-hand **Local Test Setup Drawer**. Supports direct one-click Mantis failure triage. |
+| **`/devices`** (or `/devices/:deviceId`) | Developer / Curator | **Device Explorer**: Inspect device metadata, pointsets, gateway bindings, and raw telemetry trace payloads. |
+| **`/assistant`** | Developer / Operator / Curator | **Mantis Shrimp AI Reasoning Workspace**: Conversational domain expert and automated failure triage. Automatically consumes failed test context from `/sequencer`, evaluates the 9-hypothesis diagnostic matrix, and suggests remediations. Includes `← Back to Sequencer` breadcrumbs. Supports deep links such as `/assistant?q=What+is+configAcked+in+state`. |
+| **`/diagnostics`** | Operator / Developer | **System Telemetry & Diagnostics**: Real-time diagnostic ring buffer, structured log stream, and system health status. |
 | **`/compliance`** | Ecosystem Curator / Operator | **Compliance Matrix Dashboard**: Device x Test grid, flakiness index, pass/fail KPIs, and certification status. |
-| **`/devices/:deviceId`** | Developer / Curator | **Device Explorer**: Device metadata, points list, gateway bindings, and message traces. |
 | **`/catalog`** | Ecosystem Curator | **Certified Device Catalog**: Curated menu of approved, certified IoT devices for production installations. |
 
 #### Dual Interaction Modalities for Mantis
 1. **Dedicated Workspace (`/assistant`)**: Full-page interactive workspace for deep architectural queries, specification review, and open-ended exploration.
-2. **Global Contextual Drawer (`Cmd+K` / `Ctrl+K`)**: Persistent slide-out drawer accessible from any route. When opened from a specific view (e.g. `/devices/AHU-1` or `/compliance`), Mantis automatically inherits that view's active context while maintaining uninterrupted streaming.
+2. **Direct Failure Triage Action**: One-click `[🔍 Diagnose with Mantis]` action directly on failed test rows in `/sequencer` and within the Artifact Viewer modal, automatically passing failure context (`site_model`, `device_id`, `test_id`) into Mantis and navigating to `/assistant` with a return breadcrumb.
+3. **Global Contextual Drawer (`Cmd+K` / `Ctrl+K`)**: Persistent slide-out drawer accessible from any route, inheriting the active view's context.
+
+---
+
+### 3.2. Local Test Setup Drawer (Sequencer Screen Integration)
+
+To eliminate the need for test operators to switch between terminal windows and the browser, Workbench integrates a persistent, collapsible **Local Test Setup Drawer** directly docked to the right side of the `/sequencer` tab.
+
+```
+┌───────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ Sequencer Workspace (/sequencer)                                       │ [Local Setup Drawer]     │
+│ ┌────────────────────────────────────────────────────────────────────┐ │ ┌───────────────────────┐│
+│ │ Run Configuration (Site Model, Device, Target Spec)                │ │ │ [Start] [Stop] [Restart││
+│ ├────────────────────────────────────────────────────────────────────┤ │ ├───────────────────────┤│
+│ │ Filter Bar [Min Stage: STABLE ▼] [All] [None] [Pass] [Skip] [Fail] │ │ │ Topology Graph        ││
+│ ├────────────────────────────────────────────────────────────────────┤ │ │  [DUT / Pubber]       ││
+│ │ Sequences Table                                                    │ │ │        │ (MQTT:18833) ││
+│ │ ┌───────────────────────┬────────┬──────────┬────────────────────┐ │ │ │        ▼              ││
+│ │ │ Test Name             │ Stage  │ Status   │ Actions            │ │ │ │  [Mosquitto Broker]   ││
+│ │ ├───────────────────────┼────────┼──────────┼────────────────────┤ │ │ │        │ (Reflective) ││
+│ │ │ pointset_publish      │ STABLE │ PASSED   │ [View Artifacts]   │ │ │ │        ▼              ││
+│ │ │ system_last_start     │ STABLE │ FAILED   │ [🔍 Mantis Triage] │ │ │ │  [Local UDMIS Pod]    ││
+│ │ └───────────────────────┴────────┴──────────┴────────────────────┘ │ │ │        │ (KV State)   ││
+│ ├────────────────────────────────────────────────────────────────────┤ │ │        ▼              ││
+│ │ Live Execution Logs Console (SSE stream)                           │ │ │  [etcd State Store]   ││
+│ └────────────────────────────────────────────────────────────────────┘ │ └───────────────────────┘│
+└───────────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### 3.2.1. Drawer Affordance & Behavior
+- **Trigger**: An action button in the Sequencer header/toolbar (`[🖥️ Local Setup]`) with an integrated live health status dot (🟢 All UP, 🟡 Initializing/Partial, ⚪ Stopped, 🔴 Error). Also toggled via shortcut `Cmd+Shift+L` / `Ctrl+Shift+L`.
+- **Slide-out Animation & Layout**: Smooth CSS transform transition from the right edge, overlaying or resizing the Sequencer table without unmounting any DOM components or interrupting active test runs.
+- **State Persistence**: Drawer state (`open` / `closed`) is persisted in `localStorage` (`udmi_testbed_drawer_open`).
+
+#### 3.2.2. Interactive Topology Graph
+The drawer hosts an interactive SVG/HTML canvas that visually displays the active local infrastructure components and their data connections:
+- **Topology Nodes**:
+  1. **Device Under Test (DUT)**:
+     - Represents the active device selected in the Sequencer (`activeDevice`).
+     - **Mode Switch**: Toggle button between **Simulated Pubber** (runs local `bin/pubber`) and **Physical Device** (hardware connected over network/Wi-Fi).
+     - Live indicator: `UP` (running/connected), `DOWN` (stopped), `TESTING` (active test in progress).
+  2. **Local MQTT Broker (Mosquitto)**:
+     - Runs on unprivileged user-space port `18833` (`//mqtt/localhost:18833`).
+     - Live indicator: `UP` (TCP socket 18833 open and accepting connections), `DOWN` (port closed).
+  3. **Local UDMIS (UDMI Service Pod)**:
+     - Local message processing pipeline executing reflective mapping, state synchronization, and schema validation.
+     - Live indicator: `UP` (PID active + `var/pod_ready.txt` sentinel verified), `INITIALIZING` (PID active, awaiting pod ready), `DOWN` (inactive).
+  4. **etcd State Store**:
+     - Local key-value store maintaining dynamic device state and site registry metadata on unprivileged port (`2379` / `35951`).
+     - Live indicator: `UP` (socket open/responding), `DOWN` (stopped).
+- **Logical Flow Edges**:
+  - `DUT -> MQTT Broker`: MQTT Telemetry (`events/*`) and State (`state`) via QoS 1.
+  - `MQTT Broker -> UDMIS`: Reflective ingest and event routing.
+  - `UDMIS -> etcd`: Key-value state persistence and metadata lookups.
+  - `UDMIS -> MQTT Broker -> DUT`: Target configuration writeback (`config`) and system commands.
+
+#### 3.2.3. Component Health Probes & Status State Machine
+Components transition through strict, deterministic states:
+- `UP`: Process running and socket/readiness sentinel confirmed.
+- `INITIALIZING`: Process launched; awaiting socket binding or sentinel creation (maximum 90s startup timeout per project standard).
+- `DOWN`: Component stopped, process terminated, port released.
+- `ERROR`: Component crashed, port collision, or health probe timeout.
+
+**Probe Implementations**:
+- **Mosquitto**: Non-blocking TCP socket check against `localhost:18833`.
+- **UDMIS**: Detection of active UDMIS process and existence of `var/pod_ready.txt` sentinel.
+- **etcd**: Non-blocking TCP socket check against etcd client port.
+- **Pubber**: Process check (`pgrep -f pubber`) and verification that the PID matches the active device ID.
+
+#### 3.2.4. Lifecycle Control Actions
+- **Start Local Setup**:
+  - Invokes `POST /api/testbed/start` with payload `{"site_model": "<active_site_model>", "project_spec": "//mqtt/localhost:18833"}`.
+  - Executes `bin/udmi start` using unprivileged ports.
+  - Automatically updates the Sequencer's `projectSpec` input to `//mqtt/localhost:18833`.
+  - Sets component statuses to `INITIALIZING`, streaming startup progress until `UUFI Service is READY`.
+- **Stop Local Setup**:
+  - Invokes `POST /api/testbed/stop`.
+  - Executes `bin/udmi stop`, terminating tmux sessions, killing background processes, and updating node states to `DOWN`.
+- **Restart (Clean Slate)**:
+  - Invokes `POST /api/testbed/restart`.
+  - Executes `bin/udmi restart`, purging stale ephemeral state (`var/`), clearing cached keys, and launching clean services.
+- **Pubber Emulator Launcher / Toggle**:
+  - When in Pubber mode, enables starting and stopping simulated device instances:
+    - Launch: `POST /api/testbed/pubber/start` (`bin/pubber <site_model> //mqtt/localhost:18833 <device_id> <serial_no>`).
+    - Terminate: `POST /api/testbed/pubber/stop`.
+- **Setup Logs Viewer**:
+  - Embedded collapsible log console within the drawer allowing operators to inspect startup logs, Mosquitto traffic, UDMIS pipeline logs, and Pubber output.
 
 ---
 
@@ -164,6 +251,16 @@ Workbench is structured as a route-driven application where every view and capab
   * **Args**: `{"schema_name": "pointset", "resolve_refs": true}`
   * **Output**: JSON Schema definitions with resolved `$ref` pointers.
 
+##### Custom Site Model Roots & Allow-Listing Contract
+Site models may reside outside the UDMI root directory. To respect user security and privacy, custom directories require explicit user consent via the UI consent modal and are recorded in local storage and backend state:
+* **`GET /api/site-roots`**: Returns list of approved root paths and discovered site models.
+* **`POST /api/site-roots/register`**: Registers an allow-listed root path (`{"path": "/path/to/sites"}`).
+* **`POST /api/site-roots/delete`**: Revokes an allow-listed root path.
+* **Dual Site Model Directory Convention**:
+  - **Standard Root**: `<site_dir>/cloud_iot_config.json` (e.g. `sites/udmi_site_model`).
+  - **Subdirectory Convention**: `<site_dir>/udmi/cloud_iot_config.json` (e.g. `UK-LON-GLAB/udmi/cloud_iot_config.json`).
+  - **Canonical Display Name**: When `<site_dir>/udmi/cloud_iot_config.json` is discovered, the UI and API display the parent directory (`UK-LON-GLAB`), rejecting the generic inner name `udmi`.
+
 #### D. Visualizations (Developer & Curator)
 * **`generate_topology_diagram`**:
   * **Args**: `{"site_model": "sites/udmi_site_model"}`
@@ -174,6 +271,47 @@ Workbench is structured as a route-driven application where every view and capab
 * **`render_dot_to_svg`**:
   * **Args**: `{"dot_content": "digraph G { ... }"}`
   * **Output**: Rendered, browser-ready SVG string.
+
+#### E. Local Testbed & Cadre REST Endpoints (Local Infrastructure & Lifecycle)
+The local testbed substrate is managed deterministically via dedicated REST endpoints called by the **Local Test Setup Drawer**:
+* **`POST /api/testbed/start`**:
+  * **Request**: `{"site_model": "sites/udmi_site_model", "project_spec": "//mqtt/localhost:18833", "clean": false}`
+  * **Behavior**: Runs `bin/udmi start` targeting unprivileged user-space ports (MQTT 18833, etcd, postgres, influx). Fails fast if port conflicts or invalid site model.
+  * **Response**: `{"status": "INITIALIZING", "session_id": "udmi_barbican~default", "project_spec": "//mqtt/localhost:18833", "ports": {"mqtt": 18833, "etcd": 2379}}`
+* **`POST /api/testbed/stop`**:
+  * **Request**: `{}`
+  * **Behavior**: Runs `bin/udmi stop`, terminating tmux sessions, killing background processes, and releasing allocated ports.
+  * **Response**: `{"status": "STOPPED", "message": "All local pipeline services stopped"}`
+* **`POST /api/testbed/restart`**:
+  * **Request**: `{"site_model": "sites/udmi_site_model", "project_spec": "//mqtt/localhost:18833"}`
+  * **Behavior**: Runs `bin/udmi restart` (stop, clean state in `var/`, start).
+  * **Response**: `{"status": "INITIALIZING", "project_spec": "//mqtt/localhost:18833"}`
+* **`GET /api/testbed/status`**:
+  * **Behavior**: Executes non-blocking diagnostic probes against all local components.
+  * **Response**:
+    ```json
+    {
+      "overall": "UP",
+      "project_spec": "//mqtt/localhost:18833",
+      "components": {
+        "mqtt_broker": {"status": "UP", "port": 18833, "pid": 1311904, "probe": "tcp://localhost:18833"},
+        "udmis": {"status": "UP", "pid": 1311658, "sentinel": "var/pod_ready.txt", "probe": "pod_ready"},
+        "etcd": {"status": "UP", "port": 2379, "pid": 1311605, "probe": "tcp://localhost:2379"},
+        "pubber": {"status": "DOWN", "pid": null, "device_id": null}
+      }
+    }
+    ```
+* **`POST /api/testbed/pubber/start`**:
+  * **Request**: `{"site_model": "sites/udmi_site_model", "project_spec": "//mqtt/localhost:18833", "device_id": "AHU-1", "serial_no": "1234"}`
+  * **Behavior**: Runs `bin/pubber` in background for the specified device.
+  * **Response**: `{"status": "RUNNING", "device_id": "AHU-1", "pid": 1312500}`
+* **`POST /api/testbed/pubber/stop`**:
+  * **Request**: `{"device_id": "AHU-1"}`
+  * **Behavior**: Kills the running pubber process for the specified device.
+  * **Response**: `{"status": "STOPPED", "device_id": "AHU-1"}`
+* **`GET /api/testbed/logs`**:
+  * **Query Params**: `component=mosquitto|udmis|etcd|pubber&tail=200`
+  * **Response**: `{"component": "mosquitto", "logs": "..."}`
 
 ---
 
@@ -187,8 +325,12 @@ Workbench is structured as a route-driven application where every view and capab
 Mantis operates in two distinct execution modes based on the request context:
 
 #### Mode A: Targeted Failure Triage Mode
-* **Triggered by**: `/triage/:sessionId`, clicking a failed test in `/compliance`, or passing `test_id` + `device_id`.
+* **Triggered by**:
+  - Direct Sequencer Action: Clicking `[🔍 Diagnose with Mantis]` on any failed test row in `/sequencer` or within the Artifact Viewer modal. Automatically packages `{ site_model, device_id, test_id }`, switches to `/assistant`, and executes automated diagnosis.
+  - Interactive selection from the failed test dropdown selector on `/assistant`.
+  - Direct route access: `/triage/:sessionId` or clicking a failed test in `/compliance`.
 * **Behavior**: Focuses on root-cause diagnosis. Extracts test timelines (`get_test_timeline`), validates schemas (`inspect_udmi_schema`), cross-references logs (`detect_log_anomalies`), runs the tripartite audit (`Actor -> Critic -> Arbitrator`), and produces a ranked hypothesis matrix.
+* **Return Navigation**: When launched from Sequencer, the Assistant renders a top breadcrumb action `← Back to Sequencer` allowing operators to instantly return to their running test suite without losing log state or test progress.
 
 #### Mode B: General Exploration & Specification Mode
 * **Triggered by**: `/assistant`, the global `Cmd+K` drawer with general queries, or queries without an active test failure (e.g. *"What is the state field configAcked and how does it relate to config synchronization?"*).
@@ -448,14 +590,40 @@ data: {"window": "sequencer", "state": "COMPLETED", "exit_code": 0}
 
 ### 7.1. TypeScript State Store Schema
 ```typescript
+export interface ComponentHealth {
+  status: 'UP' | 'INITIALIZING' | 'DOWN' | 'ERROR';
+  pid?: number | null;
+  port?: number | null;
+  probe?: string;
+  sentinel?: string;
+  error?: string;
+}
+
 export interface WorkspaceState {
   // Active Project & Target Hierarchy
   siteModel: string;                  // e.g. 'sites/udmi_site_model'
   activeDevice: string;               // e.g. 'AHU-1'
   activeTest: string;                 // e.g. 'pointset_publish'
   projectSpec: string;                // e.g. '//mqtt/localhost:18833' or '//gbos/...'
-  
-  // Test Cadre & Infrastructure State
+  minStage: 'ALPHA' | 'BETA' | 'PREVIEW' | 'STABLE'; // Minimum stage filter
+
+  // Custom Site Roots & Allow-listing
+  customSiteRoots: string[];          // Allow-listed external site root paths
+
+  // Local Testbed & Infrastructure Drawer State
+  testbedDrawerOpen: boolean;         // Right-side drawer open/closed state
+  testbedStatus: {
+    overall: 'UP' | 'INITIALIZING' | 'DOWN' | 'ERROR';
+    projectSpec: string;
+    components: {
+      mqtt_broker: ComponentHealth;
+      udmis: ComponentHealth;
+      etcd: ComponentHealth;
+      pubber: ComponentHealth & { deviceId?: string | null };
+    };
+  };
+
+  // Test Cadre & Process Execution State
   setupMode: 'LOCAL' | 'CLOUD' | 'ATN_HYBRID';
   activeSessionId: string | null;     // e.g. 'udmi_lab_run_1'
   activeWindows: string[];            // ['main', 'dut', 'sequencer', 'butler', 'validator']
@@ -493,6 +661,15 @@ export interface WorkspaceState {
   };
 }
 ```
+
+### 7.2. SPA View Preservation & Non-Destructive DOM Caching
+To ensure that long-running test suites, streaming SSE consoles, and interactive triage workflows are never interrupted or lost during user navigation:
+1. **Persistent View-Pane Containers**: Each route view (`/sequencer`, `/devices`, `/assistant`, `/diagnostics`) is instantiated once and mounted inside its own `.view-pane` container.
+2. **Non-Destructive Navigation**: Route switching toggles the `active` class / visibility (`display: none` vs `display: flex/block`) of `.view-pane` elements instead of destroying and recreating DOM nodes.
+3. **Execution Continuity**:
+   - Background SSE streams (such as `bin/sequencer` live execution logs and Mantis reasoning tokens) continue streaming without reset when switching between views.
+   - Test results tables, filter states, and scroll positions in the Sequencer view are preserved when a user navigates to `/assistant` to diagnose a failure and returns via `← Back to Sequencer`.
+   - Discovery loaders retain cached `testStatus` results across device selections rather than wiping out previous run outputs.
 
 ---
 
@@ -568,8 +745,22 @@ The Workbench SPA layout is composed of the following key UX components:
 3. **Diagrams Canvas**:
    - Interactive zoomable/pannable SVG viewer for Graphviz architecture topologies.
    - Mermaid.js sequence diagram viewer for protocol transaction flows (`sequenceDiagram`).
-4. **Testbed & Environment Control Widget**:
-   - Status indicators for local mock stack (`Mosquitto`, `etcd`, `PostgreSQL`, `InfluxDB`, `UDMIS`, `ATN`).
-   - Terminal viewer for live tmux logs (`/logs <window>`).
-5. **Settings Modal**:
+4. **Local Test Setup Drawer & Topology Canvas**:
+   - Collapsible slide-out drawer on the right side of `/sequencer`.
+   - SVG/HTML canvas rendering active component nodes (`DUT / Pubber`, `Mosquitto Broker`, `Local UDMIS Pod`, `etcd State Store`) and connection flow edges.
+   - Live health indicator chips on each node (`UP`, `INITIALIZING`, `DOWN`, `ERROR`).
+   - Real-time lifecycle actions: `[Start Local Setup]`, `[Stop]`, `[Restart]`, `[Pubber Launcher]`, `[View Logs]`.
+5. **Sequencer Filter Toolbar**:
+   - Unified filter bar placed directly above the sequences table.
+   - Minimum Stage filter dropdown (`ALPHA`, `BETA`, `PREVIEW`, `STABLE`) directly adjacent to selection buttons (`Select All`, `None`), status toggles (`Passed`, `Skipped`, `Failed`), and search input.
+   - Single canonical filter surface eliminating duplicate sidebar selectors.
+6. **Site Roots Consent Modal**:
+   - Manages user authorization for custom site model directories located outside the UDMI root.
+   - Supports directory registration, listing, and revocation with persistent consent storage.
+   - Handles standard root (`<site_dir>/cloud_iot_config.json`) and subdirectory layouts (`<site_dir>/udmi/cloud_iot_config.json`).
+7. **Artifact Viewer Modal**:
+   - Interactive preview of test artifacts: `RESULT.log`, `sequence.md`, `sequence.png`, JSON state/config diffs.
+   - Includes direct `[🔍 Diagnose with Mantis]` action for instant triage without leaving the artifact view.
+8. **Settings Modal**:
    - Provider toggle: **Google Cloud Vertex AI** (ADC, Project, Region) vs **Google AI Studio** (`GEMINI_API_KEY`) vs **Offline Deterministic**.
+

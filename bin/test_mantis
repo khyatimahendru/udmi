@@ -12,7 +12,7 @@ else
   PYTHON_BIN="python3"
 fi
 
-export PYTHONPATH="$ROOT_DIR:${PYTHONPATH:-}"
+export PYTHONPATH="$ROOT_DIR/common/src/main/python:$ROOT_DIR:${PYTHONPATH:-}"
 
 echo "Running Mantis unit and integration test suite..."
 $PYTHON_BIN -m pytest mantis/tests "$@"

@@ -1,7 +1,7 @@
 """Centralized model constants, provider configuration, and runtime settings for Mantis."""
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
 
@@ -20,17 +20,23 @@ class ProviderType(str, Enum):
 @dataclass
 class MantisConfig:
     # Model Names
-    flash_model: str = os.getenv("MANTIS_FLASH_MODEL", "gemini-3.7-flash")
-    pro_model: str = os.getenv("MANTIS_PRO_MODEL", "gemini-3.1-pro-preview")
+    flash_model: str = field(default_factory=lambda: os.getenv("MANTIS_FLASH_MODEL", "gemini-3.7-flash"))
+    pro_model: str = field(default_factory=lambda: os.getenv("MANTIS_PRO_MODEL", "gemini-3.1-pro-preview"))
+
+    # Reasoning depth for the deep-reasoning tier. High thinking is the default:
+    # against gemini-3.1-pro-preview it reached a conclusion in 19 tool calls
+    # instead of 42, issued no duplicate searches, and was the only configuration
+    # that read backend (udmis/) source rather than only grepping it.
+    thinking_level: Optional[str] = field(default_factory=lambda: os.getenv("MANTIS_THINKING_LEVEL", "high"))
 
     # Vertex AI Defaults
-    default_gcp_project: str = os.getenv("GCP_PROJECT", os.getenv("GOOGLE_CLOUD_PROJECT", "bos-platform-dev"))
-    default_gcp_location: str = os.getenv("GCP_REGION", os.getenv("GOOGLE_CLOUD_REGION", "global"))
+    default_gcp_project: Optional[str] = field(default_factory=lambda: os.getenv("GOOGLE_CLOUD_PROJECT", os.getenv("GCP_PROJECT")))
+    default_gcp_location: str = field(default_factory=lambda: os.getenv("GOOGLE_CLOUD_REGION", os.getenv("GCP_REGION", "global")))
 
     # Timeouts & Limits
-    stack_startup_timeout_sec: int = int(os.getenv("MANTIS_STARTUP_TIMEOUT_SEC", "90"))
-    test_wait_timeout_sec: int = int(os.getenv("MANTIS_TEST_TIMEOUT_SEC", "120"))
-    max_log_lines: int = int(os.getenv("MANTIS_MAX_LOG_LINES", "200"))
+    stack_startup_timeout_sec: int = field(default_factory=lambda: int(os.getenv("MANTIS_STARTUP_TIMEOUT_SEC", "90")))
+    test_wait_timeout_sec: int = field(default_factory=lambda: int(os.getenv("MANTIS_TEST_TIMEOUT_SEC", "120")))
+    max_log_lines: int = field(default_factory=lambda: int(os.getenv("MANTIS_MAX_LOG_LINES", "200")))
 
     # Base Port Allocation Settings
     port_base_min: int = 20000

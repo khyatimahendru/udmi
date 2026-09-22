@@ -98,16 +98,26 @@ class ContextManager:
 
     def _auto_update_pointers(self, text: str) -> None:
         """Extract explicit entities from user prompt to update active session pointers."""
-        # Device pattern (e.g. "device AHU-1", "for device AHU-2", "on AHU-1", "dut AHU-1")
+        # Device pattern (e.g. "device AHU-1", "dut AHU-1", "for device AHU-2", "on device AHU-1")
         dev_m = re.search(
-            r"\b(?:device\s+|dut\s+|for\s+(?:device\s+)?|on\s+(?:device\s+)?)([A-Za-z0-9_-]+)\b",
+            r"\b(?:device\s+|dut\s+|(?:for|on)\s+device\s+)([A-Za-z0-9_-]+)\b",
             text,
             re.IGNORECASE,
         )
+        if not dev_m:
+            # Match "on <ID>" or "for <ID>" only if ID has a hyphen or underscore with alphanumeric components (e.g. AHU-1, GAT-1, bacnet_1)
+            dev_m = re.search(
+                r"\b(?:for|on)\s+([A-Za-z0-9]+[-_][A-Za-z0-9_-]+)\b",
+                text,
+                re.IGNORECASE,
+            )
         if dev_m:
             dev_candidate = dev_m.group(1).strip()
             if dev_candidate.lower() not in (
-                "the", "this", "that", "all", "sites", "test", "site", "device", "model", "with", "a", "an", "for"
+                "the", "this", "that", "all", "sites", "test", "site", "device", "model",
+                "with", "a", "an", "for", "me", "us", "it", "them", "him", "her", "localhost",
+                "cloud", "broker", "server", "monday", "tuesday", "wednesday", "thursday",
+                "friday", "saturday", "sunday", "today", "yesterday", "tomorrow", "moxa"
             ):
                 self.context.active_device_id = dev_candidate
 
@@ -120,7 +130,8 @@ class ContextManager:
         if test_m:
             test_candidate = test_m.group(1).strip()
             if test_candidate.lower() not in (
-                "site", "model", "with", "from", "this", "that", "message", "setup", "environment", "stack", "test", "local", "pointset"
+                "site", "model", "with", "from", "this", "that", "message", "setup",
+                "environment", "stack", "test", "local", "pointset", "sequencer", "execution"
             ) or test_candidate.lower().endswith("_publish") or "_" in test_candidate:
                 self.context.active_test_id = test_candidate
 
@@ -133,7 +144,7 @@ class ContextManager:
         sess_m = re.search(r"\b(?:session|environment|setup)\s+['\"]?([a-zA-Z0-9_-]+)['\"]?", text, re.IGNORECASE)
         if sess_m:
             sess_candidate = sess_m.group(1).strip()
-            if sess_candidate.lower() not in ("for", "with", "the", "this", "that", "local", "isolated", "with"):
+            if sess_candidate.lower() not in ("for", "with", "the", "this", "that", "local", "isolated"):
                 self.context.active_session_id = sess_candidate
 
     def _compact_history(self) -> None:

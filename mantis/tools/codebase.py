@@ -26,6 +26,27 @@ _TEST_DIR_SEGMENTS = ("test", "tests", "testing", "it")
 _TEST_FILE_SUFFIXES = ("Test.java", "Tests.java", "TestBase.java", "IT.java", "_test.py")
 _TEST_FILE_PREFIXES = ("test_",)
 
+# Extensions search_codebase will read. `.log` is here because sequencer and
+# device logs are the primary record of what a run actually did; omitting them
+# left callers unable to read an available log and reduced to reconstructing
+# runtime behaviour from Java source.
+SEARCHABLE_EXTENSIONS = (
+    ".java", ".py", ".json", ".md", ".yaml", ".yml", ".sh", ".txt", ".log",
+)
+
+# Directories skipped during traversal.
+IGNORED_DIR_NAMES = frozenset({
+    ".git", "build", "venv", ".venv", "node_modules", "target", ".idea",
+    ".cache", "bin", "out", "var", ".gemini", "dist",
+})
+
+# The subset of skipped directories that holds run output rather than build or
+# vendor content. Skipping these can hide the evidence a caller is looking for,
+# so every such skip is reported back with the results: a zero-match search must
+# never be indistinguishable from a search that never looked.
+ARTIFACT_DIR_NAMES = frozenset({"out", "var"})
+
+
 
 def _is_test_path(rel_path: str) -> bool:
     """Classify a repo-relative path as test source.
@@ -129,12 +150,21 @@ def search_codebase(
     is_regex: bool = False,
     udmi_root: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Fast search across Java, Python, JSON, and Markdown files in the UDMI repository.
-    
+    """Search source, docs, config, and log files in the UDMI repository.
+
+    Reads these extensions only: .java, .py, .json, .md, .yaml, .yml, .sh,
+    .txt, .log. A file_pattern selecting anything else is rejected rather
+    than silently returning no matches.
+
+    Run-output directories (out/, out_*/, var/) are not traversed by default
+    because they are large and regenerated. Test artifacts live there, so any
+    that were skipped are listed in `skipped_artifact_dirs`; pass one as
+    path_prefix to search inside it.
+
     Args:
         query: Text or regex pattern to search for.
-        path_prefix: Optional directory path prefix (relative to repo root, e.g. 'udmis', 'validator', 'pubber', 'common', 'docs') to restrict search.
-        file_pattern: Optional glob pattern to filter files (e.g. '*.java', '*.json', '*.md').
+        path_prefix: Optional directory path prefix (relative to repo root, e.g. 'udmis', 'validator', 'pubber', 'common', 'docs', or a test run directory under a site model's out/) to restrict search.
+        file_pattern: Optional glob pattern to filter files (e.g. '*.java', '*.json', '*.log').
         max_results: Maximum number of matches to return (default 25).
         max_per_file: Maximum number of matches sampled per file (default 3) to prevent single-file flooding.
         is_regex: Whether to treat query as a regular expression.
@@ -163,10 +193,23 @@ def search_codebase(
             }
         search_dir = target_dir
 
-    ignored_dirs = {
-        ".git", "build", "venv", ".venv", "node_modules", "target", ".idea",
-        ".cache", "bin", "out", "var", ".gemini", "dist"
-    }
+    # A pattern this tool can never satisfy is a caller error, not an empty
+    # result. Returning SUCCESS with zero matches here told callers the repo
+    # contained no such file when in fact it was never opened.
+    if file_pattern:
+        _, pattern_ext = os.path.splitext(file_pattern)
+        if pattern_ext and pattern_ext.lower() not in SEARCHABLE_EXTENSIONS:
+            return {
+                "status": "ERROR",
+                "error": (
+                    f"file_pattern '{file_pattern}' selects '{pattern_ext}' files, which "
+                    f"search_codebase does not read. Searchable extensions: "
+                    f"{', '.join(SEARCHABLE_EXTENSIONS)}."
+                ),
+                "searchable_extensions": list(SEARCHABLE_EXTENSIONS),
+            }
+
+    ignored_dirs = set(IGNORED_DIR_NAMES)
 
     pattern = None
     if is_regex:
@@ -180,23 +223,34 @@ def search_codebase(
     collected: List[Dict[str, Any]] = []
     locations_summary: Dict[str, int] = {}
     file_match_counts: Dict[str, int] = {}
+    skipped_artifact_dirs: List[str] = []
 
     for dirpath, dirnames, filenames in os.walk(search_dir):
         # Exclude ignored directories in-place (and out_* test runs). Sorting keeps
         # traversal independent of filesystem inode ordering, so identical queries
         # return identical results across machines and runs.
-        dirnames[:] = sorted(
-            d for d in dirnames
-            if d not in ignored_dirs and not d.startswith(".") and not d.startswith("out_")
-        )
+        kept = []
+        for d in dirnames:
+            if d in ARTIFACT_DIR_NAMES or d.startswith("out_"):
+                # Run output. Record the exact path so the caller can re-issue
+                # the search against it via path_prefix instead of concluding
+                # from an empty result that the evidence does not exist.
+                skipped_artifact_dirs.append(
+                    os.path.relpath(os.path.join(dirpath, d), root)
+                )
+                continue
+            if d in ignored_dirs or d.startswith("."):
+                continue
+            kept.append(d)
+        dirnames[:] = sorted(kept)
 
         for filename in sorted(filenames):
             if file_pattern and not fnmatch.fnmatch(filename, file_pattern):
                 continue
 
-            # Only search text-like source/doc extensions
+            # Only search text-like source/doc/log extensions
             _, ext = os.path.splitext(filename)
-            if ext not in (".java", ".py", ".json", ".md", ".yaml", ".yml", ".sh", ".txt"):
+            if ext.lower() not in SEARCHABLE_EXTENSIONS:
                 continue
 
             filepath = os.path.join(dirpath, filename)
@@ -239,7 +293,8 @@ def search_codebase(
     )
 
     total_matches_across_locations = sum(locations_summary.values())
-    return {
+    skipped = sorted(set(skipped_artifact_dirs))
+    response = {
         "status": "SUCCESS",
         "query": query,
         "path_prefix": path_prefix,
@@ -250,8 +305,17 @@ def search_codebase(
         "ranking": "implementation sources ranked above test sources",
         "test_matches_dropped": test_matches_dropped,
         "truncated": len(matches) < total_matches_across_locations,
+        "searchable_extensions": list(SEARCHABLE_EXTENSIONS),
         "excluded_paths": sorted(ignored_dirs) + ["out_*", ".*"],
+        "skipped_artifact_dirs": skipped,
     }
+    if skipped:
+        # Without this, "0 matches" and "never looked" are the same answer.
+        response["skipped_artifact_dirs_note"] = (
+            f"{len(skipped)} run-output director{'y was' if len(skipped) == 1 else 'ies were'} "
+            "not traversed. Test artifacts live there; pass one as path_prefix to search it."
+        )
+    return response
 
 
 def locate_udmi_doc(

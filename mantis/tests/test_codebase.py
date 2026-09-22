@@ -235,3 +235,53 @@ def test_result_cap_drops_tests_not_implementations(tmp_path):
     )
     assert res["test_matches_dropped"] == 3
     assert res["truncated"] is True
+
+
+def test_search_reads_log_files(tmp_path):
+    """Logs are the record of what a run did and must be searchable.
+
+    They were previously filtered out by extension, so a caller asking for a
+    log line got SUCCESS with zero matches and no indication the file had
+    never been opened.
+    """
+    run_dir = tmp_path / "sites/test_site/out/devices/AHU-1/tests/broken_config"
+    _write(run_dir / "sequence.log", "NOTICE Timeout waiting for initial device state\n")
+
+    res = search_codebase(
+        "Timeout waiting for initial device state",
+        path_prefix="sites/test_site/out/devices/AHU-1/tests/broken_config",
+        udmi_root=str(tmp_path),
+    )
+    assert res["status"] == "SUCCESS"
+    assert res["matches_count"] == 1
+    assert res["matches"][0]["file"].replace(os.sep, "/").endswith("sequence.log")
+
+
+def test_search_reports_skipped_run_output_dirs(tmp_path):
+    """A zero-match result must be distinguishable from an unsearched tree."""
+    _write(
+        tmp_path / "sites/test_site/out/devices/AHU-1/tests/broken_config/sequence.log",
+        "NOTICE Timeout waiting for initial device state\n",
+    )
+    _write(tmp_path / "sites/test_site/cloud_iot_config.json", "{}\n")
+
+    res = search_codebase(
+        "Timeout waiting for initial device state",
+        path_prefix="sites/test_site",
+        udmi_root=str(tmp_path),
+    )
+    assert res["status"] == "SUCCESS"
+    assert res["matches_count"] == 0
+    skipped = [p.replace(os.sep, "/") for p in res["skipped_artifact_dirs"]]
+    assert "sites/test_site/out" in skipped
+    assert "path_prefix" in res["skipped_artifact_dirs_note"]
+
+
+def test_search_rejects_unreadable_file_pattern(tmp_path):
+    """An unsatisfiable filter is a caller error, not an empty result."""
+    _write(tmp_path / "src/Thing.java", "class Thing {}\n")
+
+    res = search_codebase("Thing", file_pattern="*.xml", udmi_root=str(tmp_path))
+    assert res["status"] == "ERROR"
+    assert "*.xml" in res["error"]
+    assert ".log" in res["error"]

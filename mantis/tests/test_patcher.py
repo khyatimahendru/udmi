@@ -61,3 +61,45 @@ def test_patch_site_model_apply(tmp_path):
     with open(meta_file, "r") as f:
         data = json.load(f)
     assert data["pointset"]["sample_rate_sec"] == 10
+
+
+def test_patch_site_model_path_traversal_rejected(tmp_path):
+    site_dir = tmp_path / "test_site"
+    (site_dir / "devices").mkdir(parents=True)
+
+    res = patch_site_model(
+        site_model=str(site_dir),
+        device_id="../../etc",
+        patch_data={"hacked": True},
+    )
+    assert res["status"] == "ERROR"
+    assert "Security violation" in res["error"]
+
+
+def test_patch_site_model_preserves_original_backup_on_multiple_patches(tmp_path):
+    site_dir = tmp_path / "test_site"
+    dev_dir = site_dir / "devices" / "DEV-1"
+    dev_dir.mkdir(parents=True)
+    meta_file = dev_dir / "metadata.json"
+    meta_file.write_text(json.dumps({"pointset": {"sample_rate_sec": 60}}, indent=2) + "\n")
+
+    # First patch: 60 -> 10
+    patch_site_model(
+        site_model=str(site_dir),
+        device_id="DEV-1",
+        patch_data={"pointset": {"sample_rate_sec": 10}},
+    )
+
+    # Second patch: 10 -> 5
+    patch_site_model(
+        site_model=str(site_dir),
+        device_id="DEV-1",
+        patch_data={"pointset": {"sample_rate_sec": 5}},
+    )
+
+    # Backup file should preserve original pre-patch state (60), not intermediate state (10)
+    backup_file = str(meta_file) + ".bak"
+    with open(backup_file, "r") as bf:
+        backup_data = json.load(bf)
+    assert backup_data["pointset"]["sample_rate_sec"] == 60
+

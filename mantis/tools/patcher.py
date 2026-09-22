@@ -43,7 +43,15 @@ def patch_site_model(
         }
 
     dev_clean = device_id.strip()
-    metadata_file = os.path.join(site_path, "devices", dev_clean, "metadata.json")
+    # Path containment check: ensure device_id is safely inside devices directory
+    devices_dir = os.path.realpath(os.path.join(site_path, "devices"))
+    expected_dev_dir = os.path.realpath(os.path.join(devices_dir, dev_clean))
+    metadata_file = os.path.realpath(os.path.join(expected_dev_dir, "metadata.json"))
+    if not (expected_dev_dir.startswith(devices_dir + os.sep) and metadata_file.startswith(expected_dev_dir + os.sep)):
+        return {
+            "status": "ERROR",
+            "error": f"Security violation: Invalid device_id '{device_id}' attempts path traversal.",
+        }
 
     if not os.path.isfile(metadata_file):
         return {
@@ -90,10 +98,24 @@ def patch_site_model(
 
     backup_file = f"{metadata_file}.bak"
     try:
-        shutil.copy2(metadata_file, backup_file)
-        with open(metadata_file, "w", encoding="utf-8") as f:
+        # Preserve the original backup if one already exists
+        if not os.path.exists(backup_file):
+            shutil.copy2(metadata_file, backup_file)
+
+        # Atomic write: write to a temporary file in the same directory, then rename
+        dir_name = os.path.dirname(metadata_file)
+        temp_file = os.path.join(dir_name, f".tmp_patch_{os.getpid()}")
+        with open(temp_file, "w", encoding="utf-8") as f:
             f.write(new_content)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temp_file, metadata_file)
     except Exception as e:
+        if 'temp_file' in locals() and os.path.exists(temp_file):
+            try:
+                os.remove(temp_file)
+            except OSError:
+                pass
         return {
             "status": "ERROR",
             "error": f"Failed to write patch to {metadata_file}: {e}",

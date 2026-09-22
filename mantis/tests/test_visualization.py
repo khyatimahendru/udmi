@@ -68,7 +68,7 @@ class TestVisualizationEngine(unittest.TestCase):
             "2026-03-01T10:00:02Z INFO sequence: Waiting for state update\n"
             "2026-03-01T10:00:03Z INFO sequence: Cutoff time set to 2026-03-01T10:00:01Z\n"
             "2026-03-01T10:00:04Z INFO sequence: Received state update for AHU-1\n"
-            "2026-03-01T10:00:05Z INFO sequence: Test completed with RESULT: PASS\n"
+            "2026-03-01T10:00:05Z INFO sequence: RESULT pass pointset pointset_publish STABLE 1/8 Sequence complete\n"
         )
         with open(os.path.join(self.test_dir, "sequence.log"), "w") as f:
             f.write(seq_log_content)

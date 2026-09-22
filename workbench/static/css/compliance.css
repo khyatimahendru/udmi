@@ -1,0 +1,314 @@
+/*
+ * Layer 4 — Compliance grid and commit dialog.
+ *
+ * Owned entirely by the Devices view and the commit dialog. Structural tokens
+ * (colour, spacing, radius) come from theme.css; nothing here redefines a
+ * shared component class, so this file can be loaded alongside components.css
+ * without overriding it.
+ *
+ * The verdict palette is the one point of substance: `other` (sequences whose
+ * verdict is outside pass/fail/skip, such as an aborted `errr` run) is given a
+ * neutral amber of its own rather than sharing the failure red. A run that
+ * never reached the device did not fail, and the grid must not look as though
+ * it did.
+ */
+
+/* ------------------------------------------------------- site rollup ---- */
+.compliance-totals {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: var(--space-1) var(--space-3);
+  margin: 0;
+  font-size: 13px;
+}
+
+.compliance-totals > div {
+  display: contents;
+}
+
+.compliance-totals dt {
+  color: var(--text-muted);
+}
+
+.compliance-totals dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+  text-align: right;
+}
+
+/* ------------------------------------------------- per-device records ---- */
+.compliance-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-3);
+}
+
+.compliance-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+}
+
+.compliance-row.is-untested {
+  background: var(--bg-surface-container);
+}
+
+.compliance-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.compliance-head .device-name {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.compliance-head .device-tags {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.compliance-reason {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.compliance-facts {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* ------------------------------------------------------- verdict bar ---- */
+.verdict-bar {
+  display: flex;
+  height: 8px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--bg-surface-raised);
+}
+
+.verdict-segment {
+  height: 100%;
+}
+
+.verdict-segment.verdict-pass  { background: var(--color-success); }
+.verdict-segment.verdict-fail  { background: var(--color-error); }
+.verdict-segment.verdict-skip  { background: var(--text-disabled); }
+.verdict-segment.verdict-other { background: var(--color-warning); }
+
+.verdict-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-5);
+  margin: 0;
+}
+
+.verdict-count {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.verdict-count dt {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.verdict-count dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 14px;
+  color: var(--text-primary);
+}
+
+.verdict-count.verdict-pass dd  { color: var(--color-success); }
+.verdict-count.verdict-fail dd  { color: var(--color-error); }
+.verdict-count.verdict-skip dd  { color: var(--text-muted); }
+.verdict-count.verdict-other dd { color: var(--color-warning); }
+
+/* ---------------------------------------------------------- actions ----- */
+.compliance-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.compliance-actions .report-link {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-decoration: none;
+}
+
+.compliance-no-reports {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* ----------------------------------------------------- commit dialog ---- */
+.commit-modal {
+  width: min(720px, 92vw);
+}
+
+.commit-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+/*
+ * The blocking reason is server-authored prose that can run to several lines
+ * (the UDMI checkout block is a full paragraph), so it is laid out to be read
+ * rather than clipped to a single line.
+ */
+.commit-block {
+  margin: 0;
+  padding: var(--space-3);
+  border-left: 3px solid var(--color-warning);
+  border-radius: var(--radius-sm);
+  background: rgba(232, 110, 0, 0.08);
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.commit-block.is-udmi-repo {
+  border-left-color: var(--color-error);
+  background: rgba(179, 38, 30, 0.08);
+  color: var(--color-error);
+  font-weight: 500;
+}
+
+.commit-facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: var(--space-1) var(--space-4);
+  margin: 0;
+  font-size: 13px;
+}
+
+.commit-facts > div {
+  display: contents;
+}
+
+.commit-facts dt {
+  color: var(--text-muted);
+}
+
+.commit-facts dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.commit-section-title {
+  margin: 0 0 var(--space-2);
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+
+.commit-change-list {
+  list-style: none;
+  margin: 0;
+  padding: var(--space-2);
+  max-height: 140px;
+  overflow-y: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface-container);
+}
+
+.commit-change {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.commit-change.is-empty {
+  font-family: var(--font-sans);
+  color: var(--text-muted);
+}
+
+.commit-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.commit-form textarea {
+  width: 100%;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  padding: var(--space-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  resize: vertical;
+}
+
+.commit-form textarea:disabled,
+.commit-form input:disabled,
+.commit-form select:disabled {
+  background: var(--bg-surface-container);
+  color: var(--text-disabled);
+  cursor: not-allowed;
+}
+
+.commit-toggle {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.commit-check {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.commit-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--border-subtle);
+}
+
+.commit-status {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.commit-status.is-error { color: var(--color-error); }
+.commit-status.is-ok    { color: var(--color-success); }
+.commit-status.is-busy  { color: var(--color-info); }
+.commit-status.is-info  { color: var(--text-muted); }

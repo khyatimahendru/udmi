@@ -3,8 +3,8 @@
 import os
 from unittest.mock import MagicMock
 import pytest
-from mantis.agent import MantisAgent
-from mantis.config import ProviderType
+from mantis.agent import MantisAgent, _strip_file_uri_scheme
+from mantis.config import ModelTier, ProviderType
 
 
 def test_agent_diagnose_stale_cutoff(tmp_path):
@@ -17,7 +17,7 @@ def test_agent_diagnose_stale_cutoff(tmp_path):
 2026-08-26T12:45:08Z Cutoff set: 2026-08-26T12:45:08Z
 2026-08-26T12:45:09Z ignoring stale state update 2026-08-26T12:45:06Z
 2026-08-26T12:47:08Z Stage timeout after 120s
-2026-08-26T12:47:09Z RESULT: FAIL
+2026-08-26T12:47:09Z RESULT fail pointset pointset_publish STABLE 0/8 Sequence failed
 """)
 
     agent = MantisAgent()
@@ -42,7 +42,7 @@ def test_agent_diagnose_jackson_error(tmp_path):
     seq_log.write_text("""
 2026-08-26T12:45:00Z Starting test pointset_publish for AHU-1
 2026-08-26T12:45:02Z UnrecognizedPropertyException: Unrecognized field "invalid_key" (class udmi.schema.Metadata)
-2026-08-26T12:45:03Z RESULT: FAIL
+2026-08-26T12:45:03Z RESULT fail pointset pointset_publish STABLE 0/8 Sequence failed
 """)
 
     agent = MantisAgent()
@@ -55,7 +55,9 @@ def test_agent_diagnose_jackson_error(tmp_path):
 
     assert res["status"] == "SUCCESS"
     assert res["competing_hypotheses"]["Jackson Deserialization Failure"]["status"] == "CONFIRMED"
-    assert res["competing_hypotheses"]["Stale State Cutoff Rejection"]["status"] == "REFUTED"
+    # Nothing was received from the device in this run, so no state update could
+    # have been rejected as stale -- and nothing observed rules it out either.
+    assert res["competing_hypotheses"]["Stale State Cutoff Rejection"]["status"] == "NOT ASSESSED"
 
 
 def test_agent_run_deterministic_schema_query():
@@ -190,9 +192,6 @@ def test_agent_react_tool_calling_loop():
     mock_client = MockGenAIClient([resp_step1, resp_step2])
     agent = MantisAgent(client=mock_client)
 
-    # Force provider to Vertex AI so _run_llm is triggered
-    agent.config.provider_override = ProviderType.VERTEX_AI
-
     chunks = []
     output = agent._run_llm(
         prompt="Tell me about the pointset schema",
@@ -223,6 +222,7 @@ def test_agent_react_tool_error_resilience():
 
     output = agent._run_llm(
         prompt="Execute invalid action",
+        enable_scoping=False,
     )
 
     assert output == "Handled tool error gracefully."
@@ -263,6 +263,7 @@ def test_agent_react_streaming_token_chunks():
     output = agent._run_llm(
         prompt="Describe pointset",
         stream_callback=received_tokens.append,
+        enable_scoping=False,
     )
 
     assert output == "The pointset schema is valid."
@@ -271,7 +272,8 @@ def test_agent_react_streaming_token_chunks():
 
 
 @pytest.mark.anyio
-async def test_agent_run_async():
+async def test_agent_run_async(monkeypatch):
+    monkeypatch.setenv("MANTIS_OFFLINE", "true")
     agent = MantisAgent()
     out = await agent.run_async("What are the required fields in pointset schema?")
     assert "Schema: `pointset`" in out or "pointset" in out
@@ -284,7 +286,7 @@ def test_agent_metrics_tracking():
 
     from mantis.context import ContextManager
     ctx_mgr = ContextManager()
-    out = agent._run_llm("Analyze test run", context_mgr=ctx_mgr)
+    out = agent._run_llm("Analyze test run", context_mgr=ctx_mgr, enable_scoping=False)
 
     assert out == "Analysis complete"
     assert ctx_mgr.context.metrics is not None
@@ -316,3 +318,1288 @@ def test_agent_api_retry_resilience():
     assert mock_models.generate_content.call_count == 2
 
 
+def test_agent_classify_intent_tier():
+    agent = MantisAgent()
+
+    # Flash tier queries (schema lookups, log slicing, entity extraction, metadata)
+    assert agent.classify_intent_tier("Describe the pointset schema") == ModelTier.FLASH
+    assert agent.classify_intent_tier("List schemas in UDMI") == ModelTier.FLASH
+    assert agent.classify_intent_tier("Slice logs for AHU-1 from sequence.log") == ModelTier.FLASH
+    assert agent.classify_intent_tier("Extract entities from support bundle") == ModelTier.FLASH
+    assert agent.classify_intent_tier("Inspect metadata for AHU-1") == ModelTier.FLASH
+    assert agent.classify_intent_tier("Show devices in sites/udmi_site_model") == ModelTier.FLASH
+
+    # Pro tier queries (failure diagnosis, differential analysis, code/model patching, ReAct planning)
+    assert agent.classify_intent_tier("Why did pointset_publish fail for AHU-1?") == ModelTier.PRO
+    assert agent.classify_intent_tier("Diagnose root cause of test timeout") == ModelTier.PRO
+    assert agent.classify_intent_tier("Compare test runs and show divergence") == ModelTier.PRO
+    assert agent.classify_intent_tier("Apply patch to metadata.json to set sample_rate_sec") == ModelTier.PRO
+    assert agent.classify_intent_tier("Verify golden baseline validator with anti-cheating") == ModelTier.PRO
+
+
+def test_agent_two_tier_model_routing():
+    agent = MantisAgent()
+    flash_model = agent.config.get_model_for_tier(ModelTier.FLASH)
+    pro_model = agent.config.get_model_for_tier(ModelTier.PRO)
+
+    # 1. Flash Tier routing
+    resp_flash = MockResponse(text="Pointset schema details", function_calls=[])
+    client_flash = MockGenAIClient([resp_flash])
+    agent.client = client_flash
+
+    out_flash = agent._run_llm("Describe pointset schema", enable_scoping=False)
+    assert out_flash == "Pointset schema details"
+    assert client_flash.models.calls[0][0] == flash_model
+
+    # 2. Pro Tier routing
+    resp_pro = MockResponse(text="Root cause diagnosed", function_calls=[])
+    client_pro = MockGenAIClient([resp_pro])
+    agent.client = client_pro
+
+    out_pro = agent._run_llm("Why did pointset_publish fail for AHU-1?", enable_scoping=False)
+    assert out_pro == "Root cause diagnosed"
+    assert client_pro.models.calls[0][0] == pro_model
+
+    # 3. Explicit tier override
+    resp_override = MockResponse(text="Explicit tier handled", function_calls=[])
+    client_override = MockGenAIClient([resp_override])
+    agent.client = client_override
+
+    # Query would normally be FLASH, but explicit tier=PRO overrides
+    out_override = agent._run_llm("Describe pointset schema", tier=ModelTier.PRO, enable_scoping=False)
+    assert out_override == "Explicit tier handled"
+    assert client_override.models.calls[0][0] == pro_model
+
+
+def test_agent_run_deterministic_golden_verification(tmp_path):
+    etc_dir = tmp_path / "etc"
+    out_dir = tmp_path / "out"
+    etc_dir.mkdir()
+    out_dir.mkdir()
+
+    content = "AHU-1 events_pointset {value: 10}\nAHU-1 events_system {status: ok}\n"
+    (etc_dir / "validator.out").write_text(content)
+    (out_dir / "validator.out").write_text(content)
+
+    agent = MantisAgent(udmi_root=str(tmp_path))
+    res = agent._run_deterministic("Verify golden baseline for validator")
+
+    assert "Golden Baseline Verification" in res
+    assert "100.0% parity" in res or "PASSED" in res
+
+
+def test_agent_parse_patch_data():
+    agent = MantisAgent()
+
+    # 1. JSON payload
+    data_json = agent._parse_patch_data('patch device AHU-1 {"system": {"min_loglevel": 200}}')
+    assert data_json == {"system": {"min_loglevel": 200}}
+
+    # 2. Dot notation
+    data_dot = agent._parse_patch_data("set system.min_loglevel to 200")
+    assert data_dot.get("system", {}).get("min_loglevel") == 200
+
+    # 3. Proxy ID shortcut
+    data_proxy = agent._parse_patch_data("set proxy_id to GAT-1")
+    assert data_proxy.get("gateway", {}).get("gateway_id") == "GAT-1"
+
+    # 4. Sample rate shortcut
+    data_sr = agent._parse_patch_data("set pointset.sample_rate_sec=15")
+    assert data_sr.get("pointset", {}).get("sample_rate_sec") == 15
+
+    # 5. nostate flag
+    data_nostate = agent._parse_patch_data("patch device AHU-1 with nostate")
+    assert data_nostate.get("testing", {}).get("nostate") is True
+
+
+def test_agent_run_deterministic_patch_site_model(tmp_path):
+    site_dir = tmp_path / "sites" / "test_site"
+    dev_dir = site_dir / "devices" / "AHU-1"
+    dev_dir.mkdir(parents=True)
+    meta_file = dev_dir / "metadata.json"
+    meta_file.write_text('{"system": {"min_loglevel": 100}}\n')
+
+    agent = MantisAgent(udmi_root=str(tmp_path))
+    res = agent._run_deterministic(f"patch device AHU-1 in {site_dir} set system.min_loglevel to 200")
+
+    assert "Applied Configuration Patch for `AHU-1`" in res
+    import json
+    updated = json.loads(meta_file.read_text())
+    assert updated.get("system", {}).get("min_loglevel") == 200
+
+
+def test_agent_tripartite_loop():
+    """Test full Actor -> Critic -> Arbitrator tripartite cognitive loop."""
+    # Step 1: Actor emits tool call
+    resp_actor_tool = MockResponse(
+        text=None,
+        function_calls=[MockFunctionCall(name="inspect_udmi_schema", args={"schema_name": "pointset"})],
+    )
+    # Step 2: Actor finishes and emits hypothesis
+    resp_actor_final = MockResponse(
+        text="Actor hypothesis: Pointset schema requires points object.",
+        function_calls=[],
+    )
+    # Step 3: Critic performs adversarial audit
+    resp_critic = MockResponse(
+        text="Critic audit: Claim confirmed by schema tool execution.",
+        function_calls=[],
+    )
+    # Step 4: Arbitrator synthesizes final answer with diagram
+    resp_arbitrator = MockResponse(
+        text="Arbitrator verdict: Pointset schema requires points object.\n\n```mermaid\ngraph LR\n  A --> B\n```",
+        function_calls=[],
+    )
+
+    mock_client = MockGenAIClient([resp_actor_tool, resp_actor_final, resp_critic, resp_arbitrator])
+    agent = MantisAgent(client=mock_client)
+    agent.config.provider_override = ProviderType.VERTEX_AI
+
+    pro_model = agent.config.get_model_for_tier(ModelTier.PRO)
+
+    output = agent._run_llm(
+        prompt="Why did pointset fail for AHU-1?",
+        tier=ModelTier.PRO,
+        enable_tripartite=True,
+        enable_scoping=False,
+    )
+
+    assert "Arbitrator verdict" in output
+    assert "```mermaid" in output
+    # Verify calls were made: 2 Actor turns, 1 Critic turn, 1 Arbitrator turn
+    assert mock_client.models.call_count == 4
+    # Verify Critic and Arbitrator used PRO tier model
+    assert mock_client.models.calls[2][0] == pro_model
+    assert mock_client.models.calls[3][0] == pro_model
+
+
+def test_agent_run_tripartite_method():
+    """Test agent.run_tripartite runs Scoping -> Actor -> Critic -> Arbitrator."""
+    resp_scoping = MockResponse(
+        text=(
+            "FAILURE_SCOPE: NOT_A_FAILURE\n"
+            "SCOPE_JUSTIFICATION: Informational request about state transitions.\n"
+            "COMPETING_HYPOTHESES:\n"
+            "- n/a\n"
+            "REQUIRED_SUBSYSTEMS: docs, common"
+        ),
+        function_calls=[],
+    )
+    resp_actor = MockResponse(text="Actor answer", function_calls=[])
+    resp_critic = MockResponse(text="Critic audit", function_calls=[])
+    resp_arbitrator = MockResponse(text="Arbitrator final synthesis", function_calls=[])
+
+    mock_client = MockGenAIClient([resp_scoping, resp_actor, resp_critic, resp_arbitrator])
+    agent = MantisAgent(client=mock_client)
+    agent.config.provider_override = ProviderType.VERTEX_AI
+
+    res = agent.run_tripartite("Explain device state transitions")
+    assert res["status"] == "SUCCESS"
+    assert res["final_answer"] == "Arbitrator final synthesis"
+    assert res["metrics"] is not None
+    # Scoping ran first, ahead of the Actor turn.
+    assert mock_client.models.call_count == 4
+
+
+def test_agent_run_deterministic_diagrams():
+    """Test deterministic generation of topology and sequence diagrams."""
+    agent = MantisAgent()
+    agent.config.provider_override = ProviderType.OFFLINE_DETERMINISTIC
+
+    # Topology diagram
+    out_topo = agent.run("Show topology diagram for sites/udmi_site_model")
+    assert "Site Topology" in out_topo
+    assert "digraph SiteTopology" in out_topo or "graph LR" in out_topo
+
+    # Sequence diagram
+    out_seq = agent.run("Show sequence diagram of test execution")
+    assert "Sequence Execution Flow" in out_seq or "sequence diagram" in out_seq.lower()
+
+
+def test_agent_run_deterministic_codebase_and_anomalies():
+    """Test deterministic codebase search, doc location, and anomaly inspection."""
+    agent = MantisAgent()
+    agent.config.provider_override = ProviderType.OFFLINE_DETERMINISTIC
+
+    # Doc location
+    out_doc = agent.run("Find spec for writeback")
+    assert "UDMI Documentation for 'writeback'" in out_doc
+
+    # Codebase search
+    out_search = agent.run("Search codebase for SequenceBase")
+    assert "Codebase search results" in out_search
+    assert "SequenceBase" in out_search
+
+    # Test inspection
+    out_test = agent.run("Inspect sequencer test pointset_publish")
+    assert "Sequencer Test: `pointset_publish`" in out_test
+
+
+# ------------------------------------------------------------------------------
+# Step Budget Exhaustion & Forced Synthesis
+# ------------------------------------------------------------------------------
+
+def test_agent_forced_synthesis_on_budget_exhaustion():
+    """When the ReAct budget runs out mid-investigation, the Actor must still answer."""
+    max_steps = 3
+    # Model keeps requesting tools for the entire budget, never emitting a final answer.
+    tool_responses = [
+        MockResponse(
+            text=None,
+            function_calls=[MockFunctionCall(name="inspect_udmi_schema", args={"schema_name": "pointset"})],
+        )
+        for _ in range(max_steps)
+    ]
+    # The forced synthesis turn returns the real answer.
+    synthesis_response = MockResponse(
+        text="Root cause grounded in gathered evidence: the pointset schema requires a points map.",
+        function_calls=[],
+    )
+
+    mock_client = MockGenAIClient(tool_responses + [synthesis_response])
+    agent = MantisAgent(client=mock_client)
+
+    chunks = []
+    output = agent._run_llm(
+        prompt="Why is the pointset failing?",
+        max_steps=max_steps,
+        stream_callback=chunks.append,
+        enable_tripartite=False,
+        enable_scoping=False,
+    )
+
+    # The Actor produced a genuine answer, not a raw dump of tool calls.
+    assert "Root cause grounded in gathered evidence" in output
+    assert "Actor exploration completed with the following tool evidence" not in output
+
+    # One extra API call beyond the budget: the forced synthesis turn.
+    assert mock_client.models.call_count == max_steps + 1
+
+    # The synthesis turn must have tool access revoked.
+    _, _, synthesis_config = mock_client.models.calls[-1]
+    assert getattr(synthesis_config, "tools", None) is None
+
+    # The user is told that synthesis was forced.
+    assert any("Exploration budget" in c and "exhausted" in c for c in chunks)
+
+
+def test_agent_budget_warning_injected_near_exhaustion():
+    """The Actor is warned about remaining budget so it can converge proactively."""
+    max_steps = 2
+    tool_responses = [
+        MockResponse(
+            text=None,
+            function_calls=[MockFunctionCall(name="inspect_udmi_schema", args={"schema_name": "pointset"})],
+        )
+        for _ in range(max_steps)
+    ]
+    synthesis_response = MockResponse(text="Final synthesized answer.", function_calls=[])
+
+    mock_client = MockGenAIClient(tool_responses + [synthesis_response])
+    agent = MantisAgent(client=mock_client)
+
+    agent._run_llm(
+        prompt="Investigate the failure",
+        max_steps=max_steps,
+        enable_tripartite=False,
+        enable_scoping=False,
+    )
+
+    # Inspect the contents passed on the final synthesis call for the budget notice.
+    _, final_contents, _ = mock_client.models.calls[-1]
+    serialized = " ".join(
+        getattr(part, "text", "") or ""
+        for content in final_contents
+        for part in getattr(content, "parts", []) or []
+    )
+    assert "Orchestrator Notice" in serialized
+    assert "tool step(s) remaining" in serialized
+    assert "Orchestrator Directive" in serialized
+
+
+def test_agent_raises_when_synthesis_yields_no_answer():
+    """Fail fast rather than emitting a degraded placeholder response."""
+    max_steps = 2
+    tool_responses = [
+        MockResponse(
+            text=None,
+            function_calls=[MockFunctionCall(name="inspect_udmi_schema", args={"schema_name": "pointset"})],
+        )
+        for _ in range(max_steps)
+    ]
+    empty_synthesis = MockResponse(text="   ", function_calls=[])
+
+    mock_client = MockGenAIClient(tool_responses + [empty_synthesis])
+    agent = MantisAgent(client=mock_client)
+
+    with pytest.raises(RuntimeError, match="failed to produce an answer"):
+        agent._run_llm(
+            prompt="Investigate the failure",
+            max_steps=max_steps,
+            enable_tripartite=False,
+            enable_scoping=False,
+        )
+
+
+# ------------------------------------------------------------------------------
+# Scoping Phase & Investigation Contract
+# ------------------------------------------------------------------------------
+
+SCOPING_PLAN = (
+    "FAILURE_SCOPE: MULTI_TARGET_DEGRADATION\n"
+    "SCOPE_JUSTIFICATION: Several independent targets fail simultaneously.\n"
+    "COMPETING_HYPOTHESES:\n"
+    "- Shared backend saturation\n"
+    "- Client lifecycle defect\n"
+    "REQUIRED_SUBSYSTEMS: validator, udmis"
+)
+
+
+def test_agent_scoping_phase_injects_contract():
+    """Scoping runs before exploration and binds the Actor to a contract."""
+    resp_scoping = MockResponse(text=SCOPING_PLAN, function_calls=[])
+    resp_actor = MockResponse(text="Diagnosis complete.", function_calls=[])
+
+    mock_client = MockGenAIClient([resp_scoping, resp_actor])
+    agent = MantisAgent(client=mock_client)
+
+    chunks = []
+    output = agent._run_llm(
+        prompt="Why are many devices timing out?",
+        tier=ModelTier.PRO,
+        enable_tripartite=False,
+        stream_callback=chunks.append,
+    )
+
+    assert output == "Diagnosis complete."
+    # Scoping is the Actor's own first step; the investigation turn is second.
+    assert mock_client.models.call_count == 2
+
+    # Tool access must be withheld on the scoping step so it cannot be skipped.
+    _, _, scoping_cfg = mock_client.models.calls[0]
+    assert getattr(scoping_cfg, "tools", None) is None
+    # ...and restored immediately afterwards.
+    _, actor_contents, actor_cfg = mock_client.models.calls[1]
+    assert getattr(actor_cfg, "tools", None) is not None
+
+    # The plan must be recorded as the Actor's OWN model turn, not a user instruction.
+    plan_turns = [
+        c for c in actor_contents
+        if getattr(c, "role", None) == "model"
+        and any("MULTI_TARGET_DEGRADATION" in (getattr(p, "text", "") or "") for p in getattr(c, "parts", []) or [])
+    ]
+    assert plan_turns, "scoping plan was not recorded as a model turn"
+
+    serialized = " ".join(
+        getattr(part, "text", "") or ""
+        for content in actor_contents
+        for part in getattr(content, "parts", []) or []
+    )
+    assert "Scoping Step" in serialized
+    assert "REQUIRED_SUBSYSTEMS: validator, udmis" in serialized
+    assert any("Contracted subsystems" in c for c in chunks)
+
+
+def test_agent_scoping_reports_coverage_gap():
+    """Searching a subsystem is not examining it: a grep must not satisfy coverage."""
+    resp_scoping = MockResponse(text=SCOPING_PLAN, function_calls=[])
+    # Actor only ever greps validator, never opens a file, never touches udmis.
+    resp_tool = MockResponse(
+        text=None,
+        function_calls=[MockFunctionCall(name="search_codebase", args={"query": "close", "path_prefix": "validator"})],
+    )
+    resp_final = MockResponse(text="Narrow diagnosis.", function_calls=[])
+
+    mock_client = MockGenAIClient([resp_scoping, resp_tool, resp_final])
+    agent = MantisAgent(client=mock_client)
+
+    agent._run_llm(
+        prompt="Why are many devices timing out?",
+        tier=ModelTier.PRO,
+        enable_tripartite=False,
+    )
+
+    _, final_contents, _ = mock_client.models.calls[-1]
+    serialized = " ".join(
+        getattr(part, "text", "") or ""
+        for content in final_contents
+        for part in getattr(content, "parts", []) or []
+    )
+    assert "Contract coverage gap" in serialized
+    # validator was searched but never read: still a gap, reported as such.
+    assert "you have searched validator but have not opened any file there" in serialized
+    # udmis was never touched at all.
+    assert "you have not touched udmis at all" in serialized
+    assert "Searching is not examining" in serialized
+
+
+def test_agent_coverage_gap_cleared_by_reading_a_file():
+    """Reading a file in a contracted subsystem clears it from the coverage gap."""
+    resp_scoping = MockResponse(text=SCOPING_PLAN, function_calls=[])
+    resp_tool = MockResponse(
+        text=None,
+        function_calls=[
+            MockFunctionCall(
+                name="read_udmi_file",
+                args={"file_path": "validator/build.gradle", "start_line": 1, "end_line": 2},
+            )
+        ],
+    )
+    resp_final = MockResponse(text="Diagnosis.", function_calls=[])
+
+    mock_client = MockGenAIClient([resp_scoping, resp_tool, resp_final])
+    agent = MantisAgent(client=mock_client)
+
+    agent._run_llm(
+        prompt="Why are many devices timing out?",
+        tier=ModelTier.PRO,
+        enable_tripartite=False,
+    )
+
+    _, final_contents, _ = mock_client.models.calls[-1]
+    serialized = " ".join(
+        getattr(part, "text", "") or ""
+        for content in final_contents
+        for part in getattr(content, "parts", []) or []
+    )
+    assert "validator" not in serialized.split("Contract coverage gap")[-1].split(".")[0]
+    assert "you have not touched udmis at all" in serialized
+
+
+def test_agent_scoping_rejects_nonexistent_subsystems():
+    """Hallucinated directories are reported, not silently trusted."""
+    plan = (
+        "FAILURE_SCOPE: SINGLE_TARGET\n"
+        "SCOPE_JUSTIFICATION: One device affected.\n"
+        "COMPETING_HYPOTHESES:\n"
+        "- Metadata defect\n"
+        "REQUIRED_SUBSYSTEMS: validator, not_a_real_directory"
+    )
+    resp_scoping = MockResponse(text=plan, function_calls=[])
+    resp_actor = MockResponse(text="Done.", function_calls=[])
+
+    mock_client = MockGenAIClient([resp_scoping, resp_actor])
+    agent = MantisAgent(client=mock_client)
+
+    chunks = []
+    agent._run_llm(
+        prompt="Why did one device fail?",
+        tier=ModelTier.PRO,
+        enable_tripartite=False,
+        stream_callback=chunks.append,
+    )
+
+    joined = " ".join(chunks)
+    assert "Ignoring subsystems absent from the repository" in joined
+    assert "not_a_real_directory" in joined
+
+
+def test_agent_scoping_raises_on_empty_plan():
+    """Fail fast when the scoping planner returns nothing."""
+    resp_scoping = MockResponse(text="", function_calls=[])
+    mock_client = MockGenAIClient([resp_scoping])
+    agent = MantisAgent(client=mock_client)
+
+    with pytest.raises(RuntimeError, match="empty scoping plan"):
+        agent._run_llm(
+            prompt="Why are many devices timing out?",
+            tier=ModelTier.PRO,
+            enable_tripartite=False,
+        )
+
+
+# --- Streamed model turn coalescing -----------------------------------------
+# Streaming splits one logical response into many fragments. Replaying that raw
+# list as history sends a model turn containing content-less parts, which the API
+# rejects with 400 "Requests ending with a model turn are not supported."
+
+def _text_part(text):
+    from google.genai import types
+    return types.Part.from_text(text=text)
+
+
+def _signature_only_part(signature=b"sig-bytes"):
+    """A part with no text and no function_call, carrying only a thought_signature.
+    Emitted as the final stream chunk when thinking_level is enabled."""
+    from google.genai import types
+    part = types.Part()
+    part.thought_signature = signature
+    return part
+
+
+def test_coalesce_merges_streamed_text_fragments():
+    from mantis.agent import _coalesce_model_parts
+    parts = [_text_part("FAILURE_SCOPE: "), _text_part("MULTI_TARGET"), _text_part("_DEGRADATION")]
+    result = _coalesce_model_parts(parts)
+    assert len(result) == 1
+    assert result[0].text == "FAILURE_SCOPE: MULTI_TARGET_DEGRADATION"
+
+
+def test_coalesce_folds_signature_onto_preceding_part():
+    """The trailing signature-only part must not survive as a standalone empty part,
+    but its signature must be preserved: Vertex requires thought_signature round-trip."""
+    from mantis.agent import _coalesce_model_parts
+    parts = [_text_part("some reasoning"), _signature_only_part(b"abc")]
+    result = _coalesce_model_parts(parts)
+    assert len(result) == 1
+    assert result[0].text == "some reasoning"
+    assert result[0].thought_signature == b"abc"
+
+
+def test_coalesce_produces_no_content_less_parts():
+    """Regression for the Trial B 400. Reproduces the observed shape: 25 text
+    fragments followed by one signature-only part."""
+    from mantis.agent import _coalesce_model_parts
+    parts = [_text_part(f"chunk{i} ") for i in range(25)] + [_signature_only_part()]
+    result = _coalesce_model_parts(parts)
+    for part in result:
+        has_content = bool(getattr(part, "text", None)) or bool(getattr(part, "function_call", None))
+        assert has_content, "coalesced model turn must not contain content-less parts"
+    assert len(result) == 1
+
+
+def test_coalesce_preserves_function_call_parts():
+    from google.genai import types
+    from mantis.agent import _coalesce_model_parts
+    fc_part = types.Part.from_function_call(name="search_codebase", args={"query": "x"})
+    parts = [_text_part("thinking "), _text_part("out loud"), fc_part]
+    result = _coalesce_model_parts(parts)
+    assert len(result) == 2
+    assert result[0].text == "thinking out loud"
+    assert result[1].function_call.name == "search_codebase"
+
+
+def test_coalesce_drops_parts_carrying_nothing():
+    from google.genai import types
+    from mantis.agent import _coalesce_model_parts
+    result = _coalesce_model_parts([_text_part("hello"), types.Part()])
+    assert len(result) == 1
+    assert result[0].text == "hello"
+
+
+# --- Hypothesis resolution enforcement --------------------------------------
+# The Actor generates a correct hypothesis during scoping and then abandons it
+# without comment. The gate requires each to be CONFIRMED or REFUTED.
+
+LABELLED_SCOPING_PLAN = """FAILURE_SCOPE: MULTI_TARGET_DEGRADATION
+SCOPE_JUSTIFICATION: Several independent devices fail identically.
+COMPETING_HYPOTHESES:
+- H1: Backend dispatcher queue saturation drops responses.
+- H2: Target devices are genuinely offline.
+- H3: Routing affinity misdirects acknowledgements.
+REQUIRED_SUBSYSTEMS: validator, udmis
+"""
+
+
+def _agent():
+    return MantisAgent()
+
+
+def test_parse_competing_hypotheses_extracts_labelled_entries():
+    hypotheses = _agent()._parse_competing_hypotheses(LABELLED_SCOPING_PLAN)
+    assert len(hypotheses) == 3
+    assert hypotheses[0].startswith("Backend dispatcher queue saturation")
+    assert hypotheses[2].startswith("Routing affinity")
+
+
+def test_parse_competing_hypotheses_ignores_unlabelled_plan():
+    """Unlabelled bullets are not tracked: the gate must not invent hypotheses
+    it cannot deterministically match against later."""
+    plan = "COMPETING_HYPOTHESES:\n- something vague\nREQUIRED_SUBSYSTEMS: validator\n"
+    assert _agent()._parse_competing_hypotheses(plan) == []
+
+
+def test_audit_violations_flags_silently_dropped_hypothesis():
+    answer = (
+        "H1: REFUTED - dispatcher metrics were nominal.\n"
+        "H2: PRIMARY - devices show no active MQTT session.\n"
+        "The routing layer looked fine overall."
+    )
+    violations = _agent()._audit_violations(answer, 3)
+    assert any("H3" in v for v in violations)
+
+
+def test_audit_violations_empty_when_ranked_and_complete():
+    answer = "H1: REFUTED ...\nH2: PRIMARY ...\nH3: CONTRIBUTING ..."
+    assert _agent()._audit_violations(answer, 3) == []
+
+
+def test_audit_violations_rejects_endorsing_every_hypothesis():
+    """The Trial D loophole: marking all hypotheses as causes excludes nothing."""
+    answer = "H1: PRIMARY ...\nH2: PRIMARY ...\nH3: PRIMARY ..."
+    violations = _agent()._audit_violations(answer, 3)
+    assert any("PRIMARY" in v for v in violations)
+
+
+def test_audit_violations_rejects_answer_with_no_primary():
+    answer = "H1: CONTRIBUTING ...\nH2: CONTRIBUTING ...\nH3: REFUTED ..."
+    violations = _agent()._audit_violations(answer, 3)
+    assert any("No hypothesis is marked PRIMARY" in v for v in violations)
+
+
+def test_audit_violations_rejects_mention_without_verdict():
+    """Naming a hypothesis while dodging a verdict must not satisfy the gate."""
+    answer = "Regarding H1, the backend seemed plausible but we moved on. H2: PRIMARY."
+    violations = _agent()._audit_violations(answer, 2)
+    assert any("H1" in v for v in violations)
+
+
+def test_audit_violations_all_flagged_when_answer_omits_section():
+    answer = "The devices are simply offline; register them and retry."
+    violations = _agent()._audit_violations(answer, 3)
+    assert any("H1" in v and "H2" in v and "H3" in v for v in violations)
+
+
+def test_audit_violations_unresolved_counts_as_a_verdict_but_needs_primary():
+    answer = "H1: UNRESOLVED ...\nH2: REFUTED ...\nH3: REFUTED ..."
+    violations = _agent()._audit_violations(answer, 3)
+    assert any("No hypothesis is marked PRIMARY" in v for v in violations)
+
+
+def test_audit_violations_reads_verdict_rendered_below_the_hypothesis():
+    """The audit is normally written as markdown, with the verdict on a nested
+    bullet underneath the restated hypothesis rather than inline with it. A
+    single-line scan rejected every such answer as unresolved, which discarded
+    correctly audited arbitrator output and left the UI matrix blank."""
+    answer = (
+        "### Hypothesis Resolution Audit\n"
+        "\n"
+        "* **H1: The device failed to report the required error status.**\n"
+        "  * **REFUTED**: The test timed out during setUp() before the broken\n"
+        "    configuration was ever sent.\n"
+        "* **H2: The sequencer ignored the device's state update as stale.**\n"
+        "  * **PRIMARY**: The state timestamp lagged the cutoff threshold.\n"
+    )
+    verdicts = _agent()._hypothesis_verdicts(answer, 2)
+    assert verdicts == {1: "REFUTED", 2: "PRIMARY"}
+    assert _agent()._audit_violations(answer, 2) == []
+
+
+def test_audit_violations_multiline_scan_does_not_borrow_next_verdict():
+    """Spanning lines must not let an unresolved hypothesis claim the verdict
+    belonging to the hypothesis rendered after it."""
+    answer = (
+        "* **H1: Something we never actually settled.**\n"
+        "  * We ran out of evidence and moved on.\n"
+        "* **H2: The real one.**\n"
+        "  * **PRIMARY**: Confirmed by the dispatcher log.\n"
+    )
+    verdicts = _agent()._hypothesis_verdicts(answer, 2)
+    assert verdicts == {1: None, 2: "PRIMARY"}
+
+
+def test_gate_rejects_answer_that_drops_a_hypothesis_then_accepts_resolution():
+    """End-to-end: the loop must reject an unresolved answer, push back, and accept
+    the follow-up that resolves every hypothesis."""
+    dropped = "The devices are simply offline. Register them and retry."
+    resolved = (
+        "H1: REFUTED - dispatcher queue depth was nominal in ReflectProcessor.\n"
+        "H2: PRIMARY - no active MQTT session for the targets.\n"
+        "H3: CONTRIBUTING - registry affinity map showed a single stable owner."
+    )
+    mock_client = MockGenAIClient([
+        MockResponse(text=LABELLED_SCOPING_PLAN, function_calls=[]),
+        MockResponse(text=dropped, function_calls=[]),
+        MockResponse(text=resolved, function_calls=[]),
+    ])
+    agent = MantisAgent(client=mock_client)
+
+    chunks = []
+    output = agent._run_llm(
+        prompt="Why are many devices timing out?",
+        tier=ModelTier.PRO,
+        enable_tripartite=False,
+        stream_callback=chunks.append,
+    )
+
+    assert output == resolved
+    assert mock_client.models.call_count == 3
+    transcript = "".join(chunks)
+    assert "[Mantis Gate] Answer rejected" in transcript
+    assert "H1" in transcript and "H2" in transcript and "H3" in transcript
+
+
+def test_gate_fires_only_once_so_a_noncompliant_model_still_terminates():
+    """A model that never complies must not loop forever against the gate."""
+    dropped = "The devices are simply offline."
+    mock_client = MockGenAIClient([
+        MockResponse(text=LABELLED_SCOPING_PLAN, function_calls=[]),
+        MockResponse(text=dropped, function_calls=[]),
+        MockResponse(text=dropped, function_calls=[]),
+    ])
+    agent = MantisAgent(client=mock_client)
+
+    output = agent._run_llm(
+        prompt="Why are many devices timing out?",
+        tier=ModelTier.PRO,
+        enable_tripartite=False,
+    )
+
+    assert output == dropped
+    assert mock_client.models.call_count == 3
+
+
+def test_gate_inactive_when_scoping_produced_no_labelled_hypotheses():
+    """Without labelled hypotheses there is nothing to enforce, so the first
+    answer is accepted unchanged."""
+    mock_client = MockGenAIClient([
+        MockResponse(text=SCOPING_PLAN, function_calls=[]),
+        MockResponse(text="Diagnosis complete.", function_calls=[]),
+    ])
+    agent = MantisAgent(client=mock_client)
+
+    output = agent._run_llm(
+        prompt="Why are many devices timing out?",
+        tier=ModelTier.PRO,
+        enable_tripartite=False,
+    )
+
+    assert output == "Diagnosis complete."
+    assert mock_client.models.call_count == 2
+
+
+def test_forced_synthesis_carries_hypothesis_requirement():
+    """Budget exhaustion must not become a bypass: the synthesis directive has to
+    restate every committed hypothesis."""
+    fc = MagicMock()
+    fc.name = "search_codebase"
+    fc.args = {"query": "x"}
+
+    responses = [MockResponse(text=LABELLED_SCOPING_PLAN, function_calls=[])]
+    # Step 0 is scoping, so max_steps=3 leaves exactly two tool steps before the
+    # budget is exhausted. Never stop calling tools so synthesis is forced.
+    responses += [MockResponse(text="", function_calls=[fc]) for _ in range(2)]
+    responses += [MockResponse(text="Synthesized answer.", function_calls=[])]
+
+    mock_client = MockGenAIClient(responses)
+    agent = MantisAgent(client=mock_client)
+
+    output = agent._run_llm(
+        prompt="Why are many devices timing out?",
+        tier=ModelTier.PRO,
+        enable_tripartite=False,
+        max_steps=3,
+    )
+
+    assert output == "Synthesized answer."
+    synthesis_contents = mock_client.models.calls[-1][1]
+    directive = synthesis_contents[-1].parts[0].text
+    assert "budget is exhausted" in directive
+    for label in ("H1:", "H2:", "H3:"):
+        assert label in directive, f"{label} missing from synthesis directive"
+    assert "PRIMARY" in directive
+    assert "EXACTLY ONE" in directive
+
+
+# --- Verdicts must be backed by examination ---------------------------------
+
+def test_hypothesis_subsystems_maps_named_directories():
+    hypotheses = [
+        "Backend reflector routing in udmis drops downlinks.",
+        "Client sequencer in validator and common hangs on timeouts.",
+        "Something entirely unscoped.",
+    ]
+    mapping = _agent()._hypothesis_subsystems(hypotheses, ["validator", "udmis", "common"])
+    assert mapping[1] == ["udmis"]
+    assert mapping[2] == ["validator", "common"]
+    assert mapping[3] == []
+
+
+def test_refuting_an_unread_subsystem_is_rejected():
+    """The Trial E failure: udmis hypothesis REFUTED after one grep, zero file reads."""
+    answer = "H1: REFUTED - udmis forwarded correctly.\nH2: PRIMARY - devices offline."
+    violations = _agent()._audit_violations(
+        answer, 2, {1: ["udmis"], 2: []}, read_subsystems={"validator"}
+    )
+    assert any("H1" in v and "udmis" in v for v in violations)
+
+
+def test_primary_verdict_on_unread_subsystem_is_rejected():
+    answer = "H1: PRIMARY - udmis saturated.\nH2: REFUTED - devices fine."
+    violations = _agent()._audit_violations(
+        answer, 2, {1: ["udmis"], 2: []}, read_subsystems=set()
+    )
+    assert any("H1" in v and "udmis" in v for v in violations)
+
+
+def test_unresolved_verdict_on_unread_subsystem_is_allowed():
+    """UNRESOLVED is the honest option when the subsystem was never examined."""
+    answer = "H1: UNRESOLVED - udmis not examined.\nH2: PRIMARY - devices offline."
+    violations = _agent()._audit_violations(
+        answer, 2, {1: ["udmis"], 2: []}, read_subsystems=set()
+    )
+    assert not any("H1" in v for v in violations)
+
+
+def test_verdict_accepted_once_the_subsystem_was_read():
+    answer = (
+        "H1: REFUTED - udmis forwarded correctly.\n"
+        "RUNTIME_EVIDENCE: NONE (source inference only)\n"
+        "H2: PRIMARY - devices offline."
+    )
+    violations = _agent()._audit_violations(
+        answer, 2, {1: ["udmis"], 2: []}, read_subsystems={"udmis"}
+    )
+    assert violations == []
+
+
+# --- Backend verdicts must declare their evidentiary basis -------------------
+
+def test_backend_verdict_without_declaration_is_rejected():
+    """A backend verdict must say whether it was observed or inferred."""
+    answer = "H1: PRIMARY - udmis saturates its dispatcher queue.\nH2: REFUTED - devices fine."
+    violations = _agent()._audit_violations(
+        answer, 2, {1: ["udmis"], 2: []}, read_subsystems={"udmis"}
+    )
+    assert any("H1" in v and "RUNTIME_EVIDENCE" in v for v in violations)
+
+
+def test_source_inference_declaration_is_accepted():
+    """Arguing a backend cause from source alone is allowed when declared.
+
+    This is the stale-incident case: the logs that would prove the mechanism are
+    gone, but the mechanism is still legible in the source.
+    """
+    answer = (
+        "H1: PRIMARY - udmis saturates its dispatcher queue.\n"
+        "RUNTIME_EVIDENCE: NONE (source inference only) - the logs needed to prove this "
+        "are not available; the mechanism is plausible from the source.\n"
+        "H2: REFUTED - devices fine."
+    )
+    violations = _agent()._audit_violations(
+        answer, 2, {1: ["udmis"], 2: []}, read_subsystems={"udmis"}
+    )
+    assert violations == []
+
+
+def test_log_backed_declaration_is_accepted():
+    answer = (
+        "H1: PRIMARY - udmis saturates its dispatcher queue.\n"
+        "RUNTIME_EVIDENCE: LOCAL_FILE - out/udmis.log shows the queue at 1.000.\n"
+        "H2: REFUTED - devices fine."
+    )
+    violations = _agent()._audit_violations(
+        answer,
+        2,
+        {1: ["udmis"], 2: []},
+        read_subsystems={"udmis"},
+        obtained_evidence_tiers={"LOCAL_FILE"},
+    )
+    assert violations == []
+
+
+def test_bare_none_declaration_is_rejected():
+    """NONE must carry its qualifier, or the reader cannot tell inference from observation."""
+    answer = (
+        "H1: PRIMARY - udmis saturates its dispatcher queue.\n"
+        "RUNTIME_EVIDENCE: NONE\n"
+        "H2: REFUTED - devices fine."
+    )
+    violations = _agent()._audit_violations(
+        answer, 2, {1: ["udmis"], 2: []}, read_subsystems={"udmis"}
+    )
+    assert any("H1" in v and "qualifier" in v for v in violations)
+
+
+def test_declaration_not_required_for_client_hypothesis():
+    """Client-side subsystems are observable through existing test evidence."""
+    answer = "H1: PRIMARY - validator drops the message.\nH2: REFUTED - devices fine."
+    violations = _agent()._audit_violations(
+        answer, 2, {1: ["validator"], 2: []}, read_subsystems={"validator"}
+    )
+    assert violations == []
+
+
+def test_declaration_not_required_for_unresolved_backend_hypothesis():
+    """UNRESOLVED asserts nothing about runtime behavior, so it declares nothing."""
+    answer = "H1: UNRESOLVED - udmis not examined.\nH2: PRIMARY - devices offline."
+    violations = _agent()._audit_violations(
+        answer, 2, {1: ["udmis"], 2: []}, read_subsystems=set()
+    )
+    assert violations == []
+
+
+def test_declaration_is_not_borrowed_from_a_neighbouring_hypothesis():
+    """H2's declaration must not satisfy H1."""
+    answer = (
+        "H1: PRIMARY - udmis saturates its dispatcher queue.\n"
+        "H2: REFUTED - udmis routing is fine.\n"
+        "RUNTIME_EVIDENCE: LOCAL_FILE - out/udmis.log shows correct routing.\n"
+    )
+    declarations = _agent()._runtime_evidence_declarations(answer, 2)
+    assert declarations[1] is None
+    assert declarations[2] == "LOCAL_FILE"
+
+
+
+# --- Content-less model turns must never reach the API ----------------------
+
+def test_empty_model_turn_is_not_replayed_as_history():
+    """Reproduces the Trial F crash signature: a Content with zero parts.
+
+    The Actor returned a blank final answer, the hypothesis gate rejected it for
+    having no verdicts, and the blank turn was then replayed as history. Vertex
+    rejects a request containing a part-less Content with 400 'must include at
+    least one parts field', which aborted the run and handed the diagnosis to the
+    fallback engine.
+    """
+    resp_scoping = MockResponse(text=LABELLED_SCOPING_PLAN, function_calls=[])
+    resp_blank = MockResponse(text="", function_calls=[])
+    resp_final = MockResponse(
+        text=(
+            "H1: PRIMARY - backend saturation.\n"
+            "RUNTIME_EVIDENCE: NONE (source inference only)\n"
+            "H2: REFUTED - not the devices.\nH3: CONTRIBUTING - client waits."
+        ),
+        function_calls=[],
+    )
+
+    mock_client = MockGenAIClient([resp_scoping, resp_blank, resp_final])
+    agent = MantisAgent(client=mock_client)
+
+    chunks = []
+    agent._run_llm(
+        prompt="Why are many devices timing out?",
+        tier=ModelTier.PRO,
+        enable_tripartite=False,
+        stream_callback=chunks.append,
+    )
+
+    for _, contents, _ in mock_client.models.calls:
+        for content in contents:
+            parts = getattr(content, "parts", None) or []
+            assert parts, f"a {getattr(content, 'role', '?')} turn was sent with no parts"
+            assert any(
+                (getattr(p, "text", "") or "").strip()
+                or getattr(p, "function_call", None)
+                or getattr(p, "function_response", None)
+                or getattr(p, "thought_signature", None)
+                for p in parts
+            ), "a turn was sent whose parts carry no content"
+    assert any("no usable content" in c for c in chunks)
+
+
+def test_part_content_predicate():
+    from mantis.agent import _part_carries_content
+
+    class _Part:
+        def __init__(self, text=None, function_call=None, thought_signature=None):
+            self.text = text
+            self.function_call = function_call
+            self.function_response = None
+            self.thought_signature = thought_signature
+
+    assert not _part_carries_content(_Part(text=""))
+    assert not _part_carries_content(_Part(text="   \n"))
+    assert _part_carries_content(_Part(text="hello"))
+    assert _part_carries_content(_Part(function_call=object()))
+    assert _part_carries_content(_Part(thought_signature=b"sig"))
+
+
+def test_unobtained_log_tier_declaration_is_rejected():
+    """Trial G regression: LOCAL_FILE declared when no such tier was ever returned.
+
+    The Critic caught this but the Arbitrator did not apply the correction, so the
+    false declaration reached the final answer. The declaration is checkable
+    against tool history, so it is checked.
+    """
+    answer = (
+        "H1: REFUTED - udmis forwards errors correctly.\n"
+        "RUNTIME_EVIDENCE: LOCAL_FILE\n"
+        "H2: PRIMARY - devices offline."
+    )
+    violations = _agent()._audit_violations(
+        answer,
+        2,
+        {1: ["udmis"], 2: []},
+        read_subsystems={"udmis"},
+        obtained_evidence_tiers=set(),
+    )
+    assert any("H1" in v and "LOCAL_FILE" in v for v in violations)
+
+
+def test_declared_tier_accepted_when_the_tool_returned_it():
+    answer = (
+        "H1: REFUTED - udmis forwards errors correctly.\n"
+        "RUNTIME_EVIDENCE: LOCAL_FILE - out/udmis.log line 42 shows the forward.\n"
+        "H2: PRIMARY - devices offline."
+    )
+    violations = _agent()._audit_violations(
+        answer,
+        2,
+        {1: ["udmis"], 2: []},
+        read_subsystems={"udmis"},
+        obtained_evidence_tiers={"LOCAL_FILE"},
+    )
+    assert violations == []
+
+
+def test_compound_markers_detects_joined_clauses():
+    """Trial H's H1 joined an offline-device claim to a thread-leak claim with
+    'while', and the well-evidenced half carried the other to PRIMARY."""
+    from mantis.agent import _compound_markers
+
+    assert _compound_markers(
+        "Devices are unregistered while executor threads fail to terminate."
+    ) == ["while"]
+    assert _compound_markers("Queue saturates; heartbeats are dropped.") == [";"]
+    assert _compound_markers("The map is stale as well as unbounded.") == ["as well as"]
+
+
+def test_compound_markers_allows_a_bare_and():
+    """'and' routinely joins parts of ONE mechanism. Treating it as compound would
+    reject sound hypotheses, so it is deliberately not a marker."""
+    from mantis.agent import _compound_markers
+
+    assert _compound_markers("The routing and dispatch layer drops acks.") == []
+    assert _compound_markers("Queue saturation drops responses.") == []
+
+
+COMPOUND_SCOPING_PLAN = """FAILURE_SCOPE: MULTI_TARGET_DEGRADATION
+SCOPE_JUSTIFICATION: Several independent devices fail identically.
+COMPETING_HYPOTHESES:
+- H1: Devices are unregistered while validator threads fail to terminate.
+- H2: Routing affinity misdirects acknowledgements.
+REQUIRED_SUBSYSTEMS: validator, udmis
+"""
+
+
+def test_scoping_rejects_compound_hypothesis_and_rescopes():
+    """A plan whose hypothesis asserts two mechanisms is sent back once, and the
+    rewritten plan is what the investigation is held to."""
+    final = (
+        "H1: REFUTED - devices had active sessions.\n"
+        "H2: CONTRIBUTING - threads leak but do not cause the timeouts.\n"
+        "H3: PRIMARY - affinity map misdirects acknowledgements."
+    )
+    mock_client = MockGenAIClient([
+        MockResponse(text=COMPOUND_SCOPING_PLAN, function_calls=[]),
+        MockResponse(
+            text=(
+                "FAILURE_SCOPE: MULTI_TARGET_DEGRADATION\n"
+                "SCOPE_JUSTIFICATION: Several independent devices fail identically.\n"
+                "COMPETING_HYPOTHESES:\n"
+                "- H1: Devices are unregistered in the cloud registry.\n"
+                "- H2: Validator executor threads fail to terminate.\n"
+                "- H3: Routing affinity misdirects acknowledgements.\n"
+                "REQUIRED_SUBSYSTEMS: validator\n"
+            ),
+            function_calls=[],
+        ),
+        MockResponse(text=final, function_calls=[]),
+    ])
+    agent = MantisAgent(client=mock_client)
+
+    chunks = []
+    output = agent._run_llm(
+        prompt="Why are many devices timing out?",
+        tier=ModelTier.PRO,
+        stream_callback=chunks.append,
+        enable_tripartite=False,
+    )
+
+    transcript = "".join(chunks)
+    assert "[Mantis Scoping] Plan rejected" in transcript
+    assert "H1 joins clauses with 'while'" in transcript
+    # Three hypotheses are tracked, which is only true of the REWRITTEN plan.
+    assert "Tracking 3 hypotheses" in transcript
+    assert output == final
+
+
+def test_scoping_gate_fires_only_once_so_a_stubborn_plan_still_proceeds():
+    """A model that re-emits the same compound plan must not loop on the gate."""
+    # H1 names validator, which is never read here, so it must stay UNRESOLVED or the
+    # unrelated read-before-ruling gate fires and masks what this test measures.
+    final = (
+        "H1: UNRESOLVED - validator source was not opened.\n"
+        "H2: PRIMARY - affinity map misdirects acknowledgements."
+    )
+    mock_client = MockGenAIClient([
+        MockResponse(text=COMPOUND_SCOPING_PLAN, function_calls=[]),
+        MockResponse(text=COMPOUND_SCOPING_PLAN, function_calls=[]),
+        MockResponse(text=final, function_calls=[]),
+    ])
+    agent = MantisAgent(client=mock_client)
+
+    chunks = []
+    output = agent._run_llm(
+        prompt="Why are many devices timing out?",
+        tier=ModelTier.PRO,
+        stream_callback=chunks.append,
+        enable_tripartite=False,
+    )
+
+    transcript = "".join(chunks)
+    assert transcript.count("[Mantis Scoping] Plan rejected") == 1
+    assert "Tracking 2 hypotheses" in transcript
+    assert output == final
+    assert mock_client.models.call_count == 3
+
+
+def test_clean_scoping_plan_is_not_rescoped():
+    mock_client = MockGenAIClient([
+        MockResponse(text=LABELLED_SCOPING_PLAN, function_calls=[]),
+        MockResponse(
+            text="H1: REFUTED ...\nH2: PRIMARY ...\nH3: CONTRIBUTING ...",
+            function_calls=[],
+        ),
+    ])
+    agent = MantisAgent(client=mock_client)
+
+    chunks = []
+    agent._run_llm(
+        prompt="Why are many devices timing out?",
+        tier=ModelTier.PRO,
+        stream_callback=chunks.append,
+        enable_tripartite=False,
+    )
+
+    assert "[Mantis Scoping] Plan rejected" not in "".join(chunks)
+    assert mock_client.models.call_count == 2
+
+
+def test_agent_llm_failure_fails_fast_without_silent_fallback():
+    class FailingModels:
+        def generate_content(self, *args, **kwargs):
+            raise RuntimeError("Simulated Vertex AI 503 Service Unavailable")
+
+    class FailingClient:
+        models = FailingModels()
+
+    agent = MantisAgent(client=FailingClient())
+    with pytest.raises(RuntimeError, match="Simulated Vertex AI 503 Service Unavailable"):
+        agent.run("Diagnose why the test failed")
+
+
+def test_deterministic_does_not_fabricate_ahu1_on_generic_failure_query():
+    agent = MantisAgent()
+    agent.config.provider_override = ProviderType.OFFLINE_DETERMINISTIC
+    res = agent.run("Diagnose why my build is broken")
+    assert "AHU-1" not in res
+    assert "pointset_publish" not in res
+    assert "Please specify both the device ID and test name" in res
+
+
+def test_get_genai_tools_fails_fast_on_error(monkeypatch):
+    from mantis.tools.registry import get_genai_tools
+    import mantis.tools.registry as reg
+
+    # If get_tool_schemas yields a broken schema, get_genai_tools must raise RuntimeError, not return []
+    monkeypatch.setattr(reg, "get_tool_schemas", lambda: [{"name": "bad_tool", "description": "desc", "parameters": 12345}])
+    with pytest.raises(RuntimeError, match="Failed to create FunctionDeclaration"):
+        get_genai_tools()
+
+
+def test_agent_arbitrator_gate_violation_falls_back_to_actor(monkeypatch):
+    from mantis.tests.test_agent import MockResponse, MockGenAIClient, MockFunctionCall
+
+    resp_scoping = MockResponse(
+        text=(
+            "FAILURE_SCOPE: SINGLE_TARGET\n"
+            "SCOPE_JUSTIFICATION: Single device test failure.\n"
+            "COMPETING_HYPOTHESES:\n"
+            "- H1: Config mismatch in common\n"
+            "- H2: Timeout failure in common\n"
+            "REQUIRED_SUBSYSTEMS: common"
+        ),
+        function_calls=[],
+    )
+    # Actor reads a file in common, then renders valid verdicts
+    resp_actor_tool = MockResponse(
+        text=None,
+        function_calls=[MockFunctionCall(name="read_udmi_file", args={"file_path": "common/README.md"})],
+    )
+    actor_valid_text = (
+        "Actor diagnosis:\n"
+        "- H1: PRIMARY (Config mismatch confirmed)\n"
+        "- H2: REFUTED (No timeout occurred)\n"
+    )
+    resp_actor = MockResponse(text=actor_valid_text, function_calls=[])
+    resp_critic = MockResponse(text="Critic audit confirms actor findings.", function_calls=[])
+    
+    # Arbitrator emits an invalid verdict (both H1 and H2 marked PRIMARY, violating single-PRIMARY gate)
+    arbitrator_invalid_text = (
+        "Arbitrator synthesis:\n"
+        "- H1: PRIMARY\n"
+        "- H2: PRIMARY\n"
+    )
+    resp_arbitrator = MockResponse(text=arbitrator_invalid_text, function_calls=[])
+
+    mock_client = MockGenAIClient([resp_scoping, resp_actor_tool, resp_actor, resp_critic, resp_arbitrator])
+    agent = MantisAgent(client=mock_client)
+    agent.config.provider_override = ProviderType.VERTEX_AI
+
+    # Mock execute_tool to return file content for read_udmi_file
+    monkeypatch.setattr("mantis.tools.registry.execute_tool", lambda **kwargs: "Mock content in common")
+
+    res = agent.run_tripartite("Why did pointset_publish fail for AHU-1?")
+    # Arbitrator's invalid answer should be rejected and fall back to actor_valid_text
+    assert res["status"] == "DEGRADED"
+    assert "Actor diagnosis:" in res["final_answer"]
+    assert res["metrics"].tripartite_degraded is True
+    assert res["metrics"].tripartite_status == "ARBITRATOR_GATE_VIOLATION"
+
+
+def test_critic_snippet_includes_truncation_marker(monkeypatch):
+    from mantis.tests.test_agent import MockResponse, MockGenAIClient, MockFunctionCall
+
+    resp_actor_tool = MockResponse(
+        text=None,
+        function_calls=[MockFunctionCall(name="read_udmi_file", args={"file_path": "common/README.md"})],
+    )
+    resp_actor = MockResponse(text="Actor answer", function_calls=[])
+    resp_critic = MockResponse(text="Critic audit", function_calls=[])
+    resp_arbitrator = MockResponse(text="Arbitrator synthesis", function_calls=[])
+
+    mock_client = MockGenAIClient([resp_actor_tool, resp_actor, resp_critic, resp_arbitrator])
+    agent = MantisAgent(client=mock_client)
+    agent.config.provider_override = ProviderType.VERTEX_AI
+
+    # Return large tool output > 600 chars
+    large_output = "X" * 1000
+    monkeypatch.setattr("mantis.tools.registry.execute_tool", lambda **kwargs: large_output)
+
+    agent._run_llm(
+        prompt="Explain pointset",
+        tier=ModelTier.PRO,
+        enable_tripartite=True,
+        enable_scoping=False,
+    )
+
+    # Inspect calls made to Critic (call index 2)
+    model, critic_contents, config = mock_client.models.calls[2]
+    critic_prompt = critic_contents[0].parts[0].text
+    assert "...[truncated 400 chars]" in critic_prompt
+
+
+
+def test_strip_file_uri_scheme_unblocks_udmi_schema_refs():
+    """UDMI's schemas express every cross-file reference as
+    `"$ref": "file:common.json#/..."`. Vertex reads any `file:<name>` inside a
+    function response as a reference to an attached file part, finds no such
+    part, and rejects the whole request with 400 INVALID_ARGUMENT. Before this
+    strip, any investigation that read one of the 66 schemas carrying a $ref
+    killed the run outright."""
+    assert _strip_file_uri_scheme('{"$ref": "file:common.json#/definitions/depth"}') == (
+        '{"$ref": "common.json#/definitions/depth"}'
+    )
+    # The exact payload that produced the observed 400.
+    assert _strip_file_uri_scheme('{"$ref": "file:state_system_hardware.json"}') == (
+        '{"$ref": "state_system_hardware.json"}'
+    )
+
+
+def test_strip_file_uri_scheme_keeps_absolute_paths_usable():
+    """A `file:///abs/path` URL must degrade to the path itself rather than to a
+    mangled fragment, so a log line naming a file stays actionable."""
+    assert _strip_file_uri_scheme('{"link": "file:///abs/path/x.md"}') == (
+        '{"link": "/abs/path/x.md"}'
+    )
+
+
+def test_strip_file_uri_scheme_leaves_non_scheme_colons_alone():
+    """The strip is a scheme removal, not a blanket delete of the word `file`.
+    Words that merely end in `file:` are not URI schemes and rewriting them
+    would corrupt tool output."""
+    text = '{"text": "see profile:x and makefile: notes"}'
+    assert _strip_file_uri_scheme(text) == text

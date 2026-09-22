@@ -15,8 +15,8 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     # Check for --mcp flag
     if "--mcp" in argv:
-        import mcp.server
-        mcp.server.main()
+        from mantis import mcp_server
+        mcp_server.main()
         return 0
 
     # Check for --offline flag

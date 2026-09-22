@@ -25,6 +25,6 @@ if ! command -v tmux >/dev/null 2>&1; then
     echo "Warning: tmux is not installed or not in PATH. Local session management requires tmux." >&2
 fi
 
-export PYTHONPATH="$ROOT_DIR:${PYTHONPATH:-}"
+export PYTHONPATH="$ROOT_DIR/common/src/main/python:$ROOT_DIR:${PYTHONPATH:-}"
 
 exec python3 -m mantis.cli "$@"

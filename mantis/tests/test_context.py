@@ -104,3 +104,22 @@ def test_context_reset(tmp_path):
     mgr.reset()
     assert mgr.context.active_device_id is None
     assert len(mgr.context.history) == 0
+
+
+def test_context_entity_extraction_rejects_common_words_and_days():
+    ctx_mgr = ContextManager()
+
+    # Queries with temporal or colloquial phrases should not extract device
+    ctx_mgr.add_user_message("Why did the test fail on Tuesday?")
+    assert ctx_mgr.context.active_device_id is None
+
+    ctx_mgr.add_user_message("Can you debug this for me?")
+    assert ctx_mgr.context.active_device_id is None
+
+    ctx_mgr.add_user_message("Why did it fail on localhost?")
+    assert ctx_mgr.context.active_device_id is None
+
+    # Valid device name with hyphen should be extracted
+    ctx_mgr.add_user_message("Why did it fail on AHU-1?")
+    assert ctx_mgr.context.active_device_id == "AHU-1"
+

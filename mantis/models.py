@@ -17,6 +17,11 @@ class ClaimStatus(str, Enum):
     CONFIRMED = "CONFIRMED"
     REFUTED = "REFUTED"
     UNVERIFIED_ASSUMPTION = "UNVERIFIED ASSUMPTION"
+    # No observation bears on the claim either way. Distinct from REFUTED,
+    # which requires a positive observation that excludes the claim. Not
+    # finding an error string in a log is not such an observation: a device
+    # that never connected logs no connection error either.
+    NOT_ASSESSED = "NOT ASSESSED"
 
 
 class MessageRole(str, Enum):
@@ -44,6 +49,7 @@ class PatchStatus(str, Enum):
 class SchemaInspectRequest(BaseModel):
     schema_name: str = Field(..., description="Schema name or filename without extension (e.g. 'pointset')")
     sub_path: Optional[str] = Field(None, description="Dot-delimited property sub-path (e.g. 'properties.points')")
+    resolve_refs: bool = Field(False, description="Recursively resolve $ref pointers in schema")
 
 
 class SchemaSummary(BaseModel):
@@ -199,7 +205,7 @@ class EnsureSetupRequest(BaseModel):
 
 class RunSequencerTestRequest(BaseModel):
     test_name: str = Field(..., description="Name of the sequencer test sequence (e.g. 'pointset_publish', 'system_last_update', 'empty')")
-    device_id: str = Field("AHU-1", description="Device ID under test (e.g. 'AHU-1', 'GAT-1')")
+    device_id: str = Field(..., description="Device ID under test (e.g. 'AHU-1', 'GAT-1')")
     target_spec: Optional[str] = Field(None, description="Target endpoint or cloud project specification (e.g. '//gbos/bos-platform-dev/faucetsdn', '//gcp/my-project/my-registry', '//mqtt/localhost:28430'). If omitted for local tests, uses active session or defaults to local isolated broker.")
     site_model: str = Field("sites/udmi_site_model", description="Local path to the site model directory containing device configurations (default: 'sites/udmi_site_model'). NOTE: This is always a local directory, not a '//...' URI.")
     session_id: Optional[str] = Field(None, description="Optional session name to execute within. If omitted, Mantis manages test sessions automatically.")
@@ -232,6 +238,9 @@ class PublishMqttRequest(BaseModel):
     test_id: str
     topic: str
     payload: str
+    target_spec: Optional[str] = None
+    site_model: str = "sites/udmi_site_model"
+    device_id: Optional[str] = None
 
 
 class DiagnoseFailureRequest(BaseModel):
@@ -318,6 +327,8 @@ class ExecutionMetrics(BaseModel):
     total_tokens: int = 0
     tool_calls: Dict[str, int] = Field(default_factory=dict)
     retry_count: int = 0
+    tripartite_degraded: bool = False
+    tripartite_status: str = "SUCCESS"
 
 
 class ChatMessage(BaseModel):

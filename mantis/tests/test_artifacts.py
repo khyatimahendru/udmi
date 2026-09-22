@@ -78,7 +78,7 @@ def test_ingest_support_bundle_zip(tmp_path):
         "failed_test": "pointset_publish",
         "secret_key": "my-secret",
     }), encoding="utf-8")
-    (src_dir / "sequence.log").write_text("Starting test pointset_publish for AHU-1\nRESULT: FAIL\n", encoding="utf-8")
+    (src_dir / "sequence.log").write_text("Starting test pointset_publish for AHU-1\nRESULT fail pointset pointset_publish STABLE 0/8 Sequence failed\n", encoding="utf-8")
     (src_dir / "key.pem").write_text("-----BEGIN RSA PRIVATE KEY-----\nsecret\n-----END RSA PRIVATE KEY-----\n", encoding="utf-8")
 
     zip_file = tmp_path / "support_bundle.zip"
@@ -108,7 +108,7 @@ def test_extract_timeline_chronological_sorting_and_stage_wait(tmp_path):
 2026-08-26T12:05:02Z Dispatched config (RC:9a6ddf.001)
 2026-08-26T12:05:05Z Waiting for config sync
 2026-08-26T12:05:10Z Cutoff set: 12:05:10Z
-2026-08-26T12:05:30Z RESULT: PASS
+2026-08-26T12:05:30Z RESULT pass pointset pointset_publish STABLE 1/8 Sequence complete
 """, encoding="utf-8")
 
     # pubber.log has earlier events at 12:00:01Z and 12:00:05Z
@@ -190,7 +190,7 @@ def test_detect_log_anomalies(tmp_path):
 2026-08-26T12:45:05Z ignoring stale state update 12:44:00Z
 2026-08-26T12:45:08Z UnrecognizedPropertyException: Unrecognized field "extra_key" (class udmi.schema.Metadata)
 2026-08-26T12:47:00Z Stage timeout after 120s waiting for telemetry echo
-2026-08-26T12:47:01Z RESULT: FAIL
+2026-08-26T12:47:01Z RESULT fail pointset pointset_publish STABLE 0/8 Sequence failed
 """)
 
     res = detect_log_anomalies(run_dir=str(run_dir))

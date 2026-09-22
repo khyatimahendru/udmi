@@ -12,6 +12,7 @@ from mantis.tools.patcher import patch_site_model
 from mantis.tools.schemas import inspect_udmi_schema, list_udmi_schemas
 from mantis.tools.site_models import inspect_site_model
 from mantis.tools.traces import inspect_traces
+from mantis.tools.udmis_logs import get_udmis_runtime_logs
 
 __all__ = [
     "discover_test_runs",
@@ -25,4 +26,5 @@ __all__ = [
     "list_udmi_schemas",
     "inspect_site_model",
     "inspect_traces",
+    "get_udmis_runtime_logs",
 ]
