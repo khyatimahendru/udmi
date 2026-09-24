@@ -155,9 +155,7 @@ def test_publish_state(dispatcher, mock_client):
 
     mock_client.publish.assert_called_once_with(
         "state",
-        '{"timestamp": null, "version": "1", "upgraded_from": null, '
-        '"system": null, "gateway": null, "discovery": null, "localnet": null, '
-        '"blobset": null, "alarmset": null, "pointset": null}',
+        '{"version": "1"}',
         None,
         wait=False
     )
@@ -173,9 +171,7 @@ def test_publish_event(dispatcher, mock_client):
 
     mock_client.publish.assert_called_once_with(
         "system",
-        '{"timestamp": null, "version": "1", "upgraded_from": null, '
-        '"last_config": null, "logentries": null, "event_no": null, '
-        '"metrics": null}',
+        '{"version": "1"}',
         None
     )
 
