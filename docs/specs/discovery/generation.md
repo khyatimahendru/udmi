@@ -1,6 +1,7 @@
-[**UDMI**](../../../) / [**Docs**](../../) / [**Specs**](../) / [**Discovery**](./) / [Generation](#)
+[**UDMI**](../../../) / [**Docs**](../../) / [**Specs**](../) / [**Discovery**](./) / [Generation](#) / [Examples](./examples/README.md)
 
 # Discovery Generation
+
 
 The `generation` field is a core mechanism in UDMI discovery and enumeration processes. It is used to trigger, track, and correlate discovery scans and self-enumeration requests. The `generation` value is an RFC 3339 formatted date-time string.
 
@@ -54,3 +55,9 @@ Self-enumeration is an explicit request for a single, already-registered device 
 | **Active Sporadic** | `families.<family>.generation` | Explicit timestamp triggers a one-off scan. | Matches `config.generation`. Retained after stop. | Matches `config.generation`. |
 | **Active Periodic** | `families.<family>.generation` + `scan_interval_sec` | Base timestamp for calculating the schedule. | Updates every loop to a new, unique timestamp `≥ config.generation`. | Matches the current loop's updated `generation`. |
 | **Self Enumeration** | `discovery.generation` | Explicit timestamp triggers self-reporting. | Matches `config.generation`. | Matches `config.generation`. |
+
+---
+
+## 5. Concrete Examples
+
+For concrete message traces, envelope metadata, and START/STOP marker structures from live runs, see [Discovery Examples](./examples/README.md).

@@ -1,0 +1,9 @@
+{
+  "deviceId": "DSN-1",
+  "deviceRegistryId": "ZZ-TRI-FECTA",
+  "subFolder": "discovery",
+  "subType": "events",
+  "publishTime": "2026-09-24T09:19:40Z",
+  "projectId": "my-project",
+  "topic": "/r/ZZ-TRI-FECTA/d/DSN-1/events/discovery"
+}

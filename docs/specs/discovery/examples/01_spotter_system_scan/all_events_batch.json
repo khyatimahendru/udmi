@@ -1,0 +1,120 @@
+[
+  {
+    "filename": "00_start_marker.json",
+    "envelope": {
+      "deviceId": "DSN-1",
+      "deviceRegistryId": "ZZ-TRI-FECTA",
+      "subFolder": "discovery",
+      "subType": "events",
+      "publishTime": "2026-09-24T09:19:09Z",
+      "projectId": "my-project",
+      "topic": "/r/ZZ-TRI-FECTA/d/DSN-1/events/discovery"
+    },
+    "payload": {
+      "timestamp": "2026-09-24T09:19:09.545953+00:00",
+      "version": "1.5.7",
+      "generation": "2026-09-24T09:19:07Z",
+      "family": "bacnet",
+      "event_no": 0
+    }
+  },
+  {
+    "filename": "01_device_12341.json",
+    "envelope": {
+      "deviceId": "DSN-1",
+      "deviceRegistryId": "ZZ-TRI-FECTA",
+      "subFolder": "discovery",
+      "subType": "events",
+      "publishTime": "2026-09-24T09:19:13Z",
+      "projectId": "my-project",
+      "topic": "/r/ZZ-TRI-FECTA/d/DSN-1/events/discovery"
+    },
+    "payload": {
+      "timestamp": "2026-09-24T09:19:13.672489+00:00",
+      "version": "1.5.7",
+      "generation": "2026-09-24T09:19:07Z",
+      "family": "bacnet",
+      "addr": "12341",
+      "event_no": 1,
+      "families": {
+        "ipv4": {
+          "addr": "192.168.12.11"
+        }
+      },
+      "system": {
+        "description": "http://christiantremblay.github.io/BAC0/",
+        "name": "BAC0",
+        "ancillary": {
+          "description": "http://christiantremblay.github.io/BAC0/",
+          "location": "Bromont, Qu\u00e9bec",
+          "application_version": "23.07.03",
+          "firmware": "3.11.2 (main, May 12 2026, 05:17:27) [GCC 12.2.0]",
+          "name": "BAC0"
+        },
+        "hardware": {
+          "make": "SERVISYS inc.",
+          "model": "BAC0 Scripting Tool"
+        }
+      }
+    }
+  },
+  {
+    "filename": "02_device_12342.json",
+    "envelope": {
+      "deviceId": "DSN-1",
+      "deviceRegistryId": "ZZ-TRI-FECTA",
+      "subFolder": "discovery",
+      "subType": "events",
+      "publishTime": "2026-09-24T09:19:13Z",
+      "projectId": "my-project",
+      "topic": "/r/ZZ-TRI-FECTA/d/DSN-1/events/discovery"
+    },
+    "payload": {
+      "timestamp": "2026-09-24T09:19:13.681963+00:00",
+      "version": "1.5.7",
+      "generation": "2026-09-24T09:19:07Z",
+      "family": "bacnet",
+      "addr": "12342",
+      "event_no": 2,
+      "families": {
+        "ipv4": {
+          "addr": "192.168.12.12"
+        }
+      },
+      "system": {
+        "description": "http://christiantremblay.github.io/BAC0/",
+        "name": "BAC0",
+        "ancillary": {
+          "description": "http://christiantremblay.github.io/BAC0/",
+          "location": "Bromont, Qu\u00e9bec",
+          "application_version": "23.07.03",
+          "firmware": "3.11.2 (main, May 12 2026, 05:17:27) [GCC 12.2.0]",
+          "name": "BAC0"
+        },
+        "hardware": {
+          "make": "SERVISYS inc.",
+          "model": "BAC0 Scripting Tool"
+        }
+      }
+    }
+  },
+  {
+    "filename": "03_stop_marker_event_-3.json",
+    "envelope": {
+      "deviceId": "DSN-1",
+      "deviceRegistryId": "ZZ-TRI-FECTA",
+      "subFolder": "discovery",
+      "subType": "events",
+      "publishTime": "2026-09-24T09:19:19Z",
+      "projectId": "my-project",
+      "topic": "/r/ZZ-TRI-FECTA/d/DSN-1/events/discovery"
+    },
+    "payload": {
+      "timestamp": "2026-09-24T09:19:19.666201+00:00",
+      "version": "1.5.7",
+      "generation": "2026-09-24T09:19:07Z",
+      "family": "bacnet",
+      "event_no": -3
+    }
+  }
+]

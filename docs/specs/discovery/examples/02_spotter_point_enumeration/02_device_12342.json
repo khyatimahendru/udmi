@@ -1,0 +1,68 @@
+{
+  "timestamp": "2026-09-24T09:19:29.361685+00:00",
+  "version": "1.5.7",
+  "generation": "2026-09-24T09:19:22Z",
+  "family": "bacnet",
+  "addr": "12342",
+  "event_no": 1,
+  "families": {
+    "ipv4": {
+      "addr": "192.168.12.12"
+    }
+  },
+  "refs": {
+    "AI:0": {
+      "name": "Return Air Temperature",
+      "units": "degreesCelsius",
+      "type": "analogInput",
+      "description": "FCU-123",
+      "ancillary": {
+        "present_value": "20.0"
+      }
+    },
+    "AV:0": {
+      "name": "Room Temperature",
+      "units": "degreesCelsius",
+      "type": "analogValue",
+      "description": "Test Analogue Setpoint",
+      "ancillary": {
+        "present_value": "16.0"
+      }
+    },
+    "BI:0": {
+      "name": "Fan On",
+      "type": "binaryInput",
+      "description": "Main fan",
+      "ancillary": {
+        "present_value": "active"
+      }
+    },
+    "MSV:0": {
+      "name": "test_multistate_setpoint",
+      "possible_values": [
+        "Open",
+        "Closed"
+      ],
+      "type": "multiStateValue",
+      "description": "L1 Fire Damper",
+      "ancillary": {
+        "present_value": "23"
+      }
+    }
+  },
+  "system": {
+    "description": "http://christiantremblay.github.io/BAC0/",
+    "name": "BAC0",
+    "ancillary": {
+      "description": "http://christiantremblay.github.io/BAC0/",
+      "location": "Bromont, Qu\u00e9bec",
+      "application_version": "23.07.03",
+      "firmware": "3.11.2 (main, May 12 2026, 05:17:27) [GCC 12.2.0]",
+      "name": "BAC0"
+    },
+    "hardware": {
+      "make": "SERVISYS inc.",
+      "model": "BAC0 Scripting Tool"
+    }
+  }
+}
