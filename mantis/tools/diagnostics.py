@@ -66,6 +66,7 @@ def diagnose_test_failure(
         device_id=device_id,
         run_dir=run_dir,
         udmi_root=udmi_root,
+        site_model=site_model,
     )
     site_info = inspect_site_model(
         site_model=site_model,
@@ -519,18 +520,18 @@ def diagnose_test_failure(
     if competing_hypotheses.get("Jackson Deserialization Failure", {}).get("status") == ClaimStatus.CONFIRMED.value:
         root_cause = f"Jackson parser failed to deserialize device metadata: {timeline.get('jackson_error') or meta_err}"
         evidence_lines.append(f"Jackson parser error: `{timeline.get('jackson_error') or meta_err}`")
-        fix_suggestions.append(f'bin/mantis "Validate site model {site_model}"')
+        fix_suggestions.append(f"Correct the device metadata so it parses: validate {site_model}/devices/{device_id}/metadata.json against schema/metadata.json.")
 
     elif competing_hypotheses.get("Proxy Binding Failure", {}).get("status") == ClaimStatus.CONFIRMED.value:
         root_cause = f"Proxy binding configuration error: Device '{device_id}' specifies gateway_id '{gateway_id}' which does not exist in site model '{site_model}'."
         evidence_lines.append(f"Site model error: Gateway '{gateway_id}' not found in {site_model}/devices")
-        fix_suggestions.append(f'bin/mantis "Validate site model {site_model}"')
+        fix_suggestions.append(f"Correct the gateway binding in the site model: either add gateway '{gateway_id}' under {site_model}/devices, or change the gateway_id in the metadata of '{device_id}' to an existing gateway.")
 
     elif competing_hypotheses.get("Gateway Connection Drop", {}).get("status") == ClaimStatus.CONFIRMED.value:
         ev = competing_hypotheses["Gateway Connection Drop"]["evidence"]
         root_cause = f"Gateway connection drop: Gateway '{gateway_id}' is offline or disconnected from MQTT broker."
         evidence_lines.append(f"Gateway connection error: {ev}")
-        fix_suggestions.append(f'bin/mantis "Inspect logs for {gateway_id} in {site_model}"')
+        fix_suggestions.append(f"Restore the gateway's broker connection: confirm gateway '{gateway_id}' is powered, on the network, and using the credentials registered in {site_model}/devices/{gateway_id}, then check the broker connection log for its client.")
 
     elif competing_hypotheses.get("Field Bus Communication Failure", {}).get("status") == ClaimStatus.CONFIRMED.value:
         ev = competing_hypotheses["Field Bus Communication Failure"]["evidence"]
@@ -549,7 +550,7 @@ def diagnose_test_failure(
     elif competing_hypotheses.get("Gateway Proxy Bus Drop", {}).get("status") == ClaimStatus.CONFIRMED.value:
         root_cause = f"Gateway proxy bus drop: Gateway '{gateway_id}' is online, but proxy sub-device '{device_id}' pointset stream is absent."
         evidence_lines.append(f"Proxy pointset stream absent: {competing_hypotheses['Gateway Proxy Bus Drop']['evidence']}")
-        fix_suggestions.append(f'bin/mantis "Inspect logs for {gateway_id} in {site_model}"')
+        fix_suggestions.append(f"Check gateway '{gateway_id}' is polling proxy device '{device_id}' and publishing its pointset events on the device's behalf.")
         gateway_mermaid_needed = True
 
     elif competing_hypotheses.get("Stale State Cutoff Rejection", {}).get("status") == ClaimStatus.CONFIRMED.value:
@@ -572,24 +573,24 @@ def diagnose_test_failure(
             evidence_lines.append("Stale state update ignored (sequence.log / device_system.log)")
         if tx:
             evidence_lines.append(f"Config transaction `{tx[0]}` dispatched and pending state echo")
-        fix_suggestions.append(f'bin/mantis "Set sample_rate_sec to 10 for {device_id}"')
-        fix_suggestions.append(f'bin/mantis "Run {test_id} on {device_id} with nostate"')
+        fix_suggestions.append(f"The device under test reported state with a timestamp ({ts_str}) older than the sequencer's cutoff ({cutoff_str}); it must publish a fresh state update, timestamped after the cutoff, in response to the config it received.")
+        fix_suggestions.append(f"Re-run {test_id} on {device_id} once the device's state reporting is corrected.")
         stale_mermaid_needed = True
 
     elif competing_hypotheses.get("Schema Point Violation / Telemetry Malformation", {}).get("status") == ClaimStatus.CONFIRMED.value:
         root_cause = f"Telemetry message violated schema rules: {timeline.get('schema_error')}"
         evidence_lines.append(f"Schema violation: `{timeline.get('schema_error')}`")
-        fix_suggestions.append(f'bin/mantis "Inspect schema for {test_id}"')
+        fix_suggestions.append("Correct the message the device under test published so that it validates against the UDMI schema named in the violation (schema/*.json).")
 
     elif competing_hypotheses.get("Authentication / Authorization Rejection", {}).get("status") == ClaimStatus.CONFIRMED.value:
         root_cause = f"Authentication rejected by broker: {timeline.get('auth_error')}"
         evidence_lines.append(f"Auth error: `{timeline.get('auth_error')}`")
-        fix_suggestions.append(f'bin/mantis "Validate site model {site_model}"')
+        fix_suggestions.append(f"Make the device's credentials match the key registered for '{device_id}' in {site_model}/devices/{device_id}.")
 
     elif competing_hypotheses.get("Transport / TLS Connection Failure", {}).get("status") == ClaimStatus.CONFIRMED.value:
         root_cause = f"Network transport / TLS connection failure: {timeline.get('transport_error')}"
         evidence_lines.append(f"Transport error: `{timeline.get('transport_error')}`")
-        fix_suggestions.append(f'bin/mantis "Provision environment dev_1 for {device_id}"')
+        fix_suggestions.append(f"Confirm the device under test can reach the broker endpoint configured for '{device_id}' and completes the TLS handshake with it.")
 
     elif competing_hypotheses.get("Transport / Broker Congestion", {}).get("status") == ClaimStatus.CONFIRMED.value:
         root_cause = f"Broker congestion / transport queue drop: {timeline.get('broker_congestion')}"
@@ -620,18 +621,18 @@ def diagnose_test_failure(
         fix_suggestions.append(
             f"Confirm something is publishing as '{device_id}': a physical device must be powered, "
             f"on the network, and using the credentials in {site_model}/devices/{device_id}; an "
-            f"emulated device must have pubber started for '{device_id}' against the same broker."
+            f"emulated device must be running as '{device_id}' against the same broker."
         )
         fix_suggestions.append(
             f"Check the broker/UDMIS connection log for a client connecting as '{device_id}' to "
             "tell a device that never connected from one that connected and then went quiet."
         )
-        fix_suggestions.append(f'bin/mantis "Run {test_id} on {device_id}"')
+        fix_suggestions.append(f"Re-run {test_id} on {device_id} once the device is publishing.")
 
     elif competing_hypotheses.get("Stage Timeout Execution Failure", {}).get("status") == ClaimStatus.CONFIRMED.value:
         root_cause = f"Test stage timed out waiting for condition: {timeline.get('timeout_error')}"
         evidence_lines.append(f"Timeout message: `{timeline.get('timeout_error')}`")
-        fix_suggestions.append(f'bin/mantis "Run {test_id} on {device_id}"')
+        fix_suggestions.append(f"Compare what the device under test published with the condition the timed-out stage waits for, then re-run {test_id} on {device_id}.")
 
     else:
         res = timeline.get("result", "UNKNOWN")
@@ -658,7 +659,7 @@ def diagnose_test_failure(
                 evidence_lines.append(
                     f"Not assessed (no evidence either way): {', '.join(unassessed)}"
                 )
-            fix_suggestions.append(f'bin/mantis "Inspect logs for {device_id} in {site_model}"')
+            fix_suggestions.append(f"Inspect the run's sequence.log and device message payloads for '{device_id}' to find what it sent against what the failing check expects.")
 
     # Format concise markdown report
     report_lines = [
@@ -671,7 +672,7 @@ def diagnose_test_failure(
 
     report_lines.append("* **Fix**:")
     for fix in fix_suggestions:
-        report_lines.append(f"  - `{fix}`" if fix.startswith("bin/mantis") else f"  - {fix}")
+        report_lines.append(f"  - {fix}")
 
     # Sequence diagrams
     if stale_mermaid_needed:
@@ -684,7 +685,7 @@ sequenceDiagram
     participant S as Sequencer
     participant U as UDMIS
     participant B as Mosquitto Broker
-    participant D as Device (Pubber)
+    participant D as Device under test
 
     S->>U: Dispatches config ({tx_disp})
     U->>B: Routes config packet

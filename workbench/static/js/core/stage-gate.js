@@ -2,7 +2,7 @@
  * Layer 2 — Feature stage gate.
  *
  * `bin/sequencer` silently skips any sequence whose feature stage orders below
- * the run's minimum stage: no result, no error, nothing (b/543296100). This
+ * the run's minimum stage: no result, no error, nothing. This
  * mirrors that rule on the client so a selection that would vanish is flagged
  * before the run starts rather than discovered afterwards from an empty report.
  *

@@ -6,6 +6,8 @@ responses carry the same CORS and correlation headers as success responses.
 """
 
 import json
+import os
+import shutil
 from typing import Any, Dict, Optional
 
 from workbench.server.logger import SERVER_LOGGER
@@ -67,6 +69,21 @@ class HttpResponder:
         self._common_headers()
         self.handler.end_headers()
         self.handler.wfile.write(content)
+
+    def attachment_file(self, path: str, filename: str, content_type: str) -> None:
+        """Streams a file from disk as a download without reading it into memory."""
+        safe_name = filename.replace('"', "").replace("\r", "").replace("\n", "")
+        size = os.path.getsize(path)
+        with open(path, "rb") as source:
+            self.handler.send_response(200)
+            self.handler.send_header("Content-Type", content_type)
+            self.handler.send_header("Content-Length", str(size))
+            self.handler.send_header(
+                "Content-Disposition", f'attachment; filename="{safe_name}"'
+            )
+            self._common_headers()
+            self.handler.end_headers()
+            shutil.copyfileobj(source, self.handler.wfile, 1024 * 1024)
 
     def no_content(self, status: int = 204) -> None:
         self.handler.send_response(status)

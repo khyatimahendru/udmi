@@ -18,11 +18,12 @@ This document establishes the mandatory engineering standards, architectural inv
 
 ## 2. Tripartite Cognitive Loop (`Actor -> Critic -> Arbitrator`)
 
-All complex reasoning, diagnostic triage, and failure analysis must proceed through the Tripartite loop:
+`MantisAgent.classify_intent_tier` routes each prompt to one model tier for the whole run. Flash-tier prompts (simple lookups: list devices, show a schema, slice a log) are answered by the Actor alone. All complex reasoning, explanations, diagnostic triage, and failure analysis are routed to the Pro tier (`gemini-3.1-pro-preview`), which runs a scoping turn and then the Tripartite loop:
+0. **Scoping**:
+   - Classifies the prompt. A failure gets competing hypotheses that the Arbitrator's `## Hypothesis Resolution Audit` must resolve; a prompt that reports no failure (`NOT_A_FAILURE`) runs in informational mode without hypotheses.
 1. **Actor Phase**:
-   - Executes exploratory tool calls (codebase searches, schema lookups, log slicing, timeline extraction).
-   - Operates on the Flash tier (`gemini-3.7-flash`) for agile, low-latency investigation.
-   - Collects empirical evidence and formulates an initial hypothesis.
+   - Executes exploratory tool calls (codebase searches, schema lookups, log slicing, timeline extraction) on the routed tier.
+   - Collects empirical evidence and drafts the answer.
 2. **Critic Phase**:
    - Performs an adversarial audit on the Pro tier (`gemini-3.1-pro-preview`).
    - Assesses claims against the Single Source of Truth (codebase, schemas, logs).
@@ -45,7 +46,8 @@ All complex reasoning, diagnostic triage, and failure analysis must proceed thro
 ## 4. Environment & Execution Standards
 
 - **Non-Root Execution**: Non-root execution is the default across all scripts. Local test infrastructure uses unprivileged port blocks (e.g., `//mqtt/localhost:18833`). Never require or assume `sudo`.
-- **State Isolation**: Each test session runs in an isolated directory (`var/instances/...` or `out/runs/...`) with independent tmux windows (`main`, `dut`, `sequencer`, `butler`, `validator`).
+- **State Isolation**: Each test session runs in its own directory under `var/instances/<session>` with independent tmux windows (`main`, `dut`, `sequencer`, `butler`, `validator`).
+- **Cancellation**: Every long-running phase must call `check_cancel` at its boundary so `run(..., cancel_event=...)` can stop the agent (the Workbench Stop button depends on this).
 - **Fail Fast & No Silent Fallbacks**: If a prerequisite, file path, or schema is missing or invalid, fail immediately with an explicit, actionable error. Do not silently fall back to defaults.
 - **No Git Commits**: Leave all changes uncommitted unless explicitly instructed by the user to commit. Never amend commits or rewrite git history.
 

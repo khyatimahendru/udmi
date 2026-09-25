@@ -6,12 +6,17 @@
  * command that was executed so the run is reproducible from a terminal.
  */
 
+import { SupportBundleButton } from './support-bundle-button.js';
+
 const BADGE_TONE = {
   Idle: 'neutral',
   'Historical runs': 'info',
   Running: 'info',
   Compliant: 'success',
   Failed: 'error',
+  Error: 'error',
+  Blocked: 'error',
+  Incomplete: 'warning',
   Aborted: 'warning',
 };
 
@@ -32,6 +37,7 @@ export class RunSummary {
       </div>
       <div class="progress-track"><div class="progress-fill" data-role="bar"></div></div>
       <pre class="command-echo" data-role="command" hidden></pre>
+      <div class="summary-actions" data-role="support-bundle"></div>
     `;
 
     this.badge = this.container.querySelector('[data-role="badge"]');
@@ -45,6 +51,14 @@ export class RunSummary {
       skip: this.container.querySelector('[data-role="skip"]'),
       pending: this.container.querySelector('[data-role="pending"]'),
     };
+
+    // The selected site model arrives with every update(); the bundle is
+    // always exported for the site model currently shown in the summary.
+    this.siteModel = '';
+    this.supportBundle = new SupportBundleButton(
+      this.container.querySelector('[data-role="support-bundle"]'),
+      { getSiteModel: () => this.siteModel }
+    );
   }
 
   setTime(timeStr) {
@@ -52,6 +66,7 @@ export class RunSummary {
   }
 
   update(state, metrics) {
+    this.siteModel = state.siteModel || '';
     this.badge.textContent = state.statusLabel;
     this.badge.className = `badge badge-${BADGE_TONE[state.statusLabel] || 'neutral'}`;
 

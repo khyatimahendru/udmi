@@ -2,8 +2,8 @@
 
 Site models are routinely kept outside the UDMI checkout. Under WSL the
 repository and the lab's site models are commonly on different filesystems
-altogether, which made the models unreachable from the Workbench entirely
-(b/532035434). Rather than re-exposing a broad slice of the filesystem the way
+altogether, which made the models unreachable from the Workbench entirely.
+Rather than re-exposing a broad slice of the filesystem the way
 the v1 server did with `$HOME`, the Workbench reads site models from exactly
 two places:
 

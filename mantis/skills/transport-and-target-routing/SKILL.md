@@ -14,12 +14,12 @@ This playbook guides the agent on where and how to investigate UDMI target speci
 UDMI tools (`sequencer`, `validator`, `mantis`, `udmis`, `registrar`, `pubber`) dynamically configure target IoT environments, provider semantics, and namespace isolation using project target specifications (`project_spec` / `target_spec`).
 
 ### Authoritative Implementations
-- **Java**: [`SiteModel.java`](file:///usr/local/google/home/heykhyati/Projects/udmi/common/src/main/java/com/google/udmi/util/SiteModel.java) (`SPEC_PATTERN`, `extractSpec`, `augmentConfig`).
-- **Java Services**: [`AbstractPollingService.java`](file:///usr/local/google/home/heykhyati/Projects/udmi/validator/src/main/java/com/google/udmi/util/AbstractPollingService.java) (`ProjectSpec` record).
-- **Bash**: [`etc/shell_common.sh`](file:///usr/local/google/home/heykhyati/Projects/udmi/etc/shell_common.sh) (`normalize_conn_spec`), [`bin/sequencer`](file:///usr/local/google/home/heykhyati/Projects/udmi/bin/sequencer) (lines 128–153), [`bin/pubber`](file:///usr/local/google/home/heykhyati/Projects/udmi/bin/pubber) (lines 104–135).
-- **Python**: [`mantis/project_spec.py`](file:///usr/local/google/home/heykhyati/Projects/udmi/mantis/project_spec.py) (`parse_project_spec`, `normalize_project_spec`, `resolve_target_spec`).
-- **Web UI**: [`ui/v2/testbed/main.js`](file:///usr/local/google/home/heykhyati/Projects/udmi/ui/v2/testbed/main.js) (`parseProjectSpec`).
-- **Documentation**: [`docs/tools/project_spec.md`](file:///usr/local/google/home/heykhyati/Projects/udmi/docs/tools/project_spec.md).
+- **Java**: [`SiteModel.java`](../../../common/src/main/java/com/google/udmi/util/SiteModel.java) (`SPEC_PATTERN`, `extractSpec`, `augmentConfig`).
+- **Java Services**: [`AbstractPollingService.java`](../../../validator/src/main/java/com/google/udmi/util/AbstractPollingService.java) (`ProjectSpec` record).
+- **Bash**: [`etc/shell_common.sh`](../../../etc/shell_common.sh) (`normalize_conn_spec`), [`bin/sequencer`](../../../bin/sequencer) (lines 128–153), [`bin/pubber`](../../../bin/pubber) (lines 104–135).
+- **Python**: [`mantis/project_spec.py`](../../../mantis/project_spec.py) (`parse_project_spec`, `normalize_project_spec`, `resolve_target_spec`).
+- **Workbench**: [`workbench/server/discovery.py`](../../../workbench/server/discovery.py) (`build_project_spec`, the spec suggested for a site model), [`workbench/server/testbed.py`](../../../workbench/server/testbed.py) (`LOCAL_SPEC_PATTERN`, the only spec the local testbed accepts).
+- **Documentation**: [`docs/tools/project_spec.md`](../../../docs/tools/project_spec.md).
 
 ### The Canonical Specification Expression
 Defined in `SiteModel.java` as:

@@ -234,8 +234,16 @@ def extract_timeline(
     device_id: str,
     run_dir: Optional[str] = None,
     udmi_root: Optional[str] = None,
+    site_model: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Deterministically extracts chronological timestamps, transactions (RC:...), cutoffs, and multi-line status transitions."""
+    """Deterministically extracts chronological timestamps, transactions (RC:...), cutoffs, and multi-line status transitions.
+
+    When run_dir is None, only directories specific to this device and test are
+    considered: out/runs/<device>_<test>, out/runs/<test>, and, when site_model is
+    given, <site_model>/out/devices/<device>/tests/<test>. Anything broader (the
+    repository's out/ or an arbitrary var/instances/* session) would harvest logs
+    from an unrelated run, so a miss raises FileNotFoundError naming every path tried.
+    """
     root = _get_udmi_root(udmi_root)
 
     # Locate run directory
@@ -247,21 +255,15 @@ def extract_timeline(
             raise FileNotFoundError(f"Run directory not found: '{run_dir}'")
         target_dir = resolved_run_dir
     else:
-        # Search candidate locations
         candidates = [
             os.path.join(root, "out", "runs", f"{device_id}_{test_id}"),
             os.path.join(root, "out", "runs", test_id),
-            os.path.join(root, "out", test_id),
         ]
-        # Also check var/instances/
-        instances_dir = os.path.join(root, "var", "instances")
-        if os.path.isdir(instances_dir):
-            for inst in sorted(os.listdir(instances_dir)):
-                inst_path = os.path.join(instances_dir, inst)
-                candidates.extend([
-                    os.path.join(inst_path, "out"),
-                    inst_path,
-                ])
+        if site_model:
+            site_path = site_model if os.path.isabs(site_model) else os.path.join(root, site_model)
+            candidates.append(
+                os.path.join(os.path.abspath(site_path), "out", "devices", device_id, "tests", test_id)
+            )
 
         for c in candidates:
             if os.path.isdir(c):
@@ -269,13 +271,12 @@ def extract_timeline(
                 break
 
         if not target_dir:
-            out_cand = os.path.join(root, "out")
-            if os.path.isdir(out_cand):
-                target_dir = out_cand
-            else:
-                raise FileNotFoundError(
-                    f"No run directory found for test_id='{test_id}', device_id='{device_id}' under '{root}'."
-                )
+            searched = ", ".join(f"'{c}'" for c in candidates)
+            raise FileNotFoundError(
+                f"No run directory found for test_id='{test_id}', device_id='{device_id}'. "
+                f"Searched: {searched}. Pass run_dir explicitly"
+                + ("." if site_model else " or supply site_model.")
+            )
 
     events: List[Dict[str, Any]] = []
     transactions: List[str] = []

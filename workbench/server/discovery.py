@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 import json
 import os
 import re
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from workbench.server.paths import absolute, display, is_within
 
@@ -50,6 +50,28 @@ def resolve_site_model(udmi_root: str, site_model: str) -> str:
     return candidate
 
 
+def build_project_spec(config: Dict[str, Any]) -> Optional[str]:
+    """Builds the `bin/sequencer` project spec a site config describes, or None.
+
+    bin/sequencer only accepts `//<iot_provider>/<project_id>[/<udmi_namespace>]`
+    (or `--` for mock use). A bare project_id is rejected with
+    "Unrecognized project spec", so it is never offered. When `iot_provider`
+    or `project_id` is missing there is no spec to suggest: guessing a
+    provider would point a run at a destination the site never named.
+    """
+    provider = config.get("iot_provider")
+    project_id = config.get("project_id")
+    if not isinstance(provider, str) or not provider.strip():
+        return None
+    if not isinstance(project_id, str) or not project_id.strip():
+        return None
+    spec = f"//{provider.strip()}/{project_id.strip()}"
+    namespace = config.get("udmi_namespace")
+    if isinstance(namespace, str) and namespace.strip():
+        spec += f"/{namespace.strip()}"
+    return spec
+
+
 def describe_site_model(site_dir: str, udmi_root: str) -> Dict[str, Any]:
     """Builds a site model descriptor from its on-disk cloud_iot_config.json.
 
@@ -72,8 +94,14 @@ def describe_site_model(site_dir: str, udmi_root: str) -> Dict[str, Any]:
     try:
         with open(config_path, "r", encoding="utf-8") as fh:
             config = json.load(fh)
-    except json.JSONDecodeError as exc:
+    except (OSError, ValueError) as exc:
+        # ValueError covers both JSONDecodeError and UnicodeDecodeError.
         raise DiscoveryError(f"Invalid {SITE_CONFIG_FILENAME} in '{target_dir}': {exc}") from exc
+    if not isinstance(config, dict):
+        raise DiscoveryError(
+            f"Invalid {SITE_CONFIG_FILENAME} in '{target_dir}': expected a JSON object, "
+            f"got {type(config).__name__}"
+        )
 
     devices_dir = os.path.join(target_dir, "devices")
     device_count = (
@@ -98,17 +126,19 @@ def describe_site_model(site_dir: str, udmi_root: str) -> Dict[str, Any]:
         "registry_id": config.get("registry_id"),
         "iot_provider": config.get("iot_provider"),
         "project_id": config.get("project_id"),
+        "udmi_namespace": config.get("udmi_namespace"),
+        "project_spec": build_project_spec(config),
         "device_count": device_count,
         "external": not is_within(target_dir, udmi_root),
     }
 
 
-def scan_for_site_models(root_dir: str, udmi_root: str) -> List[Dict[str, Any]]:
-    """Finds site models at `root_dir` and in its immediate subdirectories.
+def find_site_model_dirs(root_dir: str) -> List[str]:
+    """Lists site model directories at `root_dir` or its immediate subdirectories.
 
     Supports direct layout and nested `udmi/` layout. A directory an operator
     points at is either a site model itself or a folder holding several of
-    them.
+    them. This only locates candidates; nothing is parsed here.
     """
     try:
         entries = sorted(os.listdir(root_dir))
@@ -120,27 +150,36 @@ def scan_for_site_models(root_dir: str, udmi_root: str) -> List[Dict[str, Any]]:
         os.path.join(root_dir, "udmi", SITE_CONFIG_FILENAME)
     )
     if is_direct or is_nested:
-        target = os.path.join(root_dir, "udmi") if is_nested else root_dir
-        return [describe_site_model(target, udmi_root)]
+        return [os.path.join(root_dir, "udmi") if is_nested else root_dir]
 
-    models: List[Dict[str, Any]] = []
-    seen: set = set()
+    targets: List[str] = []
     for name in entries:
         if name.startswith("."):
             continue
         child = os.path.join(root_dir, name)
         if not os.path.isdir(child):
             continue
-        target = None
         if os.path.isfile(os.path.join(child, SITE_CONFIG_FILENAME)):
-            target = child
+            targets.append(child)
         elif os.path.isfile(os.path.join(child, "udmi", SITE_CONFIG_FILENAME)):
-            target = os.path.join(child, "udmi")
-        if target:
-            desc = describe_site_model(target, udmi_root)
-            if desc["absolute_path"] not in seen:
-                seen.add(desc["absolute_path"])
-                models.append(desc)
+            targets.append(os.path.join(child, "udmi"))
+    return targets
+
+
+def scan_for_site_models(root_dir: str, udmi_root: str) -> List[Dict[str, Any]]:
+    """Describes every site model under `root_dir`; a malformed one raises.
+
+    Used where a strict answer is required (registering or describing a site
+    root). The listing endpoint uses `list_site_models`, which isolates a
+    malformed model into `invalid_models` instead.
+    """
+    models: List[Dict[str, Any]] = []
+    seen: set = set()
+    for target in find_site_model_dirs(root_dir):
+        desc = describe_site_model(target, udmi_root)
+        if desc["absolute_path"] not in seen:
+            seen.add(desc["absolute_path"])
+            models.append(desc)
     return models
 
 
@@ -151,6 +190,10 @@ def list_site_models(udmi_root: str, extra_roots: Iterable[str] = ()) -> Dict[st
     directory) is reported in `unavailable_roots` instead of being dropped, so
     a vanished path is visible in the UI rather than silently producing a
     shorter list.
+
+    A site model whose cloud_iot_config.json cannot be parsed is reported in
+    `invalid_models` as `{path, error}`. One broken site must not make every
+    other site model unreachable, and it must not vanish silently either.
     """
     sites_root = os.path.join(udmi_root, "sites")
     if not os.path.isdir(sites_root):
@@ -158,10 +201,16 @@ def list_site_models(udmi_root: str, extra_roots: Iterable[str] = ()) -> Dict[st
 
     models: List[Dict[str, Any]] = []
     unavailable: List[Dict[str, str]] = []
+    invalid: List[Dict[str, str]] = []
     seen: set = set()
 
     def collect(directory: str, source: str) -> None:
-        for model in scan_for_site_models(directory, udmi_root):
+        for target in find_site_model_dirs(directory):
+            try:
+                model = describe_site_model(target, udmi_root)
+            except DiscoveryError as exc:
+                invalid.append({"path": display(target, udmi_root), "error": str(exc)})
+                continue
             if model["absolute_path"] in seen:
                 continue
             seen.add(model["absolute_path"])
@@ -180,7 +229,66 @@ def list_site_models(udmi_root: str, extra_roots: Iterable[str] = ()) -> Dict[st
         collect(root, root)
 
     models.sort(key=lambda model: (model["source"] != "repository", model["name"]))
-    return {"site_models": models, "unavailable_roots": unavailable}
+    return {
+        "site_models": models,
+        "unavailable_roots": unavailable,
+        "invalid_models": invalid,
+    }
+
+
+def list_device_ids(udmi_root: str, site_model: str) -> List[str]:
+    """Returns the sorted ids of every device directory in a site model.
+
+    Reads directory names only -- no metadata.json is opened -- so it stays
+    cheap on sites with thousands of devices. The id set is exactly the one
+    `list_devices` reports (every subdirectory of `devices/`, with or without
+    a readable metadata.json).
+    """
+    site_dir = resolve_site_model(udmi_root, site_model)
+    devices_dir = _require_dir(os.path.join(site_dir, "devices"), "Devices directory")
+    return sorted(
+        name for name in os.listdir(devices_dir)
+        if os.path.isdir(os.path.join(devices_dir, name))
+    )
+
+
+def list_device_summaries(udmi_root: str, site_model: str) -> List[Dict[str, Any]]:
+    """Lists devices with only the fields the Sequencer device picker needs.
+
+    Each entry is `{device_id, is_gateway, gateway_id}`. The gateway block is
+    read from metadata.json; system, hardware and pointset contents are not
+    extracted and no point list is built, which keeps the payload a small
+    fraction of `list_devices` on large sites. A device whose metadata.json
+    cannot be read is reported as `{device_id, error}` rather than dropped,
+    matching `list_devices`.
+    """
+    site_dir = resolve_site_model(udmi_root, site_model)
+    devices_dir = os.path.join(site_dir, "devices")
+
+    summaries: List[Dict[str, Any]] = []
+    for device_id in list_device_ids(udmi_root, site_model):
+        metadata_path = os.path.join(devices_dir, device_id, "metadata.json")
+        metadata: Any = {}
+        if os.path.isfile(metadata_path):
+            try:
+                with open(metadata_path, "r", encoding="utf-8") as fh:
+                    metadata = json.load(fh)
+            except (OSError, ValueError) as exc:
+                summaries.append({"device_id": device_id, "error": f"Invalid metadata.json: {exc}"})
+                continue
+        if not isinstance(metadata, dict):
+            summaries.append({
+                "device_id": device_id,
+                "error": f"Invalid metadata.json: expected a JSON object, got {type(metadata).__name__}",
+            })
+            continue
+        gateway = metadata.get("gateway") or {}
+        summaries.append({
+            "device_id": device_id,
+            "is_gateway": bool(gateway.get("proxy_ids")),
+            "gateway_id": gateway.get("gateway_id"),
+        })
+    return summaries
 
 
 def list_devices(udmi_root: str, site_model: str) -> List[Dict[str, Any]]:
@@ -263,8 +371,15 @@ def _classify_result(test_dir: str) -> Dict[str, Any]:
     return {"status": status, "summary": summary}
 
 
-def _extract_project_spec(test_dir: str) -> Optional[str]:
-    """Reads the authoritative projectId recorded in captured .attr files."""
+def _extract_project_id(test_dir: str) -> Optional[str]:
+    """Reads the projectId recorded in captured .attr message envelopes.
+
+    This is a bare project id, NOT a `bin/sequencer` project spec: the
+    envelope carries no iot_provider or namespace, and no run artifact under
+    `out/devices/<device>/tests/<test>/` records the spec the run was started
+    with (bin/sequencer writes its config to /tmp/sequencer_config.json).
+    It is therefore reported as `project_id` and never offered as a spec.
+    """
     try:
         attr_files = sorted(
             (f for f in os.listdir(test_dir) if f.endswith(".attr")),
@@ -283,6 +398,66 @@ def _extract_project_spec(test_dir: str) -> Optional[str]:
         if project_id:
             return project_id
     return None
+
+
+def collect_run_targets(site_dir: str, device_id: str) -> List[Dict[str, Any]]:
+    """Reports every distinct target this device's recorded runs actually used.
+
+    The target of a run is a property of that run, not of the site model. One
+    batch may have gone to `gbos` and the next to `gref`, and a site model's
+    `cloud_iot_config.json` records only the currently configured destination --
+    which may be neither. Displaying that static value next to historical
+    results would assert a provenance nobody verified.
+
+    The authoritative record is the envelope of the messages the run captured,
+    so the target is read back out of the `.attr` files the sequencer wrote.
+    Every distinct (projectId, deviceRegistryId) pair is returned, with the
+    sequences that used it: more than one pair is not an error but a genuine and
+    important fact about a mixed-provenance result set.
+    """
+    tests_dir = os.path.join(site_dir, "out", "devices", device_id, "tests")
+    if not os.path.isdir(tests_dir):
+        return []
+
+    seen: Dict[Tuple[Optional[str], Optional[str]], Dict[str, Any]] = {}
+    try:
+        test_names = sorted(os.listdir(tests_dir))
+    except OSError:
+        return []
+
+    for test_name in test_names:
+        test_dir = os.path.join(tests_dir, test_name)
+        if not os.path.isdir(test_dir):
+            continue
+        try:
+            attr_files = sorted(f for f in os.listdir(test_dir) if f.endswith(".attr"))
+        except OSError:
+            continue
+
+        for attr_file in attr_files:
+            try:
+                with open(os.path.join(test_dir, attr_file), "r", encoding="utf-8") as fh:
+                    data = json.load(fh)
+            except (OSError, json.JSONDecodeError):
+                continue
+            if not isinstance(data, dict):
+                continue
+            project_id = data.get("projectId")
+            registry_id = data.get("deviceRegistryId")
+            if not project_id and not registry_id:
+                continue
+            key = (project_id, registry_id)
+            entry = seen.setdefault(
+                key,
+                {"project_id": project_id, "registry_id": registry_id, "sequences": []},
+            )
+            if test_name not in entry["sequences"]:
+                entry["sequences"].append(test_name)
+            # One envelope settles the target for this sequence; the rest of its
+            # captured messages carry the same one.
+            break
+
+    return [seen[key] for key in sorted(seen, key=lambda k: (k[0] or "", k[1] or ""))]
 
 
 def get_device_results(udmi_root: str, site_model: str, device_id: str) -> Dict[str, Any]:
@@ -310,7 +485,7 @@ def get_device_results(udmi_root: str, site_model: str, device_id: str) -> Dict[
                 "status": classification["status"],
                 "summary": classification["summary"],
                 "timestamp": datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat(),
-                "project_spec": _extract_project_spec(test_dir),
+                "project_id": _extract_project_id(test_dir),
                 "artifacts": artifacts,
                 "artifact_dir": display(test_dir, udmi_root),
             }

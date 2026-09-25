@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import re
+import threading
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -28,6 +29,16 @@ from mantis.models import SessionContext
 from mantis.tools.diagnostics import diagnose_test_failure as deterministic_diagnose
 
 
+class MantisCancelled(Exception):
+    """Raised when the caller's cancel event is set during a run.
+
+    Cancellation is cooperative: it is observed at step boundaries (before each model
+    call, before each tool execution, and before the Critic and Arbitrator phases). A
+    model call or tool already in flight finishes first, because neither the SDK
+    request nor a running tool can be interrupted safely mid-way.
+    """
+
+
 # Number of remaining ReAct steps at which the orchestrator begins warning the model
 # to converge, so it is never cut off mid-investigation without producing an answer.
 BUDGET_WARNING_THRESHOLD = 3
@@ -48,6 +59,14 @@ BACKEND_SUBSYSTEMS = ("udmis",)
 # tell a log-backed conclusion from a plausible reading of the source.
 RUNTIME_EVIDENCE_TIERS = ("LOCAL_FILE", "CLOUD", "NONE")
 RUNTIME_EVIDENCE_NONE_QUALIFIER = "source inference only"
+
+# The scopes a scoping plan may declare. INFORMATIONAL_SCOPE marks a question about
+# how something works rather than a defect report: there is no failure to explain,
+# so competing hypotheses, the resolution gate, and runtime-evidence declarations
+# do not apply. Forcing them onto an explanation produced a ceremony of "H1 PRIMARY,
+# H2 REFUTED" around what should have been a direct, complete answer.
+FAILURE_SCOPES = ("SINGLE_TARGET", "TOTAL_OUTAGE", "MULTI_TARGET_DEGRADATION", "NOT_A_FAILURE")
+INFORMATIONAL_SCOPE = "NOT_A_FAILURE"
 
 
 # Clause-joining phrases that show a hypothesis asserts more than one mechanism.
@@ -75,27 +94,44 @@ def _compound_markers(text: str) -> List[str]:
     return [marker.strip() for marker in COMPOUND_HYPOTHESIS_MARKERS if marker in padded]
 
 
-# Matches the `file:` URI scheme, with or without authority slashes.
-_FILE_URI_SCHEME = re.compile(r"\bfile:(?://)?")
+# Vertex reserves `$ref` inside `function_response.response`: any object carrying
+# that key is read as a pointer to a file part attached to the request.
+_RESERVED_REF_KEY = "$ref"
+#: What `$ref` is renamed to. Plain `ref` reads identically to a model looking at
+#: a JSON Schema excerpt, and probing confirms it is not treated as a reference.
+_SAFE_REF_KEY = "ref"
 
 
-def _strip_file_uri_scheme(payload: str) -> str:
-    """Removes the `file:` URI scheme from a serialized tool response.
+def _neutralize_schema_refs(payload):
+    """Rename the reserved `$ref` key so Vertex stops reading tool output as refs.
 
-    Vertex scans `function_response.response` for strings of the form
-    `file:<display_name>` and resolves them against the file parts attached to the
-    request. A tool result that merely *mentions* such a string therefore looks like
-    a dangling file reference, and the API rejects the entire request with
-    400 INVALID_ARGUMENT rather than ignoring it.
+    Vertex scans `function_response.response` for `$ref` and resolves each one
+    against the file parts attached to the request. UDMI tool output is full of
+    real JSON Schema, and every `$ref` in it points at another schema file rather
+    than at an attached part, so the API rejects the whole request with
+    400 INVALID_ARGUMENT and the investigation dies mid-run.
 
-    This is not hypothetical for UDMI: the schemas in `schema/` express every
-    cross-file reference as `"$ref": "file:common.json#/definitions/depth"`, so any
-    investigation that inspected a schema with a `$ref` — 66 of them do — killed the
-    whole run. Dropping the scheme is lossless for these values, because a JSON
-    Schema `$ref` of `common.json#/definitions/depth` resolves identically as a
-    relative reference, and for `file:///abs/path` it leaves the absolute path intact.
+    The trigger is the KEY, not the value. That was established by probing the
+    live API: with a `$ref` key present, every value was rejected identically,
+    including an inert control string of ordinary prose; with the key renamed,
+    even `file:common.json#/definitions/depth` passes untouched. An earlier fix
+    here stripped the `file:` scheme out of the values instead, which did not
+    address the trigger at all and silently corrupted schema content on the way
+    through. Renaming the key is both sufficient and lossless.
+
+    Applies at every depth, including inside arrays, because `allOf`/`oneOf`
+    wrap their `$ref`s in lists.
     """
-    return _FILE_URI_SCHEME.sub("", payload)
+    if isinstance(payload, dict):
+        return {
+            (_SAFE_REF_KEY if key == _RESERVED_REF_KEY else key):
+                _neutralize_schema_refs(value)
+            for key, value in payload.items()
+        }
+    if isinstance(payload, list):
+        return [_neutralize_schema_refs(item) for item in payload]
+    return payload
+
 
 
 def _part_carries_content(part) -> bool:
@@ -184,6 +220,12 @@ COMPETING_HYPOTHESES:
 - H3: <hypothesis>
 REQUIRED_SUBSYSTEMS: <comma-separated repository directories you will examine>
 
+If FAILURE_SCOPE is NOT_A_FAILURE, OMIT the COMPETING_HYPOTHESES block entirely.
+A question about how something works has no failure to explain, so there is nothing
+to hypothesize about or rank. Emit only FAILURE_SCOPE, SCOPE_JUSTIFICATION, and
+REQUIRED_SUBSYSTEMS. Every rule below about hypotheses, the Hypothesis Resolution
+Audit, and RUNTIME_EVIDENCE applies ONLY to defect reports.
+
 Rules for COMPETING_HYPOTHESES:
 - Each hypothesis must assert EXACTLY ONE mechanism in ONE subsystem. A hypothesis
   that joins two claims ("X is misconfigured while Y leaks threads") cannot be ranked,
@@ -199,9 +241,15 @@ Scope definitions:
 - NOT_A_FAILURE: the request is informational rather than a defect report.
 
 Rules for REQUIRED_SUBSYSTEMS:
-- Name every subsystem on BOTH sides of any communication boundary implicated by the
-  report. A client that sends a request and a service that processes it are two
-  distinct subsystems, and both live in this repository.
+- Name every repository subsystem on BOTH sides of any communication boundary
+  implicated by the report. A client that sends a request and a service that
+  processes it are two distinct subsystems.
+- The device under test is NOT in this repository. It is usually third-party hardware
+  or firmware built from the UDMI documentation, possibly without any UDMI library, and
+  it is not necessarily pubber. Its side of a boundary is evidenced only by the messages
+  it published during the run (state, events, and their timestamps in the run
+  artifacts), judged against the UDMI specification under docs/ and the schemas under
+  schema/. Never cite pubber source as evidence of how the device under test behaves.
 - Omit a subsystem ONLY if it is architecturally incapable of producing the symptom.
   Do not omit one merely because you suspect another more strongly.
 - If FAILURE_SCOPE is MULTI_TARGET_DEGRADATION you MUST include the shared backend
@@ -212,7 +260,17 @@ This plan is your own commitment. You will be held to it for the rest of the
 investigation, and you must examine every subsystem you list here.
 
 Your final answer will be rejected unless it includes a "Hypothesis Resolution Audit"
-that assigns every hypothesis above exactly one verdict:
+that assigns every hypothesis above exactly one verdict. Place it LAST, under exactly
+the markdown heading `## Hypothesis Resolution Audit`, with nothing after it. The reader
+sees the report above that heading; the audit below it is the record of what was ruled
+out. Write one entry per hypothesis in this form:
+
+- **H<n>: <the hypothesis>**
+  - Verdict: <verdict>
+  - RUNTIME_EVIDENCE: <tier> (backend hypotheses only)
+  - Rationale: <the evidence for this verdict, citing artifacts, logs, docs, or source>
+
+Verdicts:
 - PRIMARY: this is the root cause. EXACTLY ONE hypothesis may be PRIMARY.
 - CONTRIBUTING: real and evidenced, but a secondary effect rather than the cause.
 - REFUTED: excluded. You must name the evidence that excludes it.
@@ -233,6 +291,149 @@ Use the tier that tool reports. NONE is fully acceptable and is expected for an
 older incident: it means the logs that would prove the mechanism no longer exist and
 you are arguing from the source, which may still be the correct conclusion. What is
 not acceptable is stating an inference as though it were an observation."""
+
+# Issued in place of the scoping acceptance notice when the plan declares
+# INFORMATIONAL_SCOPE. The readers of these answers include lab operators and device
+# manufacturers who implement UDMI from its documentation rather than its libraries,
+# so an explanation is framed in terms of the messages a device exchanges, not the
+# sequencer's Java internals. An earlier explanation of a scheduled-scan test read
+# only the first lines of its helper and described two of its many checks: the
+# completeness rule below exists because a partial reading looks like a full one.
+# Tools whose output is the source text an explanation is built from. In informational
+# mode the Critic receives their output uncut: a Critic shown the first 6000 characters
+# of a 400-line read declared the helper beyond the cut "never read", and the
+# Arbitrator then deleted the correct step-by-step checks taken from it.
+SOURCE_EVIDENCE_TOOLS = frozenset(
+    {"read_udmi_file", "inspect_sequencer_test", "inspect_udmi_schema", "locate_udmi_doc"}
+)
+
+INFORMATIONAL_DIRECTIVE = """[Orchestrator Notice] Scoping accepted: this is an informational
+question, not a defect report. Tool access is now restored.
+
+Do NOT produce competing hypotheses, a Hypothesis Resolution Audit, verdicts
+(PRIMARY/CONTRIBUTING/REFUTED/UNRESOLVED), RUNTIME_EVIDENCE declarations, or an RCA
+report. Answer the question directly.
+
+Investigate until the answer is complete and verified:
+- When the question is about a sequencer test, read the ENTIRE test method and every
+  helper it calls, to the end of each helper. List every step the test performs and
+  every check it makes (checkThat, waitUntil, untilTrue, assert*, checkState, and any
+  skip or precondition) in execution order, with the timing constants and tolerances
+  it uses. Those checks are the pass criteria; omitting one misstates the test.
+- If the question names a variant or parameter of a test (for example a `+<suffix>`
+  on the test name), find where the sequencer parses it and state its effect from the
+  source. Do not infer it from the name. Stop once you have found the code that
+  consumes the value (for example the facet lookup in the test class); do not trace
+  framework internals such as SequenceRunner or SequenceBase beyond that point.
+- A read_udmi_file result marked truncated stops before the end of the file. If a
+  helper you are explaining continues past the cut, read the remaining lines before
+  describing it.
+- Describe expected device behavior as UDMI messages: the exact config field paths the
+  test sets, the state field paths and values the device must report, and the events
+  it must publish. Confirm every field path with inspect_udmi_schema or the source.
+  Never name a field you have not seen in a schema or in code.
+- Locate the specification for the feature under docs/ (locate_udmi_doc) and cite it,
+  so a reader implementing UDMI without its libraries can follow the contract.
+- Keep what the UDMI specification requires distinct from how the sequencer checks it.
+
+Structure the answer as:
+1. Summary: two or three sentences stating what the behavior is.
+2. Step by step: what happens, in order, with the check made at each step.
+3. What the device must do: config received, state reported, events published, with
+   field paths and timing expectations.
+4. References: the spec documents, schemas, and source files you used, by path.
+Add a diagram only if it clarifies an interaction or sequence."""
+
+
+# The audit is enforced on the whole answer by `_audit_violations`, but it is written
+# as a trailing section so that consumers can show the device-facing report first and
+# the audit as supporting record. These helpers are the one place that section is
+# located and parsed; the Workbench adapter imports them rather than re-deriving them.
+AUDIT_SECTION_TITLE = "Hypothesis Resolution Audit"
+_AUDIT_HEADING_RE = re.compile(
+    rf"^[ \t]*#{{1,6}}[ \t]+\**[ \t]*{AUDIT_SECTION_TITLE}\b[^\n]*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+# A hypothesis entry starts at a line whose first token (after list, quote, table,
+# heading, or bold markers) is its label. Mentions of H<n> inside another entry's
+# rationale are not at line start and so do not open a new entry.
+_AUDIT_ENTRY_RE = re.compile(r"^[ \t>*+|#-]*\**[ \t]*H(\d+)\b", re.MULTILINE)
+_LEADING_MARKERS_RE = re.compile(r"^[\s>*+|#-]+")
+_VERDICT_PREFIX_RE = re.compile(
+    r"^(?:verdict\s*\**\s*[:\-]\s*\**\s*)?(?:%s)\b\**\s*[:\-\u2013\u2014.]?\s*"
+    % "|".join(HYPOTHESIS_VERDICTS),
+    re.IGNORECASE,
+)
+_RUNTIME_LINE_RE = re.compile(
+    r"^\**\s*RUNTIME_EVIDENCE\s*\**\s*:\s*\**\s*(%s)\b" % "|".join(RUNTIME_EVIDENCE_TIERS),
+    re.IGNORECASE,
+)
+_RATIONALE_LABEL_RE = re.compile(
+    r"^(?:rationale|evidence)\s*\**\s*[:\-]\s*\**\s*", re.IGNORECASE
+)
+_HEADER_LABEL_RE = re.compile(r"^\**\s*H\d+\b\**\s*[:.)\-\u2013\u2014]?\s*")
+
+
+def split_audit_section(answer: str) -> Tuple[str, Optional[str]]:
+    """Splits an answer into (report, audit section).
+
+    The audit section runs from the LAST `Hypothesis Resolution Audit` markdown heading
+    to the end of the answer, heading included. Returns (answer, None) when the answer
+    carries no such heading.
+    """
+    matches = list(_AUDIT_HEADING_RE.finditer(answer or ""))
+    if not matches:
+        return answer, None
+    start = matches[-1].start()
+    return answer[:start].rstrip(), answer[start:].strip()
+
+
+def parse_audit_entries(audit_section: str, hypothesis_count: int) -> Dict[int, Dict[str, Optional[str]]]:
+    """Extracts the rationale and runtime-evidence tier written for each hypothesis.
+
+    Each entry spans from its label line to the next entry's label line. Its rationale
+    is the entry text with the label line (which restates the hypothesis), the verdict
+    token, the RUNTIME_EVIDENCE line, and any `Rationale:`/`Evidence:` field label
+    removed. When the entry is a single line, that line minus its label and verdict
+    token is the rationale. Hypotheses with no entry map to None values.
+    """
+    result: Dict[int, Dict[str, Optional[str]]] = {
+        index: {"rationale": None, "evidence_tier": None}
+        for index in range(1, hypothesis_count + 1)
+    }
+    if not audit_section:
+        return result
+    starts: Dict[int, int] = {}
+    for match in _AUDIT_ENTRY_RE.finditer(audit_section):
+        index = int(match.group(1))
+        if 1 <= index <= hypothesis_count and index not in starts:
+            starts[index] = match.start()
+    ordered = sorted(starts.items(), key=lambda item: item[1])
+    for position, (index, start) in enumerate(ordered):
+        end = ordered[position + 1][1] if position + 1 < len(ordered) else len(audit_section)
+        lines = [line for line in audit_section[start:end].splitlines() if line.strip()]
+        header, body = lines[0], lines[1:]
+        if not body:
+            header_text = _HEADER_LABEL_RE.sub("", _LEADING_MARKERS_RE.sub("", header))
+            body = [header_text]
+        fragments: List[str] = []
+        tier: Optional[str] = None
+        for line in body:
+            text = _LEADING_MARKERS_RE.sub("", line).strip()
+            runtime = _RUNTIME_LINE_RE.match(text)
+            if runtime:
+                tier = runtime.group(1).upper()
+                continue
+            text = _VERDICT_PREFIX_RE.sub("", text)
+            text = _RATIONALE_LABEL_RE.sub("", text)
+            text = text.replace("**", "").strip()
+            if text:
+                fragments.append(text)
+        result[index] = {
+            "rationale": " ".join(fragments) or None,
+            "evidence_tier": tier,
+        }
+    return result
 
 
 class MantisAgent:
@@ -296,6 +497,7 @@ class MantisAgent:
         context: Optional[SessionContext] = None,
         stream_callback: Optional[Callable[[str], None]] = None,
         event_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+        cancel_event: Optional[threading.Event] = None,
     ) -> str:
         """Executes a natural language prompt with stateful multi-turn conversational memory.
 
@@ -323,6 +525,7 @@ class MantisAgent:
                 context_mgr=ctx_mgr,
                 stream_callback=stream_callback,
                 event_callback=event_callback,
+                cancel_event=cancel_event,
             )
             ctx_mgr.add_assistant_message(res)
             return res
@@ -779,7 +982,27 @@ class MantisAgent:
         or Pro Tier (deep diagnostic reasoning, adversarial critique, differential analysis, patching)."""
         p = prompt.strip().lower()
 
-        # Pro indicators (deep reasoning, failure diagnosis, diffs, patches, triage, adversarial critique)
+        # Indicators only match at word boundaries. Plain substring matching sent
+        # questions about a "catalog" or a "technology" to the Flash tier because they
+        # contain "log", which skipped scoping and with it the informational path.
+        # Letters and digits are word characters here; '_', '.', '/' and '-' are
+        # separators, so identifiers such as `sequence.log` or `udmi_site_model`
+        # still expose their component words.
+        def matches(stem: str, whole_word: bool) -> bool:
+            tail = r"(?![a-z0-9])" if whole_word else ""
+            return re.search(r"(?<![a-z0-9])" + re.escape(stem) + tail, p) is not None
+
+        # Explanation questions run on PRO so the scoping turn happens and the plan can
+        # declare INFORMATIONAL_SCOPE, which is what issues INFORMATIONAL_DIRECTIVE.
+        explanation_indicators = [
+            "explain", "how does", "how do", "what does", "what is", "describe",
+            "should my device",
+        ]
+        if any(matches(ind, whole_word=True) for ind in explanation_indicators):
+            return ModelTier.PRO
+
+        # Pro indicators (deep reasoning, failure diagnosis, diffs, patches, triage, adversarial critique).
+        # These are stems: they match at the start of a word ("fail" -> "failed").
         pro_indicators = [
             "why", "diagnos", "root cause", "fail", "error", "triage", "troubleshoot",
             "diff", "compare", "patch", "fix", "remediat", "critic", "adversar",
@@ -787,18 +1010,19 @@ class MantisAgent:
             "provision", "ensure", "sequencer", "run test", "start stack",
             "golden", "baseline", "anti-cheating"
         ]
-        if any(ind in p for ind in pro_indicators):
+        if any(matches(ind, whole_word=False) for ind in pro_indicators):
             return ModelTier.PRO
 
-        # Flash indicators (simple schema lookups, log slicing, entity extraction, status checks, listing)
+        # Flash indicators (simple schema lookups, log slicing, entity extraction, status checks, listing).
+        # Whole words only; plural forms are listed explicitly.
         flash_indicators = [
-            "schema", "list schema", "inspect schema",
-            "log", "slice log", "extract log", "tail log", "show log",
+            "schema", "schemas", "list schema", "inspect schema",
+            "log", "logs", "slice log", "extract log", "tail log", "show log",
             "extract", "entities", "metadata", "list runs", "list devices", "devices", "show devices",
             "show site", "inspect site", "site_model", "site model", "status", "version", "help",
             "summarize", "condense", "lookup"
         ]
-        if any(ind in p for ind in flash_indicators):
+        if any(matches(ind, whole_word=True) for ind in flash_indicators):
             return ModelTier.FLASH
 
         # Default to PRO for open-ended or complex reasoning
@@ -908,6 +1132,15 @@ class MantisAgent:
             else:
                 rejected.append(top_dir)
         return resolved, rejected
+
+    def _parse_failure_scope(self, plan_text: str) -> Optional[str]:
+        """Returns the FAILURE_SCOPE a scoping plan declared, or None if it declared none
+        of the recognized scopes."""
+        alternatives = "|".join(FAILURE_SCOPES)
+        match = re.search(
+            rf"FAILURE_SCOPE\s*:\s*[`*\[<]*\s*({alternatives})\b", plan_text, re.IGNORECASE
+        )
+        return match.group(1).upper() if match else None
 
     def _parse_competing_hypotheses(self, plan_text: str) -> List[str]:
         """Parses the labelled hypotheses the Actor committed to during scoping.
@@ -1133,6 +1366,7 @@ class MantisAgent:
         enable_tripartite: Optional[bool] = None,
         enable_scoping: Optional[bool] = None,
         event_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+        cancel_event: Optional[threading.Event] = None,
     ) -> str:
         """Executes multi-step ReAct planning using google-genai SDK, token metrics, and dynamic tool execution.
 
@@ -1145,7 +1379,8 @@ class MantisAgent:
           hypotheses   {"hypotheses": [str]}            the plan's committed H1..Hn
           tool_call    {"call_id", "tool", "args", "step"}
           tool_result  {"call_id", "tool", "status", "output"}
-          audit        {"hypotheses": [{"label","hypothesis","verdict"}]}
+          audit        {"hypotheses": [{"label","hypothesis","verdict","rationale",
+                        "evidence_tier"}], "audit_section": str|None}
           metrics      {"duration_sec", "steps", "tool_calls", "tripartite_status"}
 
         Emission is best-effort: a raising callback is logged and swallowed, because a
@@ -1174,6 +1409,12 @@ class MantisAgent:
                 logger.warning(
                     "event_callback raised on %s record: %s", record_type, callback_error
                 )
+
+        def check_cancel(boundary: str) -> None:
+            # Observed only at step boundaries; see MantisCancelled.
+            if cancel_event is not None and cancel_event.is_set():
+                emit(f"\n[Mantis] Stopped by operator before {boundary}.\n")
+                raise MantisCancelled(f"Stopped by operator before {boundary}.")
 
         if self.client:
             client = self.client
@@ -1214,6 +1455,8 @@ Investigation Strategy Guidelines:
   device is physical hardware or an emulator (pubber). Unplugged hardware and an
   emulator that was never started are identical on the wire. Report what the evidence
   shows -- that the device did not respond -- and give remediation that covers both.
+  The device under test is external to this repository and may have been built from
+  the UDMI documentation alone: never cite pubber source as evidence of its behavior.
 - **Absence of an error is not evidence of health**: A log records what was attempted.
   A device that never connects produces no transport error, no authentication failure,
   and no schema violation. Never write that a subsystem is healthy, reachable, or
@@ -1230,9 +1473,10 @@ Investigation Strategy Guidelines:
   2. What Happened (Systemic Root Causes: client vs backend/transport factors)
   3. Event Timeline / Sequence (e.g. Mermaid sequence diagram tracing component interactions)
   4. Actionable Resolutions & Proposed Fixes
-- **Hypothesis Formulation**: Always formulate an evidence-grounded hypothesis before concluding your investigation.
+- **Hypothesis Formulation**: When diagnosing a failure, always formulate an evidence-grounded hypothesis before concluding your investigation.
+- **Explaining Behavior**: A question about how a test, feature, or message flow works is not a failure diagnosis. Answer it directly, without hypotheses, verdicts, verification matrices, or RCA sections. Read the complete source of any test you explain, including every helper it calls, and describe what the device must send and receive in terms of UDMI config, state, and event fields confirmed against the schemas, citing the relevant specification under `docs/`.
 
-Follow the mandatory 3-Phase Cognitive Diagnostic Cycle:
+For failure diagnosis, follow the mandatory 3-Phase Cognitive Diagnostic Cycle:
 1. Phase 1: Evidence Harvesting (Use tools to inspect schemas, site models, extract timelines with timestamps, transaction IDs RC:..., cutoff thresholds).
 2. Phase 2: Built-in Adversarial Self-Audit (evaluate Claim-by-Claim Verification Matrix with CONFIRMED, REFUTED, NOT ASSESSED, or UNVERIFIED ASSUMPTION, and invalidate rival hypotheses). REFUTED requires a positive observation that excludes the hypothesis; use NOT ASSESSED when nothing you found bears on it.
 3. Phase 3: Verified Synthesis (emit concise report format with Root Cause, Evidence, Fix, and optional Visual Diagrams).
@@ -1279,6 +1523,10 @@ You have access to domain tools to inspect the environment, execute tests, query
         run_scoping = enable_scoping if enable_scoping is not None else (tier == ModelTier.PRO)
         required_subsystems: List[str] = []
         competing_hypotheses: List[str] = []
+        # Set when the scoping plan declares INFORMATIONAL_SCOPE. The Critic and the
+        # Arbitrator then check an explanation for completeness and accuracy instead
+        # of demanding a hypothesis audit the question never called for.
+        informational = False
         # The resolution gate fires at most once, so a model that cannot comply
         # still terminates instead of looping against the same rejection.
         hypothesis_gate_applied = False
@@ -1302,6 +1550,7 @@ You have access to domain tools to inspect the environment, execute tests, query
 
         # Step 1: Actor Phase (ReAct exploration & tool execution)
         for step in range(max_steps):
+            check_cancel(f"step {step + 1}")
             metrics.total_steps += 1
             metrics.api_calls_count += 1
 
@@ -1441,6 +1690,36 @@ You have access to domain tools to inspect the environment, execute tests, query
                 else:
                     emit(f"\n[Mantis Scoping] Contracted subsystems: {', '.join(required_subsystems)}\n")
 
+                failure_scope = self._parse_failure_scope(plan_text)
+                if failure_scope is None:
+                    emit(
+                        "\n[Mantis Scoping] Plan declared no recognized FAILURE_SCOPE "
+                        f"({' | '.join(FAILURE_SCOPES)}); treating the request as a defect "
+                        "report.\n"
+                    )
+                informational = failure_scope == INFORMATIONAL_SCOPE
+                if informational:
+                    # A plan that declared NOT_A_FAILURE yet listed hypotheses anyway is
+                    # not held to them: there is no failure for them to explain, and
+                    # tracking them would reinstate the audit this scope exists to skip.
+                    if self._parse_competing_hypotheses(plan_text):
+                        emit(
+                            "\n[Mantis Scoping] Hypotheses listed for an informational "
+                            "question were discarded.\n"
+                        )
+                    competing_hypotheses = []
+                    emit(
+                        "[Mantis Scoping] Informational question: answering directly, "
+                        "without hypothesis ranking.\n"
+                    )
+                    contents.append(
+                        types.Content(
+                            role="user",
+                            parts=[types.Part.from_text(text=INFORMATIONAL_DIRECTIVE)],
+                        )
+                    )
+                    continue
+
                 competing_hypotheses = self._parse_competing_hypotheses(plan_text)
                 notify("hypotheses", hypotheses=list(competing_hypotheses))
 
@@ -1563,8 +1842,8 @@ You have access to domain tools to inspect the environment, execute tests, query
                                         + "\n\nThese are the hypotheses you committed to during "
                                         f"scoping:\n{committed}\n\n"
                                         "You still have tool access. Investigate what you need, then "
-                                        "reissue your COMPLETE final answer including a "
-                                        "'Hypothesis Resolution Audit' section that assigns each "
+                                        "reissue your COMPLETE final answer ending with a trailing "
+                                        "'## Hypothesis Resolution Audit' section that assigns each "
                                         f"hypothesis exactly one of: {', '.join(HYPOTHESIS_VERDICTS)}. "
                                         "Exactly one may be PRIMARY. Cite evidence that supports that "
                                         "specific hypothesis: evidence that another hypothesis is true "
@@ -1595,6 +1874,7 @@ You have access to domain tools to inspect the environment, execute tests, query
             # Execute tool calls
             response_parts = []
             for call in function_calls:
+                check_cancel(f"tool call {call.name}")
                 call_name = call.name
                 call_args = dict(call.args) if call.args else {}
                 metrics.tool_calls[call_name] = metrics.tool_calls.get(call_name, 0) + 1
@@ -1679,22 +1959,37 @@ You have access to domain tools to inspect the environment, execute tests, query
                         emit(f"  -> Tool execution error: {tool_output.get('error')}\n")
 
                 resp_payload = tool_output if isinstance(tool_output, dict) else {"result": tool_output}
+                # Must happen before serialisation: Vertex rejects the whole
+                # request if a `$ref` key survives anywhere in the response.
+                resp_payload = _neutralize_schema_refs(resp_payload)
+                max_payload_chars = 30000
                 try:
-                    payload_str = _strip_file_uri_scheme(json.dumps(resp_payload, default=str))
-                    max_payload_chars = 30000
+                    payload_str = json.dumps(resp_payload, default=str)
+                except (TypeError, ValueError) as serialize_error:
+                    # Report the failure to the model rather than swallowing it.
+                    # Passing the original object through instead would smuggle an
+                    # un-neutralised `$ref` into the request and kill the entire
+                    # investigation with a 400, far from the tool that caused it.
+                    logger.warning(
+                        "tool %s returned an unserialisable payload: %s",
+                        call_name, serialize_error,
+                    )
+                    resp_payload = {
+                        "status": "ERROR",
+                        "error": f"Tool output could not be serialised: {serialize_error}",
+                    }
+                else:
                     if len(payload_str) > max_payload_chars:
+                        # The snippet is a *string*, so any `$ref` inside it is
+                        # inert: the reserved-key scan only looks at real JSON
+                        # keys, which live probing confirmed.
                         resp_payload = {
                             "status": resp_payload.get("status", "SUCCESS") if isinstance(resp_payload, dict) else "SUCCESS",
                             "truncated": True,
                             "warning": f"Tool output exceeded {max_payload_chars} characters and was truncated by MantisAgent safety cap.",
                             "truncated_snippet": payload_str[:max_payload_chars],
                         }
-                    else:
-                        # Re-materialise from the sanitized text so the payload actually
-                        # sent is the one that was cleaned, not the original object.
-                        resp_payload = json.loads(payload_str)
-                except Exception:
-                    pass
+
                 response_parts.append(
                     types.Part.from_function_response(
                         name=call_name,
@@ -1754,6 +2049,7 @@ You have access to domain tools to inspect the environment, execute tests, query
                 )
 
         if not final_answer:
+            check_cancel("forced synthesis")
             # Budget exhausted while the model was still calling tools. Force a terminal
             # synthesis turn with tools disabled so the model must produce a real answer
             # grounded in the evidence it already collected.
@@ -1780,7 +2076,7 @@ You have access to domain tools to inspect the environment, execute tests, query
                     f"- H{i}: {text}" for i, text in enumerate(competing_hypotheses, start=1)
                 )
                 synthesis_directive += (
-                    "\n\nYour answer MUST include a 'Hypothesis Resolution Audit' section "
+                    "\n\nYour answer MUST end with a trailing '## Hypothesis Resolution Audit' section "
                     f"resolving every hypothesis you committed to during scoping:\n{committed}\n"
                     f"Assign each one exactly one of: {', '.join(HYPOTHESIS_VERDICTS)}. "
                     "EXACTLY ONE may be PRIMARY. Cite the evidence behind each verdict, and cite "
@@ -1877,42 +2173,80 @@ You have access to domain tools to inspect the environment, execute tests, query
                 run_tripartite = True
 
         if run_tripartite:
+            check_cancel("the Critic phase")
             notify("phase", phase="CRITIC")
             emit("\n[Mantis Critic] Initiating adversarial audit against UDMI codebase & schemas...\n")
             pro_model_name = self.config.get_model_for_tier(ModelTier.PRO)
 
             # 1. Critic Step
-            def _format_snippet(output_obj: Any) -> str:
+            # An explanation is audited for completeness, which the Critic cannot judge
+            # from 600-character fragments of the source it is checking against.
+            snippet_limit = 6000 if informational else 600
+
+            def _format_snippet(tool: str, output_obj: Any) -> str:
                 s = str(output_obj)
-                if len(s) > 600:
-                    return s[:600] + f" ...[truncated {len(s) - 600} chars]"
+                if informational and tool in SOURCE_EVIDENCE_TOOLS:
+                    return s
+                if len(s) > snippet_limit:
+                    return s[:snippet_limit] + f" ...[truncated {len(s) - snippet_limit} chars]"
                 return s
 
             critic_summary = json.dumps(
-                [{"tool": e["tool"], "args": e["args"], "output_snippet": _format_snippet(e["output"])} for e in tool_executions],
+                [{"tool": e["tool"], "args": e["args"], "output_snippet": _format_snippet(e["tool"], e["output"])} for e in tool_executions],
                 indent=2,
             )
-            critic_instruction = (
-                "You are the Mantis Critic. Your role is an adversarial, hyper-rigorous audit of the Actor's findings.\n"
-                "The UDMI codebase, schemas, and specifications are the Single Source of Truth (SSoT).\n"
-                "Audit the Actor's response against the tool evidence and UDMI specifications.\n"
-                "If the Actor produced a 'Hypothesis Resolution Audit', scrutinize each verdict "
-                "against the evidence cited FOR THAT HYPOTHESIS. A verdict is unsound when the "
-                "evidence actually supports a different hypothesis, when a hypothesis is ranked "
-                "PRIMARY on evidence that does not establish causation, or when a hypothesis is "
-                "marked REFUTED without evidence that excludes it. Report every such mismatch.\n"
-                "Backend hypotheses carry a 'RUNTIME_EVIDENCE:' declaration. Check it against "
-                "the tool evidence: a hypothesis declaring LOCAL_FILE or CLOUD must cite actual "
-                "log content, and one declaring NONE must not be narrated as though the behavior "
-                "was observed. A sound conclusion read from source is acceptable; describing an "
-                "inference as an observation is not.\n"
-                "Provide your critical audit in this format:\n"
-                "- Verified Claims: ...\n"
-                "- Unverified / Refuted Claims: ...\n"
-                "- Unsound Hypothesis Verdicts: ...\n"
-                "- Missing Context / Omissions: ...\n"
-                "- Recommendation for Arbitrator: ..."
-            )
+            if informational:
+                critic_instruction = (
+                    "You are the Mantis Critic. The user asked an informational question, not a "
+                    "defect report, and the Actor has written an explanation.\n"
+                    "The UDMI codebase, schemas, and specifications are the Single Source of Truth (SSoT).\n"
+                    "Audit the explanation against the tool evidence for:\n"
+                    "1. Accuracy: every field path, constant, timing value, and behavior it states "
+                    "must appear in the evidence. Flag any field or mechanism the evidence does not "
+                    "show, including plausible-sounding field names that do not exist in the schema.\n"
+                    "2. Completeness: compare the explanation with the source the Actor read. Name "
+                    "every check, wait, precondition, or step present in the source that the "
+                    "explanation omits, and any source the Actor did not finish reading.\n"
+                    "3. Framing: expected device behavior must be stated as UDMI config, state, and "
+                    "event fields, with the specification kept distinct from how the sequencer checks it.\n"
+                    "Do not ask for hypotheses, verdicts, or runtime-evidence declarations; they do "
+                    "not apply to an explanation.\n"
+                    "Source reads (read_udmi_file, inspect_sequencer_test, inspect_udmi_schema, "
+                    "locate_udmi_doc) are shown to you exactly as the Actor received them. Other "
+                    "outputs may end in '...[truncated N chars]': the Actor saw those in full, so "
+                    "a claim that could rest on the cut portion is not unsupported; list it under "
+                    "'Not verifiable from the excerpt'. A read_udmi_file result whose own "
+                    "'truncated' field is true did stop at 'end_line'; content past that line "
+                    "was not read.\n"
+                    "Provide your audit in this format:\n"
+                    "- Verified Claims: ...\n"
+                    "- Unsupported or Incorrect Claims: ...\n"
+                    "- Not verifiable from the excerpt: ...\n"
+                    "- Omitted Steps or Checks: ...\n"
+                    "- Recommendation for Arbitrator: ..."
+                )
+            else:
+                critic_instruction = (
+                    "You are the Mantis Critic. Your role is an adversarial, hyper-rigorous audit of the Actor's findings.\n"
+                    "The UDMI codebase, schemas, and specifications are the Single Source of Truth (SSoT).\n"
+                    "Audit the Actor's response against the tool evidence and UDMI specifications.\n"
+                    "If the Actor produced a 'Hypothesis Resolution Audit', scrutinize each verdict "
+                    "against the evidence cited FOR THAT HYPOTHESIS. A verdict is unsound when the "
+                    "evidence actually supports a different hypothesis, when a hypothesis is ranked "
+                    "PRIMARY on evidence that does not establish causation, or when a hypothesis is "
+                    "marked REFUTED without evidence that excludes it. Report every such mismatch.\n"
+                    "Backend hypotheses carry a 'RUNTIME_EVIDENCE:' declaration. Check it against "
+                    "the tool evidence: a hypothesis declaring LOCAL_FILE or CLOUD must cite actual "
+                    "log content, and one declaring NONE must not be narrated as though the behavior "
+                    "was observed. A sound conclusion read from source is acceptable; describing an "
+                    "inference as an observation is not.\n"
+                    "Provide your critical audit in this format:\n"
+                    "- Verified Claims: ...\n"
+                    "- Unverified / Refuted Claims: ...\n"
+                    "- Unsound Hypothesis Verdicts: ...\n"
+                    "- Missing Context / Omissions: ...\n"
+                    "- Recommendation for Arbitrator: ..."
+                )
             critic_user = (
                 f"User Inquiry: {prompt}\n\n"
                 f"Actor's Proposed Response:\n{actor_answer}\n\n"
@@ -1942,6 +2276,7 @@ You have access to domain tools to inspect the environment, execute tests, query
                 metrics.tripartite_status = "CRITIC_FAILED"
 
             # 2. Arbitrator Step
+            check_cancel("the Arbitrator phase")
             notify("phase", phase="ARBITRATOR")
             emit("\n[Mantis Arbitrator] Synthesizing verified final response...\n")
             arbitrator_instruction = (
@@ -1950,8 +2285,11 @@ You have access to domain tools to inspect the environment, execute tests, query
                 "Tasks:\n"
                 "1. Reconcile any discrepancies between Actor and Critic.\n"
                 "2. Eliminate any ungrounded assumptions or incorrect claims.\n"
-                "3. Synthesize the final, verified, polished response to the user.\n"
-                "4. Preserve the Actor's 'Hypothesis Resolution Audit' as a section of your response.\n"
+                "3. Synthesize the final, verified, polished response to the user, keeping the \n"
+                "   structure and audience the User Inquiry asks for.\n"
+                "4. Preserve the Actor's 'Hypothesis Resolution Audit' as the LAST section of your\n"
+                "   response, under exactly the heading '## Hypothesis Resolution Audit', with each\n"
+                "   hypothesis's Verdict, RUNTIME_EVIDENCE (where present), and Rationale lines.\n"
                 "   Keep every hypothesis, its verdict, its 'RUNTIME_EVIDENCE:' declaration, and the\n"
                 "   evidence cited. You may correct a verdict the Critic showed to be wrong, but you\n"
                 "   may not drop the section, omit a hypothesis, or remove a declaration: together\n"
@@ -1961,12 +2299,38 @@ You have access to domain tools to inspect the environment, execute tests, query
                 "   - If explaining message sequences, state transitions, or transaction timelines: Include a Mermaid sequenceDiagram (```mermaid ... ```) and/or Graphviz DOT (```dot ... ```).\n"
                 "   - If a diagram is not helpful, do not include one."
             )
+            arbitrator_closing = (
+                "Produce the definitive, verified response, retaining the Hypothesis "
+                "Resolution Audit section."
+            )
+            if informational:
+                arbitrator_instruction = (
+                    "You are the Mantis Arbitrator, the final authoritative voice of Mantis.\n"
+                    "The user asked an informational question, not a defect report. You receive the "
+                    "Actor's explanation and the Critic's audit of it.\n"
+                    "Tasks:\n"
+                    "1. Remove every claim the Critic showed to be unsupported or incorrect. Do not "
+                    "replace it with a guess; if the evidence does not settle a point, say so plainly. "
+                    "Keep claims the Critic listed only as 'Not verifiable from the excerpt'.\n"
+                    "2. Add every step or check the Critic showed was omitted, using only what the "
+                    "Critic quoted from the evidence.\n"
+                    "3. Write the answer for a reader who implements UDMI devices from the "
+                    "specification and may never have seen the UDMI codebase. Keep this structure:\n"
+                    "   Summary; Step by step (with the check made at each step); What the device "
+                    "must do (config received, state reported, events published, with field paths "
+                    "and timing); References (spec documents, schemas, and source files by path).\n"
+                    "4. Do not include hypotheses, verdicts, a Hypothesis Resolution Audit, "
+                    "RUNTIME_EVIDENCE declarations, or commentary about the Actor or Critic. The "
+                    "reader sees only the answer.\n"
+                    "5. Include a Mermaid diagram (```mermaid ... ```) only if it clarifies a message "
+                    "sequence or interaction."
+                )
+                arbitrator_closing = "Produce the definitive, verified explanation."
             arbitrator_user = (
                 f"User Inquiry: {prompt}\n\n"
                 f"Actor's Response:\n{actor_answer}\n\n"
                 f"Critic's Audit:\n{critic_text}\n\n"
-                "Produce the definitive, verified response, retaining the Hypothesis "
-                "Resolution Audit section."
+                f"{arbitrator_closing}"
             )
             arbitrator_config = types.GenerateContentConfig(
                 system_instruction=arbitrator_instruction,
@@ -2025,6 +2389,11 @@ You have access to domain tools to inspect the environment, execute tests, query
         # null verdict rather than being dropped or defaulted to a verdict nobody gave.
         if competing_hypotheses:
             resolved = self._hypothesis_verdicts(final_answer, len(competing_hypotheses))
+            # Rationale and runtime-evidence tier are read from the trailing audit
+            # section only: outside it, text about a hypothesis is report prose, not
+            # the reasoning recorded for its verdict. No section means no rationale.
+            _, audit_section = split_audit_section(final_answer)
+            entries = parse_audit_entries(audit_section or "", len(competing_hypotheses))
             notify(
                 "audit",
                 hypotheses=[
@@ -2032,9 +2401,12 @@ You have access to domain tools to inspect the environment, execute tests, query
                         "label": f"H{index}",
                         "hypothesis": text,
                         "verdict": resolved.get(index),
+                        "rationale": entries[index]["rationale"],
+                        "evidence_tier": entries[index]["evidence_tier"],
                     }
                     for index, text in enumerate(competing_hypotheses, start=1)
                 ],
+                audit_section=audit_section,
             )
 
         notify(

@@ -20,7 +20,7 @@ import signal
 import subprocess
 import threading
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from workbench.server.logger import SERVER_LOGGER
 
@@ -55,6 +55,25 @@ STAGE_LABELS = {
 
 class RunnerError(Exception):
     """Raised when a run cannot be started or addressed."""
+
+
+class RunnerBusyError(RunnerError):
+    """Raised when a run is requested while another session is still running.
+
+    bin/sequencer writes shared, fixed paths (/tmp/sequencer_config.json and
+    out/sequencer.*), so two concurrent runs would silently overwrite each
+    other's configuration and results. Mapped to HTTP 409 by the routes.
+    """
+
+    def __init__(self, running: Dict[str, Any]):
+        self.running = running
+        super().__init__(
+            f"Sequencer session '{running['session_id']}' (device "
+            f"'{running['device_id']}', started {running['started_at']}) is still "
+            "running. bin/sequencer writes shared files (/tmp/sequencer_config.json, "
+            "out/sequencer.*), so only one run may execute at a time. Wait for it to "
+            "finish or stop it, then start the new run."
+        )
 
 
 def stages_admitted(min_stage: str) -> List[str]:
@@ -128,8 +147,14 @@ class SequencerRunner:
         min_stage: str = "PREVIEW",
         serial_no: Optional[str] = None,
         correlation_id: Optional[str] = None,
+        on_exit: Optional[Callable[[Dict[str, Any], str], None]] = None,
     ) -> Dict[str, Any]:
-        """Launches `bin/sequencer` in its own process group and registers the session."""
+        """Launches `bin/sequencer` in its own process group and registers the session.
+
+        `on_exit(summary, log_text)`, when given, is called on a watcher thread once
+        the process has exited, with the session summary (as `list_sessions` reports
+        it) and the complete log. It runs whether or not any browser is watching.
+        """
         if not project_spec:
             raise RunnerError("project_spec is required (e.g. //mqtt/localhost:18833)")
         if not device_id:
@@ -141,24 +166,34 @@ class SequencerRunner:
 
         session_id = uuid.uuid4().hex[:12]
         session_dir = os.path.join(self.sessions_root, session_id)
-        os.makedirs(session_dir, exist_ok=True)
         log_path = os.path.join(session_dir, "sequencer.log")
 
-        log_handle = open(log_path, "wb", buffering=0)
-        try:
-            process = subprocess.Popen(
-                cmd,
-                cwd=self.udmi_root,
-                stdout=log_handle,
-                stderr=subprocess.STDOUT,
-                start_new_session=True,
-            )
-        except OSError as exc:
-            log_handle.close()
-            raise RunnerError(f"Failed to launch {' '.join(cmd)}: {exc}") from exc
-
-        started_at = datetime.now(timezone.utc).isoformat()
+        # Check, launch, and register under one lock so two simultaneous
+        # requests cannot both observe "nothing running" and both launch.
         with self._lock:
+            running = self._running_session_locked()
+            if running is not None:
+                raise RunnerBusyError({
+                    "session_id": running["session_id"],
+                    "device_id": running["device_id"],
+                    "started_at": running["started_at"],
+                })
+
+            os.makedirs(session_dir, exist_ok=True)
+            log_handle = open(log_path, "wb", buffering=0)
+            try:
+                process = subprocess.Popen(
+                    cmd,
+                    cwd=self.udmi_root,
+                    stdout=log_handle,
+                    stderr=subprocess.STDOUT,
+                    start_new_session=True,
+                )
+            except OSError as exc:
+                log_handle.close()
+                raise RunnerError(f"Failed to launch {' '.join(cmd)}: {exc}") from exc
+
+            started_at = datetime.now(timezone.utc).isoformat()
             self._sessions[session_id] = {
                 "session_id": session_id,
                 "process": process,
@@ -182,6 +217,13 @@ class SequencerRunner:
             context={"sessionId": session_id, "deviceId": device_id},
         )
         self._prune_sessions()
+        if on_exit is not None:
+            threading.Thread(
+                target=self._watch_exit,
+                args=(session_id, on_exit, correlation_id),
+                name=f"sequencer-exit-{session_id}",
+                daemon=True,
+            ).start()
 
         return {
             "session_id": session_id,
@@ -267,6 +309,9 @@ class SequencerRunner:
             self._close_handle(session)
             return {"session_id": session_id, "status": "ALREADY_EXITED", "exit_code": process.poll()}
 
+        # Marked before the signal: an exit watcher woken by the kill must already
+        # see that the operator, not the run, ended it.
+        session["stopped"] = True
         try:
             os.killpg(os.getpgid(process.pid), signal.SIGTERM)
             process.wait(timeout=5)
@@ -276,7 +321,6 @@ class SequencerRunner:
             process.wait(timeout=5)
             status = "KILLED"
 
-        session["stopped"] = True
         self._close_handle(session)
         SERVER_LOGGER.warn(
             "SequencerRunner",
@@ -292,23 +336,48 @@ class SequencerRunner:
         with self._lock:
             sessions = list(self._sessions.values())
 
-        summaries = []
-        for session in sessions:
-            exit_code = session["process"].poll()
-            summaries.append({
-                "session_id": session["session_id"],
-                "device_id": session["device_id"],
-                "project_spec": session["project_spec"],
-                "site_model": session["site_model"],
-                "tests": session["tests"],
-                "command_line": " ".join(session["command"]),
-                "started_at": session["started_at"],
-                "running": exit_code is None,
-                "exit_code": exit_code,
-                "stopped": session["stopped"],
-            })
+        summaries = [self._summary(session) for session in sessions]
         summaries.sort(key=lambda s: s["started_at"], reverse=True)
         return summaries
+
+    @staticmethod
+    def _summary(session: Dict[str, Any]) -> Dict[str, Any]:
+        exit_code = session["process"].poll()
+        return {
+            "session_id": session["session_id"],
+            "device_id": session["device_id"],
+            "project_spec": session["project_spec"],
+            "site_model": session["site_model"],
+            "tests": session["tests"],
+            "command_line": " ".join(session["command"]),
+            "started_at": session["started_at"],
+            "running": exit_code is None,
+            "exit_code": exit_code,
+            "stopped": session["stopped"],
+        }
+
+    def _watch_exit(
+        self,
+        session_id: str,
+        on_exit: Callable[[Dict[str, Any], str], None],
+        correlation_id: Optional[str],
+    ) -> None:
+        """Waits for the session's process, then hands its summary and log to `on_exit`."""
+        session = self._get_session(session_id)
+        session["process"].wait()
+        self._close_handle(session)
+        with open(session["log_path"], "r", encoding="utf-8", errors="replace") as fh:
+            log_text = fh.read()
+        try:
+            on_exit(self._summary(session), log_text)
+        except Exception as exc:  # a failing callback must be visible, not lost with the thread
+            SERVER_LOGGER.error(
+                "SequencerRunner",
+                "process.exit_callback_failed",
+                correlation_id=correlation_id,
+                context={"sessionId": session_id},
+                error={"code": exc.__class__.__name__, "message": str(exc)},
+            )
 
     def shutdown(self) -> None:
         """Terminates all running sessions (used on server shutdown and in tests)."""
@@ -325,6 +394,13 @@ class SequencerRunner:
         if not session:
             raise RunnerError(f"Unknown session_id '{session_id}'. It may have been pruned.")
         return session
+
+    def _running_session_locked(self) -> Optional[Dict[str, Any]]:
+        """Returns a session whose process is still alive. Caller holds _lock."""
+        for session in self._sessions.values():
+            if session["process"].poll() is None:
+                return session
+        return None
 
     @staticmethod
     def _close_handle(session: Dict[str, Any]) -> None:

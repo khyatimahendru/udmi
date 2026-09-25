@@ -56,3 +56,9 @@ def forbid_unmocked_cloud_apis(monkeypatch):
         monkeypatch.setattr("google.genai.Client.__init__", _guarded_client_init)
     except (ImportError, AttributeError):
         pass
+
+
+@pytest.fixture(autouse=True)
+def isolate_user_config(tmp_path_factory, monkeypatch):
+    """Point ~/.config at an empty directory so a saved `bin/mantis setup` never leaks in."""
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path_factory.mktemp("xdg")))

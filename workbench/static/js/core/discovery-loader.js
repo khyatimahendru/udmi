@@ -18,9 +18,16 @@ export class DiscoveryLoader {
 
   /** Loads the site model list, sequence catalog, and run option whitelists. */
   async loadCatalog() {
+    // The sequence catalog is built by running the compiled validator, which
+    // can fail on its own (missing or stale jar). That failure is returned
+    // for the view to show in place of the list, without taking the site
+    // model and option loading down with it.
     const [models, sequences, options] = await Promise.all([
       api.listSiteModels(),
-      api.listSequences(),
+      api.listSequences().then(
+        (body) => ({ sequences: body.sequences, error: null }),
+        (cause) => ({ sequences: [], error: cause.message }),
+      ),
       api.sequencerOptions(),
     ]);
     this.siteModels = models.site_models;
@@ -29,7 +36,17 @@ export class DiscoveryLoader {
     for (const root of models.unavailable_roots || []) {
       this.onNotice(`Registered site model path ${root.path} is unavailable: ${root.reason}`, 'warn');
     }
-    return { siteModels: this.siteModels, sequences: sequences.sequences, options };
+    // A site model whose cloud_iot_config.json cannot be parsed is skipped by
+    // the server, so say which one and why instead of letting it vanish.
+    for (const invalid of models.invalid_models || []) {
+      this.onNotice(`Site model ${invalid.path} was skipped: ${invalid.error}`, 'warn');
+    }
+    return {
+      siteModels: this.siteModels,
+      sequences: sequences.sequences,
+      sequencesError: sequences.error,
+      options,
+    };
   }
 
   /**
@@ -45,11 +62,15 @@ export class DiscoveryLoader {
     return false;
   }
 
-  /** Loads the device inventory for a site model. Returns [] on failure. */
+  /**
+   * Loads the device picker list for a site model. Returns [] on failure.
+   * Uses the summary listing (ids + gateway flags): the full inventory parses
+   * every device's points, which is seconds of work on an 11k-device site.
+   */
   async loadDevices(siteModel) {
     if (!siteModel) return [];
     try {
-      const { devices } = await api.listDevices(siteModel);
+      const { devices } = await api.listDeviceSummaries(siteModel);
       return devices;
     } catch (cause) {
       this.onNotice(cause.message, 'error');
@@ -97,16 +118,17 @@ export class DiscoveryLoader {
   }
 
   /**
-   * Project spec suggestions, discovered rather than invented: the site's own
-   * project_id plus any spec recorded in previous run artifacts.
+   * Project spec suggestions, discovered rather than invented.
+   *
+   * bin/sequencer only accepts `//<iot_provider>/<project_id>[/<namespace>]`,
+   * so the suggestion is the spec the server builds from the site's
+   * cloud_iot_config.json. It is absent when the config names no
+   * iot_provider; no provider is guessed. Recorded run artifacts are not a
+   * source: their .attr envelopes carry only a bare projectId, and no
+   * artifact records the spec a run was started with.
    */
-  projectSpecSuggestions(siteModel, results) {
+  projectSpecSuggestions(siteModel) {
     const model = this.siteModels.find((candidate) => candidate.path === siteModel);
-    const discovered = new Set();
-    if (model?.project_id) discovered.add(model.project_id);
-    for (const record of Object.values(results || {})) {
-      if (record.project_spec) discovered.add(record.project_spec);
-    }
-    return [...discovered].sort();
+    return model?.project_spec ? [model.project_spec] : [];
   }
 }

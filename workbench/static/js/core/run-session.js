@@ -23,7 +23,7 @@ export class RunSession {
   }
 
   /** Launches a run from explicit user state and begins streaming it. */
-  async start(state) {
+  async start(state, { notify = false } = {}) {
     const started = await api.runSequencer({
       site_model: state.siteModel,
       device_id: state.deviceId,
@@ -32,6 +32,7 @@ export class RunSession {
       log_level: state.logLevel,
       min_stage: state.minStage,
       serial_no: state.serialNo || null,
+      notify,
     });
     this.attach(started.session_id, 0);
     return started;

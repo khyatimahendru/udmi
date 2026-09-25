@@ -2,10 +2,8 @@
 #
 # Runs the UDMI Workbench test suite.
 #
-# This previously ran only ui/v1/tests and ui/tests, and never ran the
-# Workbench's own suite at all, so the gateway, the compliance rollup, the
-# results-commit guard and the Mantis adapter went unverified in CI. It now
-# runs workbench/tests, which is what bin/workbench actually serves.
+# Runs workbench/tests: the gateway, the compliance rollup, the results-commit
+# guard, the Mantis adapter and the launch prerequisites.
 
 ROOT_DIR=$(realpath "$(dirname "$0")/..")
 cd "$ROOT_DIR"
@@ -36,4 +34,5 @@ fi
 export MANTIS_OFFLINE=true
 
 echo "Running UDMI Workbench test suite..."
-PYTHONPATH=. $PYTHON_BIN -m pytest workbench/tests "$@"
+# Same module path bin/workbench gives the gateway (the UDMI common package too).
+PYTHONPATH="$ROOT_DIR/common/src/main/python:$ROOT_DIR" $PYTHON_BIN -m pytest workbench/tests "$@"

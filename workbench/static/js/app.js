@@ -8,9 +8,11 @@
  */
 
 import { api } from './core/api.js';
+import { desktopNotify } from './core/desktop-notify.js';
 import { logger } from './core/logger.js';
 import { LogsDrawer } from './components/logs-drawer.js';
 import { MantisDrawer } from './components/mantis-drawer.js';
+import { SettingsDialog } from './components/settings-dialog.js';
 import { DevicesView } from './views/devices.js';
 import { SequencerView } from './views/sequencer.js';
 
@@ -36,6 +38,8 @@ class WorkbenchApp {
     this.outletEl = document.querySelector('[data-role="outlet"]');
     this.statusEl = document.querySelector('[data-role="server-status"]');
     this.logsToggleEl = document.querySelector('[data-role="logs-toggle"]');
+    this.settingsToggleEl = document.querySelector('[data-role="settings-toggle"]');
+    this.settings = new SettingsDialog(document.querySelector('[data-role="settings-mount"]'));
     this.views = new Map();
     this.current = null;
     this.currentPath = null;
@@ -51,6 +55,8 @@ class WorkbenchApp {
     this.mantis.mount();
     this.logs.mount();
     this.logsToggleEl.addEventListener('click', () => this.logs.toggle());
+    this.settingsToggleEl.addEventListener('click', () => this.settings.open());
+    this._watchDesktopNotifications();
 
     window.addEventListener('popstate', () => this._applyLocation(false));
     await this.checkServer();
@@ -73,6 +79,31 @@ class WorkbenchApp {
     await this.mount(pathname, pushState);
   }
 
+  /**
+   * Keeps a persistent app-bar notice while desktop notifications cannot be
+   * shown, so a blocked permission is never silent. There is no re-prompt:
+   * browsers only let the operator change a denial in site settings.
+   */
+  _watchDesktopNotifications() {
+    const notice = document.querySelector('[data-role="desktop-notify-notice"]');
+    const text = document.querySelector('[data-role="desktop-notify-text"]');
+    desktopNotify.subscribe((status) => {
+      if (status === 'denied') {
+        text.textContent = 'Desktop notifications blocked';
+        notice.title =
+          'The browser is blocking notifications for this site. To allow them, click the ' +
+          'site information icon at the left of the address bar, set Notifications to ' +
+          'Allow, then reload Workbench.';
+      } else if (status === 'unsupported') {
+        text.textContent = 'Desktop notifications unavailable';
+        notice.title =
+          'This browser has no Notification API, so finished runs and Mantis answers ' +
+          'cannot raise desktop notifications. Use Email me when done instead.';
+      }
+      notice.hidden = status !== 'denied' && status !== 'unsupported';
+    });
+  }
+
   /** Keeps the URL and the toggle's ARIA state in step with the drawer. */
   _onLogsVisibility(open) {
     this.logsToggleEl.setAttribute('aria-expanded', open ? 'true' : 'false');
@@ -91,6 +122,16 @@ class WorkbenchApp {
    * they cover most of the workspace anyway. Whichever drawer is being opened
    * claims the edge and the other closes. The shell arbitrates rather than the
    * drawers knowing about each other, so neither has to import the other.
+   *
+   * A maximised Mantis needs nothing extra here. MantisDrawer.close() drops the
+   * maximised state along with the drawer, so the loser of the arbitration
+   * leaves the screen outright instead of lingering as a full-window overlay,
+   * and its focus-return already runs before the shell goes inert. That is why
+   * the setup drawer keeps its z-index 100 under Mantis' 200: the two are never
+   * on screen together, so there is no stacking to correct. Raising the setup
+   * drawer over a maximised Mantis would be the wrong fix -- it would put a
+   * second live surface on top of one that still holds focusable content, which
+   * is exactly the trap this contract exists to prevent.
    */
   claimRightEdge(claimant) {
     if (claimant !== this.mantis) {

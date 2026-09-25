@@ -86,6 +86,7 @@ graph TD
 
 ### 4. Pubber (`pubber/src/main/java/`)
 * **Role**: Synthetic device emulator that simulates real hardware behavior for testing and development.
+* **Not the device under test**: A sequencer run targets whatever device is registered in the site model. That device is usually external to this repository: third-party hardware or firmware that a manufacturer built from the UDMI documentation, often without any UDMI library. Pubber source is never evidence of how the device under test behaves; only the messages the device published during the run (state, events, and their timestamps in the run artifacts) are.
 * **Key Files & Classes**:
   * `daq/pubber/Pubber.java`: Device runtime entry point.
   * `daq/pubber/impl/manager/`: Component managers (`PubberPointsetManager.java`, `PubberGatewayManager.java`, `PubberSystemManager.java`).
@@ -110,8 +111,9 @@ graph TD
 When diagnosing communication errors, reflector failures, or unexpected timeouts:
 
 1. **Every Message Has Two Ends**:
-   * **Client / Caller Side**: Sends requests, awaits responses, manages caller timeouts (e.g. `validator/` or `pubber/`).
+   * **Client / Caller Side**: Sends requests, awaits responses, manages caller timeouts (e.g. `validator/`).
    * **Server / Processor Side**: Receives requests, queries devices or brokers, formats responses (e.g. `udmis/`).
+   * **Device Side**: The device under test is external to this repository. Its side of the wire is observable only through the messages it published in the run artifacts; judge it against the UDMI specification (`docs/`) and schemas (`schema/*.json`), never against pubber's implementation.
 2. **Never Treat Local Code as an External Black Box**:
    * When a client interacts with a service like `UDMIS` or a registry like `UDMI-REFLECT`, the backend code is **not** an opaque cloud service—its full implementation is in `udmis/`.
 3. **Targeted Codebase Zooming**:

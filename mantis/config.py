@@ -60,7 +60,7 @@ class MantisConfig:
         if os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"):
             return ProviderType.AI_STUDIO
 
-        # 3. Default: Vertex AI with bos-platform-dev / global
+        # 3. Default: Vertex AI in the project from GOOGLE_CLOUD_PROJECT / GCP_PROJECT
         return ProviderType.VERTEX_AI
 
     def get_model_for_tier(self, tier: ModelTier) -> str:

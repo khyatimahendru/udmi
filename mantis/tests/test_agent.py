@@ -3,7 +3,7 @@
 import os
 from unittest.mock import MagicMock
 import pytest
-from mantis.agent import MantisAgent, _strip_file_uri_scheme
+from mantis.agent import MantisAgent, _neutralize_schema_refs
 from mantis.config import ModelTier, ProviderType
 
 
@@ -122,11 +122,11 @@ def test_agent_run_deterministic_test_execution_gref_with_plus_suffix():
     agent.session_mgr.is_session_active = MagicMock(return_value=True)
     agent.session_mgr.start_session_process = MagicMock(return_value={"status": "STARTED"})
 
-    out = agent.run("Run test pointset_publish for AHU-1 against //gref/bos-platform-staging+heykhyati")
+    out = agent.run("Run test pointset_publish for AHU-1 against //gref/bos-platform-staging+dev_user")
     assert "Launched sequencer test" in out
     assert "AHU-1" in out
     assert "pointset_publish" in out
-    assert "//gref/bos-platform-staging+heykhyati" in out
+    assert "//gref/bos-platform-staging+dev_user" in out
     agent.session_mgr.start_session_process.assert_called_once()
 
 
@@ -322,7 +322,7 @@ def test_agent_classify_intent_tier():
     agent = MantisAgent()
 
     # Flash tier queries (schema lookups, log slicing, entity extraction, metadata)
-    assert agent.classify_intent_tier("Describe the pointset schema") == ModelTier.FLASH
+    assert agent.classify_intent_tier("Show the pointset schema") == ModelTier.FLASH
     assert agent.classify_intent_tier("List schemas in UDMI") == ModelTier.FLASH
     assert agent.classify_intent_tier("Slice logs for AHU-1 from sequence.log") == ModelTier.FLASH
     assert agent.classify_intent_tier("Extract entities from support bundle") == ModelTier.FLASH
@@ -337,6 +337,58 @@ def test_agent_classify_intent_tier():
     assert agent.classify_intent_tier("Verify golden baseline validator with anti-cheating") == ModelTier.PRO
 
 
+def test_agent_classify_intent_tier_ignores_indicators_inside_words():
+    """'log' inside 'catalog' or 'technology' is not a log-slicing request. Routing
+    such prompts to FLASH skipped scoping, so the informational path never ran."""
+    agent = MantisAgent()
+    assert agent.classify_intent_tier("Summarise the point catalog technology") == ModelTier.PRO
+    assert agent.classify_intent_tier("The catalog of technology options") == ModelTier.PRO
+    # Separators inside identifiers still expose the word.
+    assert agent.classify_intent_tier("tail sequence.log") == ModelTier.FLASH
+
+
+def test_agent_classify_intent_tier_routes_explanations_to_pro():
+    """Explanation questions must run scoping (PRO) so the plan can declare
+    INFORMATIONAL_SCOPE and receive INFORMATIONAL_DIRECTIVE, even when they
+    mention a Flash-tier word such as 'schema', 'log' or 'status'."""
+    agent = MantisAgent()
+    for prompt in (
+        "Explain the pointset schema",
+        "Describe the pointset schema",
+        "How does the sequencer check system status?",
+        "How do I slice logs?",
+        "What does the metadata version field mean?",
+        "What is the status block in state?",
+        "Should my device send logs on every config?",
+        "Please explain the discovery log",
+    ):
+        assert agent.classify_intent_tier(prompt) == ModelTier.PRO, prompt
+    # Word boundaries apply to explanation phrases too.
+    assert agent.classify_intent_tier("List explainers schema") == ModelTier.FLASH
+
+
+def test_agent_explanation_prompt_receives_informational_directive_without_explicit_tier():
+    """End to end: with no tier supplied, an explanation prompt that mentions a
+    Flash-tier word ('schema') must be classified PRO, run the scoping turn, and,
+    once the plan declares NOT_A_FAILURE, receive INFORMATIONAL_DIRECTIVE."""
+    resp_scoping = MockResponse(text=INFORMATIONAL_SCOPING_PLAN, function_calls=[])
+    resp_actor = MockResponse(text="Summary: the pointset schema.", function_calls=[])
+    mock_client = MockGenAIClient([resp_scoping, resp_actor])
+    agent = MantisAgent(client=mock_client)
+    pro_model = agent.config.get_model_for_tier(ModelTier.PRO)
+
+    output = agent._run_llm(
+        prompt="Describe the pointset schema",
+        enable_tripartite=False,
+    )
+
+    assert output == "Summary: the pointset schema."
+    assert mock_client.models.call_count == 2
+    assert mock_client.models.calls[0][0] == pro_model
+    _, actor_contents, _ = mock_client.models.calls[1]
+    assert "read the ENTIRE test method" in _serialized_text(actor_contents)
+
+
 def test_agent_two_tier_model_routing():
     agent = MantisAgent()
     flash_model = agent.config.get_model_for_tier(ModelTier.FLASH)
@@ -347,7 +399,7 @@ def test_agent_two_tier_model_routing():
     client_flash = MockGenAIClient([resp_flash])
     agent.client = client_flash
 
-    out_flash = agent._run_llm("Describe pointset schema", enable_scoping=False)
+    out_flash = agent._run_llm("Show pointset schema", enable_scoping=False)
     assert out_flash == "Pointset schema details"
     assert client_flash.models.calls[0][0] == flash_model
 
@@ -366,7 +418,7 @@ def test_agent_two_tier_model_routing():
     agent.client = client_override
 
     # Query would normally be FLASH, but explicit tier=PRO overrides
-    out_override = agent._run_llm("Describe pointset schema", tier=ModelTier.PRO, enable_scoping=False)
+    out_override = agent._run_llm("Show pointset schema", tier=ModelTier.PRO, enable_scoping=False)
     assert out_override == "Explicit tier handled"
     assert client_override.models.calls[0][0] == pro_model
 
@@ -1573,33 +1625,272 @@ def test_critic_snippet_includes_truncation_marker(monkeypatch):
 
 
 
-def test_strip_file_uri_scheme_unblocks_udmi_schema_refs():
-    """UDMI's schemas express every cross-file reference as
-    `"$ref": "file:common.json#/..."`. Vertex reads any `file:<name>` inside a
-    function response as a reference to an attached file part, finds no such
-    part, and rejects the whole request with 400 INVALID_ARGUMENT. Before this
-    strip, any investigation that read one of the 66 schemas carrying a $ref
-    killed the run outright."""
-    assert _strip_file_uri_scheme('{"$ref": "file:common.json#/definitions/depth"}') == (
-        '{"$ref": "common.json#/definitions/depth"}'
-    )
-    # The exact payload that produced the observed 400.
-    assert _strip_file_uri_scheme('{"$ref": "file:state_system_hardware.json"}') == (
-        '{"$ref": "state_system_hardware.json"}'
-    )
+def test_neutralize_schema_refs_renames_the_reserved_key():
+    """Vertex reserves `$ref` inside function_response.response and resolves it
+    against attached file parts. UDMI tool output carries real JSON Schema whose
+    `$ref`s name other schema files, so the request is rejected with
+    400 INVALID_ARGUMENT and the investigation dies mid-run.
 
-
-def test_strip_file_uri_scheme_keeps_absolute_paths_usable():
-    """A `file:///abs/path` URL must degrade to the path itself rather than to a
-    mangled fragment, so a log line naming a file stays actionable."""
-    assert _strip_file_uri_scheme('{"link": "file:///abs/path/x.md"}') == (
-        '{"link": "/abs/path/x.md"}'
+    Probing the live API established that the KEY is the trigger, not the value:
+    with `$ref` present every value was rejected identically, including an inert
+    control string of ordinary prose.
+    """
+    assert _neutralize_schema_refs({"$ref": "file:common.json#/definitions/depth"}) == (
+        {"ref": "file:common.json#/definitions/depth"}
+    )
+    # The exact payload that killed the recorded demo run.
+    assert _neutralize_schema_refs({"$ref": "file:config_pointset.json#"}) == (
+        {"ref": "file:config_pointset.json#"}
     )
 
 
-def test_strip_file_uri_scheme_leaves_non_scheme_colons_alone():
-    """The strip is a scheme removal, not a blanket delete of the word `file`.
-    Words that merely end in `file:` are not URI schemes and rewriting them
-    would corrupt tool output."""
-    text = '{"text": "see profile:x and makefile: notes"}'
-    assert _strip_file_uri_scheme(text) == text
+def test_neutralize_schema_refs_preserves_the_value_exactly():
+    """The value is irrelevant to Vertex, so it must survive untouched.
+
+    An earlier fix stripped the `file:` scheme out of these values, which did not
+    address the trigger and silently altered schema content on the way to the
+    model. Renaming the key means the model sees the reference verbatim.
+    """
+    payload = {"$ref": "file:///abs/path/x.md"}
+    assert _neutralize_schema_refs(payload) == {"ref": "file:///abs/path/x.md"}
+
+
+def test_neutralize_schema_refs_reaches_nested_and_listed_refs():
+    """`allOf`/`oneOf` wrap their refs in lists, and schemas nest arbitrarily.
+    A single missed `$ref` anywhere in the payload rejects the whole request."""
+    payload = {
+        "properties": {"pointset": {"$ref": "file:config_pointset.json#"}},
+        "allOf": [{"$ref": "file:test_base.json#"}, {"type": "object"}],
+    }
+    assert _neutralize_schema_refs(payload) == {
+        "properties": {"pointset": {"ref": "file:config_pointset.json#"}},
+        "allOf": [{"ref": "file:test_base.json#"}, {"type": "object"}],
+    }
+
+
+def test_neutralize_schema_refs_leaves_dollar_ref_inside_strings_alone():
+    """Only a real JSON key triggers the scan; `$ref` inside a string value is
+    inert. This is what makes the oversized-payload path safe, because that path
+    sends the serialised JSON as a single string."""
+    payload = {"truncated_snippet": '{"$ref": "file:common.json#"}'}
+    assert _neutralize_schema_refs(payload) == payload
+
+
+def test_neutralize_schema_refs_leaves_ordinary_payloads_untouched():
+    """The rename must not disturb tool output that carries no schema at all."""
+    payload = {"status": "SUCCESS", "rows": [1, 2, 3], "note": "see profile:x"}
+    assert _neutralize_schema_refs(payload) == payload
+
+
+
+# ------------------------------------------------------------------------------
+# Informational Scope (NOT_A_FAILURE)
+# ------------------------------------------------------------------------------
+
+INFORMATIONAL_SCOPING_PLAN = (
+    "FAILURE_SCOPE: NOT_A_FAILURE\n"
+    "SCOPE_JUSTIFICATION: The user asks how a sequencer test works.\n"
+    "COMPETING_HYPOTHESES:\n"
+    "- H1: The test schedules a future scan.\n"
+    "- H2: The test triggers an immediate scan.\n"
+    "REQUIRED_SUBSYSTEMS: validator, schema"
+)
+
+
+def _serialized_text(contents):
+    return " ".join(
+        getattr(part, "text", "") or ""
+        for content in contents
+        for part in getattr(content, "parts", []) or []
+    )
+
+
+@pytest.mark.parametrize(
+    "plan, expected",
+    [
+        ("FAILURE_SCOPE: NOT_A_FAILURE\n", "NOT_A_FAILURE"),
+        ("FAILURE_SCOPE: **single_target**\n", "SINGLE_TARGET"),
+        ("FAILURE_SCOPE: <MULTI_TARGET_DEGRADATION>\n", "MULTI_TARGET_DEGRADATION"),
+        ("FAILURE_SCOPE: SOMETHING_ELSE\n", None),
+        ("SCOPE_JUSTIFICATION: no scope line\n", None),
+    ],
+)
+def test_parse_failure_scope(plan, expected):
+    assert MantisAgent()._parse_failure_scope(plan) == expected
+
+
+def test_informational_scope_answers_without_hypothesis_gate():
+    """An explanation question must not be forced through the hypothesis audit.
+
+    The plan lists hypotheses anyway, which models routinely do; they are discarded
+    rather than tracked, so an answer with no verdicts is accepted on the first try.
+    """
+    resp_scoping = MockResponse(text=INFORMATIONAL_SCOPING_PLAN, function_calls=[])
+    resp_actor = MockResponse(text="Summary: the test schedules a scan.", function_calls=[])
+
+    mock_client = MockGenAIClient([resp_scoping, resp_actor])
+    agent = MantisAgent(client=mock_client)
+
+    chunks, events = [], []
+    output = agent._run_llm(
+        prompt="Explain how scan_single_future works",
+        tier=ModelTier.PRO,
+        enable_tripartite=False,
+        stream_callback=chunks.append,
+        event_callback=events.append,
+    )
+
+    assert output == "Summary: the test schedules a scan."
+    # Scoping + one Actor turn: no gate rejection and no re-ask.
+    assert mock_client.models.call_count == 2
+    assert not any("Answer rejected" in c for c in chunks)
+    assert any("Informational question" in c for c in chunks)
+    assert any("discarded" in c for c in chunks)
+    # Neither the plan's hypotheses nor an audit reach the UI.
+    assert not [e for e in events if e["type"] in ("hypotheses", "audit")]
+
+    _, actor_contents, _ = mock_client.models.calls[1]
+    serialized = _serialized_text(actor_contents)
+    assert "informational" in serialized
+    assert "read the ENTIRE test method" in serialized
+    assert "Scoping accepted. Tool access is now restored. Begin the investigation" not in serialized
+
+
+def test_defect_scope_still_tracks_hypotheses():
+    """The informational path must not weaken the gate for real defect reports."""
+    plan = INFORMATIONAL_SCOPING_PLAN.replace("NOT_A_FAILURE", "SINGLE_TARGET")
+    resp_scoping = MockResponse(text=plan, function_calls=[])
+    resp_unaudited = MockResponse(text="It is the scheduler.", function_calls=[])
+    resp_audited = MockResponse(
+        text="H1: PRIMARY because the config sets a future generation.\n"
+             "H2: REFUTED because the start time is in the future.",
+        function_calls=[],
+    )
+
+    mock_client = MockGenAIClient([resp_scoping, resp_unaudited, resp_audited])
+    agent = MantisAgent(client=mock_client)
+
+    chunks, events = [], []
+    agent._run_llm(
+        prompt="Why does scan_single_future fail on DDC-1?",
+        tier=ModelTier.PRO,
+        enable_tripartite=False,
+        stream_callback=chunks.append,
+        event_callback=events.append,
+    )
+
+    assert any("Answer rejected" in c for c in chunks)
+    assert [e for e in events if e["type"] == "hypotheses"]
+    assert mock_client.models.call_count == 3
+
+
+def test_informational_scope_uses_explanation_critic_and_arbitrator():
+    """Critic audits completeness/accuracy; Arbitrator must not demand an audit section."""
+    resp_scoping = MockResponse(text=INFORMATIONAL_SCOPING_PLAN, function_calls=[])
+    resp_actor = MockResponse(text="Summary: the test schedules a scan.", function_calls=[])
+    resp_critic = MockResponse(text="- Omitted Steps or Checks: scan pending wait.", function_calls=[])
+    resp_arbitrator = MockResponse(text="Final explanation.", function_calls=[])
+
+    mock_client = MockGenAIClient([resp_scoping, resp_actor, resp_critic, resp_arbitrator])
+    agent = MantisAgent(client=mock_client)
+
+    output = agent._run_llm(
+        prompt="Explain how scan_single_future works",
+        tier=ModelTier.PRO,
+        enable_tripartite=True,
+    )
+
+    assert output == "Final explanation."
+    _, _, critic_cfg = mock_client.models.calls[2]
+    assert "informational question" in critic_cfg.system_instruction
+    assert "Omitted Steps or Checks" in critic_cfg.system_instruction
+    assert "Unsound Hypothesis Verdicts" not in critic_cfg.system_instruction
+
+    _, arbitrator_contents, arbitrator_cfg = mock_client.models.calls[3]
+    assert "Preserve the Actor's 'Hypothesis Resolution Audit'" not in arbitrator_cfg.system_instruction
+    assert "retaining the Hypothesis Resolution Audit" not in _serialized_text(arbitrator_contents)
+
+
+def test_informational_critic_sees_source_reads_in_full():
+    """The Critic must see the helper body the Actor read, not its first 6000 chars.
+
+    Live signature: a 400-line read of DiscoverySequences.java was cut before
+    scanAndVerify, the Critic reported the body "never successfully read", and
+    the Arbitrator deleted the correct step-by-step checks.
+    """
+    read_call = MockFunctionCall(
+        name="read_udmi_file",
+        args={"file_path": "validator/src/main/java/com/google/daq/mqtt/sequencer/sequences/DiscoverySequences.java"},
+    )
+    mock_client = MockGenAIClient([
+        MockResponse(text=INFORMATIONAL_SCOPING_PLAN, function_calls=[]),
+        MockResponse(function_calls=[read_call]),
+        MockResponse(text="Summary: the test schedules a scan.", function_calls=[]),
+        MockResponse(text="- Verified Claims: all.", function_calls=[]),
+        MockResponse(text="Final explanation.", function_calls=[]),
+    ])
+    MantisAgent(client=mock_client)._run_llm(
+        prompt="Explain how scan_single_future works",
+        tier=ModelTier.PRO,
+        enable_tripartite=True,
+    )
+    _, critic_contents, critic_cfg = mock_client.models.calls[3]
+    evidence = _serialized_text(critic_contents)
+    # Checks deep inside scanAndVerify, far past the old 6000-character cut.
+    assert "received expected number of discovery events" in evidence
+    assert "received proper discovery termination event" in evidence
+    assert "Not verifiable from the excerpt" in critic_cfg.system_instruction
+
+
+# ------------------------------------------------------------ cancellation ---
+def test_cancel_before_first_step_makes_no_model_call():
+    import threading
+
+    from mantis.agent import MantisCancelled
+
+    client = MockGenAIClient([MockResponse(text="never used")])
+    cancel = threading.Event()
+    cancel.set()
+    chunks = []
+    with pytest.raises(MantisCancelled, match="before step 1"):
+        MantisAgent(client=client)._run_llm(
+            prompt="Explain the pointset schema",
+            stream_callback=chunks.append,
+            enable_scoping=False,
+            cancel_event=cancel,
+        )
+    assert client.models.call_count == 0
+    assert any("Stopped by operator before step 1." in c for c in chunks)
+
+
+def test_cancel_during_model_call_skips_the_requested_tool_and_adds_no_answer():
+    import threading
+
+    from mantis.agent import MantisCancelled
+    from mantis.models import MessageRole, SessionContext
+
+    cancel = threading.Event()
+
+    class _StopDuringCall(MockModels):
+        def generate_content(self, model, contents, config):
+            # The operator presses Stop while this model call is in flight.
+            cancel.set()
+            return super().generate_content(model, contents, config)
+
+    client = MockGenAIClient([])
+    client.models = _StopDuringCall([
+        MockResponse(function_calls=[MockFunctionCall(name="inspect_udmi_schema", args={"schema_name": "pointset"})]),
+        MockResponse(text="never used"),
+    ])
+    records = []
+    context = SessionContext(active_session_id="sess")
+    with pytest.raises(MantisCancelled, match="before tool call inspect_udmi_schema"):
+        MantisAgent(client=client).run(
+            "Tell me about the pointset schema",
+            context=context,
+            event_callback=records.append,
+            cancel_event=cancel,
+        )
+    assert client.models.call_count == 1
+    assert not [r for r in records if r.get("type") == "tool_call"]
+    assert all(m.role != MessageRole.ASSISTANT for m in context.history)

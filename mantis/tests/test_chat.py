@@ -46,6 +46,9 @@ def test_chat_multi_turn_antecedent_resolution():
     assert console.context_mgr.context.active_test_id == "pointset_publish"
 
     # Turn 2: Follow-up question without explicit device name
-    resp = agent.run("Why did it fail?", context=console.context_mgr.context)
-    # Verify the diagnosis was run for AHU-99 instead of default AHU-1
-    assert "AHU-99" in resp
+    # Verify the diagnosis was run for AHU-99 instead of default AHU-1. No run is
+    # recorded for AHU-99, so the timeline lookup must fail naming AHU-99 rather
+    # than silently harvesting the repository's out/ directory.
+    import pytest
+    with pytest.raises(FileNotFoundError, match="device_id='AHU-99'"):
+        agent.run("Why did it fail?", context=console.context_mgr.context)

@@ -12,18 +12,12 @@
 ROOT_DIR=$(realpath $(dirname $0)/..)
 cd "$ROOT_DIR"
 
-# 1. Self-Bootstrapping: Detect and configure virtual environment
-if [ ! -f "venv/bin/activate" ] || [ ! -x "venv/bin/python3" ]; then
-    echo "Initializing Mantis runtime environment (bin/setup_base)..."
-    bin/setup_base
-fi
+# Rebuild venv/ if it is missing or etc/requirements.txt changed. The remaining
+# prerequisites (modules, tmux, model provider) are checked by mantis.cli once
+# --offline / --vertex have been applied.
+bin/ensure_venv >&2  # stdout is the MCP channel under --mcp
 
 source venv/bin/activate
-
-# 2. Verify tmux availability for session isolation
-if ! command -v tmux >/dev/null 2>&1; then
-    echo "Warning: tmux is not installed or not in PATH. Local session management requires tmux." >&2
-fi
 
 export PYTHONPATH="$ROOT_DIR/common/src/main/python:$ROOT_DIR:${PYTHONPATH:-}"
 

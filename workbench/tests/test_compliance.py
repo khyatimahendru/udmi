@@ -160,7 +160,19 @@ def test_broken_config_is_reported_exactly_as_recorded(recorded_site):
     assert sequence["timestamp"]
 
     assert device["counts"]["fail"] >= 1
-    assert device["score"]["total"] >= 8
+
+    # The score belongs to the (bucket, stage) cell, not to the device. This is
+    # the row bin/sequencer_report would print as `| x | system | 0/8 |`.
+    assert device["stages"] == ["stable"]
+    assert device["features"]["system"]["stages"]["stable"] == {
+        "scored": 0, "total": 8, "sequences": 1
+    }
+    assert device["features"]["system"]["overall"] is False
+    assert device["verdict"] == "fail"
+    assert "score" not in device, (
+        "A summed per-device score conflates independently scored buckets and "
+        "must never come back"
+    )
 
 
 def test_unexpected_verdicts_are_not_bucketed_as_pass_or_fail(site_report):
@@ -245,12 +257,44 @@ def test_device_without_sequencer_json_is_untested_not_zero_percent(tmp_path):
     assert device["has_results"] is False
     assert device["sequences"] == []
     assert device["counts"] == {"pass": 0, "fail": 0, "skip": 0, "total": 0}
+    assert device["features"] == {}
+    assert device["stages"] == []
+    assert device["verdict"] == "not_evaluated"
     assert "sequencer_NEW-1.json" in device["reason"]
     assert str(site / "out") in device["reason"]
     assert device["reports"] == []
 
     assert report["totals"]["devices"] == 1
     assert report["totals"]["devices_with_results"] == 0
+
+
+def test_report_outliving_its_scoring_json_is_not_called_missing(tmp_path):
+    """A results.md without sequencer_<device>.json must not be denied.
+
+    This is the common state in a real lab model: out/ is pruned per run, and
+    results.md lives at a different path than the scoring file, so a rendered
+    report routinely survives the JSON it came from. Telling the operator "no
+    sequencer results found" while the report sits on disk is false, but the
+    device still cannot be scored from it.
+    """
+    site = _make_site_model(tmp_path / "orphan_site", ["OLD-1"])
+    report_dir = site / "out" / "devices" / "OLD-1"
+    report_dir.mkdir(parents=True, exist_ok=True)
+    (report_dir / "results.md").write_text(
+        "# OLD-1\n- Start 2026-05-01T00:00:00Z\n", encoding="utf-8"
+    )
+
+    device = compliance.site_compliance(UDMI_ROOT, str(site))["devices"][0]
+
+    assert device["has_results"] is False
+    assert device["verdict"] == "not_evaluated"
+    assert device["features"] == {}
+    assert "results_md" in device["reports"]
+    # The wording must acknowledge the surviving report...
+    assert "No sequencer results found" not in device["reason"]
+    assert "still on disk" in device["reason"]
+    # ...while naming the file that is actually absent.
+    assert "sequencer_OLD-1.json" in device["reason"]
 
 
 def test_malformed_sequencer_json_surfaces_the_parse_error(tmp_path):
@@ -374,3 +418,279 @@ def test_oversized_report_is_refused_rather_than_truncated(tmp_path, monkeypatch
 
     with pytest.raises(ComplianceError, match="exceeding the 8 byte download limit"):
         compliance.device_report(UDMI_ROOT, str(site), "BIG-1", "sequencer_json")
+
+
+# ------------------------------------------------- bucket x stage scoring ---
+#
+# These pin the rules that make the score meaningful. Each one corresponds to a
+# way the previous implementation was wrong, and each is reproduced from
+# bin/sequencer_report, which is the authority for what results.md will say.
+
+
+def _run(features, **top):
+    """A minimal sequencer json carrying the given feature -> sequence tree."""
+    document = {
+        "features": features,
+        "schemas": {},
+        "start_time": "2026-01-01T00:00:00Z",
+        "status": {
+            "category": "validation.feature.sequence",
+            "level": 300,
+            "message": "Run completed",
+            "timestamp": "2026-01-01T00:10:00Z",
+        },
+        "timestamp": "2026-01-01T00:10:00Z",
+        "udmi_version": "1.5.5",
+    }
+    document.update(top)
+    return document
+
+
+def _sequence(result, stage, value, total, **extra):
+    entry = {
+        "capabilities": {},
+        "result": result,
+        "stage": stage,
+        "scoring": {"value": value, "total": total},
+        "status": {
+            "category": "validation.feature.sequence",
+            "level": 300 if result == "pass" else 500,
+            "message": f"{result} message",
+            "timestamp": "2026-01-01T00:05:00Z",
+        },
+    }
+    entry.update(extra)
+    return entry
+
+
+def _site_with(tmp_path, name, document, device_id="AHU-1"):
+    root = _make_site_model(tmp_path / name, [device_id])
+    (root / "out").mkdir(exist_ok=True)
+    (root / "out" / f"sequencer_{device_id}.json").write_text(
+        json.dumps(document), encoding="utf-8"
+    )
+    return compliance._device_compliance(str(root.parent), str(root), device_id)
+
+
+def test_skipped_bucket_is_not_assessed_rather_than_failed(tmp_path):
+    """A 0/0 bucket was never exercised; calling it a failure invents a defect."""
+    device = _site_with(tmp_path, "skipped", _run({
+        "gateway": {"sequences": {
+            "gateway_proxy_state": _sequence("skip", "stable", 0, 0),
+        }},
+    }))
+
+    cell = device["features"]["gateway"]["stages"]["stable"]
+    assert cell == {"scored": 0, "total": 0, "sequences": 1}
+    assert device["features"]["gateway"]["overall"] is None, (
+        "0/0 must be 'not assessed'; None is what renders as a dash, and False "
+        "would render as a cross against a device nobody tested"
+    )
+    assert device["verdict"] == "not_evaluated"
+    assert device["stages"] == [], "A stage nothing exercised earns no column"
+
+
+def test_attempted_and_failed_is_distinguishable_from_skipped(tmp_path):
+    """0/10 and 0/0 must not collapse onto each other."""
+    device = _site_with(tmp_path, "attempted", _run({
+        "gateway": {"sequences": {
+            "gateway_proxy_state": _sequence("fail", "stable", 0, 10),
+        }},
+    }))
+
+    assert device["features"]["gateway"]["stages"]["stable"]["total"] == 10
+    assert device["features"]["gateway"]["overall"] is False
+    assert device["verdict"] == "fail"
+
+
+def test_preview_only_bucket_is_not_assessed_even_at_full_marks(tmp_path):
+    """Only stable and beta decide a verdict. bin/sequencer_report:27
+
+    This is the rule behind the real GAT-123 report, where a bucket scoring
+    0/10 at preview still renders as a dash rather than a cross.
+    """
+    device = _site_with(tmp_path, "preview_only", _run({
+        "discovery.scan": {"sequences": {
+            "scan_single_now": _sequence("pass", "preview", 10, 10),
+        }},
+    }))
+
+    assert device["features"]["discovery.scan"]["stages"]["preview"] == {
+        "scored": 10, "total": 10, "sequences": 1
+    }
+    assert device["features"]["discovery.scan"]["overall"] is None, (
+        "Full marks at preview is still not a pass: preview is informational"
+    )
+    assert device["verdict"] == "not_evaluated"
+    assert device["stages"] == ["preview"], "The column still appears; only the verdict abstains"
+
+
+def test_a_bucket_passes_only_on_full_marks(tmp_path):
+    """bin/sequencer_report:308 requires scored == total, not merely scored > 0."""
+    device = _site_with(tmp_path, "partial", _run({
+        "pointset": {"sequences": {
+            "pointset_publish": _sequence("pass", "stable", 10, 10),
+            "pointset_remove_point": _sequence("fail", "stable", 0, 10),
+        }},
+    }))
+
+    assert device["features"]["pointset"]["stages"]["stable"] == {
+        "scored": 10, "total": 20, "sequences": 2
+    }
+    assert device["features"]["pointset"]["overall"] is False
+    assert device["verdict"] == "fail"
+
+
+def test_stage_columns_follow_what_was_exercised_and_keep_canonical_order(tmp_path):
+    """Real lab devices do span several stages at once; N columns must work.
+
+    A single real lab report can carry Stable, Beta and Preview columns together.
+    """
+    device = _site_with(tmp_path, "multistage", _run({
+        "system": {"sequences": {
+            "valid_serial_no": _sequence("pass", "stable", 10, 10),
+            "system_mode_restart": _sequence("pass", "preview", 10, 10),
+        }},
+        "gateway": {"sequences": {
+            "gateway_proxy_events": _sequence("pass", "beta", 10, 10),
+        }},
+    }))
+
+    assert device["stages"] == ["stable", "beta", "preview"], (
+        "Columns must come out in released-first order regardless of input order"
+    )
+    assert device["features"]["system"]["overall"] is True
+    assert device["features"]["gateway"]["overall"] is True
+    assert device["verdict"] == "pass"
+
+
+def test_one_failing_bucket_fails_the_device_but_abstentions_do_not(tmp_path):
+    device = _site_with(tmp_path, "mixed", _run({
+        "system": {"sequences": {"a": _sequence("pass", "stable", 10, 10)}},
+        "pointset": {"sequences": {"b": _sequence("fail", "stable", 0, 10)}},
+        "discovery.scan": {"sequences": {"c": _sequence("skip", "preview", 0, 0)}},
+    }))
+
+    assert device["features"]["system"]["overall"] is True
+    assert device["features"]["pointset"]["overall"] is False
+    assert device["features"]["discovery.scan"]["overall"] is None
+    assert device["verdict"] == "fail"
+
+
+def test_sequence_without_scoring_is_reported_not_scored_as_zero(tmp_path):
+    """An interrupted run leaves `result: start` and no scoring at all.
+
+    Defaulting that to 0/0 would silently turn a run nobody finished into a
+    tidy set of 'not applicable' buckets. Both real DDC-29 and DDC-501 in the
+    lab site model contain exactly one such sequence.
+    """
+    device = _site_with(tmp_path, "interrupted", _run({
+        "system.software.updates": {"sequences": {
+            "blob_update_invalid_hash": {"result": "start", "stage": "preview"},
+        }},
+    }))
+
+    assert device["features"]["system.software.updates"]["stages"]["preview"] == {
+        "scored": 0, "total": 0, "sequences": 0
+    }, "An unscored sequence must not be counted into the cell at all"
+
+    assert len(device["unscored"]) == 1
+    stray = device["unscored"][0]
+    assert stray["name"] == "blob_update_invalid_hash"
+    assert stray["result"] == "start"
+    assert "no score" in stray["reason"]
+    assert device["counts"]["total"] == 1, "It is still a recorded sequence"
+
+
+def test_sequence_with_unknown_stage_is_surfaced_not_dropped(tmp_path):
+    device = _site_with(tmp_path, "badstage", _run({
+        "system": {"sequences": {"odd": _sequence("pass", "experimental", 10, 10)}},
+    }))
+
+    assert device["stages"] == []
+    assert len(device["unscored"]) == 1
+    assert "experimental" in device["unscored"][0]["reason"]
+
+
+def test_site_totals_count_devices_by_verdict(tmp_path):
+    root = _make_site_model(tmp_path / "verdicts", ["PASS-1", "FAIL-1", "NONE-1"])
+    (root / "out" / "sequencer_PASS-1.json").write_text(json.dumps(_run({
+        "system": {"sequences": {"a": _sequence("pass", "stable", 10, 10)}},
+    })), encoding="utf-8")
+    (root / "out" / "sequencer_FAIL-1.json").write_text(json.dumps(_run({
+        "system": {"sequences": {"a": _sequence("fail", "stable", 0, 10)}},
+    })), encoding="utf-8")
+    (root / "out" / "sequencer_NONE-1.json").write_text(json.dumps(_run({
+        "system": {"sequences": {"a": _sequence("skip", "stable", 0, 0)}},
+    })), encoding="utf-8")
+
+    report = compliance.site_compliance(str(root.parent), root.name)
+    totals = report["totals"]
+
+    assert totals["devices_passing"] == 1
+    assert totals["devices_failing"] == 1
+    assert totals["devices_not_evaluated"] == 1
+    assert "score" not in totals
+
+
+def test_stale_results_md_is_flagged_against_the_authoritative_json(tmp_path):
+    """results.md and the json drift apart in real site models.
+
+    DDC-29 in the lab site model carries a report describing a run that started
+    41 seconds before the one the json records. An operator downloading that
+    report gets a different run from the one on screen, so the mismatch is
+    reported rather than left for them to discover.
+    """
+    root = _make_site_model(tmp_path / "drift", ["AHU-1"])
+    (root / "out" / "sequencer_AHU-1.json").write_text(json.dumps(_run({
+        "system": {"sequences": {"a": _sequence("pass", "stable", 10, 10)}},
+    }, start_time="2026-07-23T09:34:47Z")), encoding="utf-8")
+
+    device_out = root / "out" / "devices" / "AHU-1"
+    device_out.mkdir(parents=True)
+    (device_out / "results.md").write_text(
+        "# AHU-1\n\n- Start 2026-07-23T09:34:06Z\n- End: 2026-07-23T09:34:31Z\n",
+        encoding="utf-8",
+    )
+
+    device = compliance._device_compliance(str(root.parent), str(root), "AHU-1")
+    assert device["provenance"]["run_start"] == "2026-07-23T09:34:47Z"
+    assert device["provenance"]["results_md_start"] == "2026-07-23T09:34:06Z"
+    assert device["provenance"]["results_md_matches_run"] is False
+
+
+def test_matching_results_md_is_not_flagged(tmp_path):
+    root = _make_site_model(tmp_path / "nodrift", ["AHU-1"])
+    (root / "out" / "sequencer_AHU-1.json").write_text(json.dumps(_run({
+        "system": {"sequences": {"a": _sequence("pass", "stable", 10, 10)}},
+    }, start_time="2026-07-20T21:15:32Z")), encoding="utf-8")
+
+    device_out = root / "out" / "devices" / "AHU-1"
+    device_out.mkdir(parents=True)
+    (device_out / "results.md").write_text(
+        "# AHU-1\n\n- Start 2026-07-20T21:15:32Z\n- End: 2026-07-20T21:20:00Z\n",
+        encoding="utf-8",
+    )
+
+    device = compliance._device_compliance(str(root.parent), str(root), "AHU-1")
+    assert device["provenance"]["results_md_matches_run"] is True
+
+
+def test_capabilities_are_read_as_verdicts_only(tmp_path):
+    """The sequencer only ever writes `result` per capability.
+
+    Score and total are declared in the schema but never populated, so no
+    capability arithmetic may be attempted; the contribution is already inside
+    the sequence's own scoring.
+    """
+    device = _site_with(tmp_path, "caps", _run({
+        "system": {"sequences": {
+            "broken_config": _sequence("pass", "stable", 9, 10, capabilities={
+                "Logging": {"result": "pass"},
+                "Status": {"result": "fail", "status": {"message": "nope"}},
+            }),
+        }},
+    }))
+
+    sequence = device["sequences"][0]
+    assert sequence["capabilities"] == {"Logging": "pass", "Status": "fail"}

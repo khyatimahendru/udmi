@@ -2,9 +2,8 @@
 # ==========================================================================
 # UDMI Workbench Launcher
 #
-# Starts the Workbench gateway (workbench/server/gateway.py) and opens it in a
-# browser. This supersedes the earlier ui/v1 and ui/v2 launchers: there is now
-# one Workbench and one way to start it.
+# Checks every launch prerequisite, starts the Workbench gateway
+# (workbench/server/gateway.py) and opens it in a browser.
 # ==========================================================================
 
 set -e
@@ -26,18 +25,11 @@ is_workbench_process() {
   [[ "$cmdline" == *"$SERVER_MODULE"* || "$cmdline" == *"workbench/server/gateway.py"* ]]
 }
 
-if ! bin/which_venv_pip3 > /dev/null 2>&1; then
-  echo "Error: Virtual environment not found or not initialized."
-  echo "Please run 'bin/setup_base' first to install system dependencies and virtualenv."
-  exit 1
-fi
+PYTHON_BIN="venv/bin/python3"
 
-if [ -x "venv/bin/python3" ]; then
-  PYTHON_BIN="venv/bin/python3"
-else
-  echo "Error: venv/bin/python3 is missing. Run 'bin/setup_base' to rebuild the virtualenv."
-  exit 1
-fi
+# The gateway hosts the Mantis agent, which imports the UDMI common Python
+# package (udmi.common.*) for project-spec parsing and broker connections.
+export PYTHONPATH="$WORKSPACE_DIR/common/src/main/python:$WORKSPACE_DIR${PYTHONPATH:+:$PYTHONPATH}"
 
 MANUAL_PORT=""
 STOP_REQUESTED=false
@@ -48,6 +40,14 @@ show_usage() {
   echo "Arguments:"
   echo "  stop              Stop the running UDMI Workbench gateway"
   echo "  --port=N, -p N    Specify custom TCP port (default: 8080)"
+  echo ""
+  echo "Mantis needs a model provider, one of:"
+  echo "  GEMINI_API_KEY or GOOGLE_API_KEY   Google AI Studio API key"
+  echo "  bin/mantis setup --vertex=<project>[/<region>]"
+  echo "                                     one-time Vertex AI setup (with ADC)"
+  echo "  GOOGLE_CLOUD_PROJECT               your own Vertex AI project (with ADC)"
+  echo "  application-default credentials    that name a project (gcloud auth application-default login)"
+  echo "  MANTIS_OFFLINE=true                offline deterministic mode (no model)"
 }
 
 while [ "$#" -gt 0 ]; do
@@ -85,6 +85,14 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
+# Every port decision below depends on lsof; without it a port looks free, and a
+# gateway that did start is then reported as having failed.
+if ! command -v lsof > /dev/null 2>&1; then
+  echo "Error: lsof is not on PATH; bin/workbench uses it to find the gateway's port."
+  echo "Install it with 'sudo bin/setup_base' (system packages need root)."
+  exit 1
+fi
+
 # Reports who owns a port: our gateway, an unrelated process, or nobody. The
 # distinction matters because reclaiming a port we do not own would kill a
 # bystander's process.
@@ -113,24 +121,19 @@ stop_workbench_server() {
   echo "Stopping the UDMI Workbench gateway on port ${target_port}..."
 
   local stopped=false
-  if command -v lsof > /dev/null 2>&1; then
-    local pids
-    pids=$(lsof -t -i :"${target_port}" 2>/dev/null || true)
-    for pid in $pids; do
-      local cmdline
-      cmdline=$(tr '\0' ' ' < /proc/"$pid"/cmdline 2>/dev/null || true)
-      if is_workbench_process "$cmdline"; then
-        echo "Stopping UDMI Workbench (PID ${pid})."
-        kill -9 "$pid" 2>/dev/null || true
-        stopped=true
-      else
-        echo "Port ${target_port} is held by PID ${pid}, which is not the Workbench; leaving it alone."
-      fi
-    done
-  else
-    echo "Error: lsof is required to identify the Workbench process. Install lsof (bin/setup_base)."
-    exit 1
-  fi
+  local pids
+  pids=$(lsof -t -i :"${target_port}" 2>/dev/null || true)
+  for pid in $pids; do
+    local cmdline
+    cmdline=$(tr '\0' ' ' < /proc/"$pid"/cmdline 2>/dev/null || true)
+    if is_workbench_process "$cmdline"; then
+      echo "Stopping UDMI Workbench (PID ${pid})."
+      kill -9 "$pid" 2>/dev/null || true
+      stopped=true
+    else
+      echo "Port ${target_port} is held by PID ${pid}, which is not the Workbench; leaving it alone."
+    fi
+  done
 
   if [ "$stopped" = false ]; then
     echo "No UDMI Workbench gateway was running on port ${target_port}."
@@ -163,19 +166,17 @@ elif [ "$PORT_OWNER" = "other" ]; then
 fi
 
 if [ "$PORT_OWNER" = "free" ]; then
-  # Mantis is the Workbench's diagnostic agent and it needs a model provider. The
-  # Workbench refuses to fabricate an analysis without one, so a missing project
-  # surfaces as an error in the UI rather than as a plausible-looking report. A
-  # lab machine authenticated with `gcloud auth application-default login` has
-  # credentials but frequently no project exported, so default it here.
-  if [ -z "$GEMINI_API_KEY" ] && [ -z "$GOOGLE_API_KEY" ] && [ -z "$GOOGLE_CLOUD_PROJECT" ]; then
-    export GOOGLE_CLOUD_PROJECT="${GCP_PROJECT:-bos-platform-dev}"
-    echo "Mantis: using Vertex AI project ${GOOGLE_CLOUD_PROJECT} (set GOOGLE_CLOUD_PROJECT to override)."
+  # Rebuild venv/ if etc/requirements.txt changed, then check every other
+  # prerequisite (modules, tmux, java, Chromium, model provider, and the saved
+  # `bin/mantis setup` provider) in one pass.
+  bin/ensure_venv
+  if ! "$PYTHON_BIN" -m workbench.server.preflight; then
+    exit 1
   fi
 
   echo "Starting the UDMI Workbench gateway on port ${PORT}..."
   mkdir -p out
-  PYTHONPATH="$WORKSPACE_DIR" setsid "$PYTHON_BIN" -m "$SERVER_MODULE" \
+  setsid "$PYTHON_BIN" -m "$SERVER_MODULE" \
     --port="${PORT}" > out/workbench_server.log 2>&1 &
 
   for _ in {1..20}; do

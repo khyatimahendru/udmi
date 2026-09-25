@@ -7,27 +7,27 @@
  */
 
 :root {
-  /* Surfaces (Google Material 3 Light Theme matching ui/v1) */
-  --bg-base: #f8fafd;                /* v1 --bg-app */
-  --bg-surface: #ffffff;             /* v1 --bg-surface */
-  --bg-surface-container: #f0f4f9;   /* v1 --bg-surface-container */
-  --bg-surface-raised: #e9eef6;      /* v1 --bg-surface-high */
+  /* Surfaces (Google Material 3 Light Theme) */
+  --bg-base: #f8fafd;
+  --bg-surface: #ffffff;
+  --bg-surface-container: #f0f4f9;
+  --bg-surface-raised: #e9eef6;
   --bg-overlay: rgba(0, 0, 0, 0.4);
 
-  /* Terminal / Code Surfaces (developer dark console from ui/v1) */
+  /* Terminal / Code Surfaces (developer dark console) */
   --bg-terminal: #1e1e1e;
   --bg-terminal-header: #2d2d2d;
   --border-terminal: #3c3c3c;
   --text-terminal: #f1f1f1;
 
-  /* Text Colors (M3 Light Theme matching ui/v1) */
-  --text-primary: #1f1f1f;          /* v1 --text-primary */
-  --text-secondary: #3c4043;        /* v1 --text-secondary */
-  --text-muted: #5f6368;            /* v1 --text-muted */
+  /* Text Colors (M3 Light Theme) */
+  --text-primary: #1f1f1f;
+  --text-secondary: #3c4043;
+  --text-muted: #5f6368;
   --text-disabled: #9aa0a6;
-  --text-inverse: #ffffff;          /* v1 --on-primary */
+  --text-inverse: #ffffff;
 
-  /* Accents (Google Material 3 Light Theme matching ui/v1) */
+  /* Accents (Google Material 3 Light Theme) */
   --color-primary: #0b57d0;         /* Google Blue */
   --color-primary-dark: #0842a0;    /* Primary hover */
   --color-secondary: #00639b;       /* Slate Steel Blue */
@@ -39,7 +39,7 @@
 
   /* Lines & Borders */
   --border-subtle: #e0e3e7;
-  --border-strong: #c4c7c5;          /* v1 --border-color */
+  --border-strong: #c4c7c5;
   --focus-ring: #0b57d0;
 
   /* Typography */
@@ -370,4 +370,25 @@ h1, h2, h3, p {
   .panel-config {
     max-height: 45vh;
   }
+}
+
+/* Persistent notice: desktop notifications blocked or unsupported. */
+.desktop-notify-notice {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 4px 10px;
+  border-radius: var(--radius-md);
+  background: var(--bg-surface-container);
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: help;
+}
+
+.desktop-notify-notice[hidden] {
+  display: none;
+}
+
+.desktop-notify-notice .material-symbols-outlined {
+  font-size: 16px;
 }

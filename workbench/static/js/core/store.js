@@ -22,6 +22,7 @@ const PERSISTED_KEYS = [
   'bucketFilter',
   'logPanelHeight',
   'localSetupDrawerWidth',
+  'mantisDrawerWidth',
 ];
 
 /** These keys are mirrored into the query string for deep linking. */
@@ -42,6 +43,10 @@ const DEFAULT_STATE = {
   // --local-setup-drawer-width; keep them in step with theme.css :root.
   logPanelHeight: 220,
   localSetupDrawerWidth: 440,
+  // The Mantis drawer's own default is the responsive fallback in drawers.css,
+  // which a fixed pixel token cannot express; this is the pixel value used once
+  // the operator has dragged it.
+  mantisDrawerWidth: 760,
 
   siteModels: [],
   devices: [],
@@ -73,7 +78,7 @@ const DEFAULT_STATE = {
       pubber: { name: 'Pubber Emulator', status: 'DOWN' },
     },
   },
-  pubberMode: true,
+  pubberMode: false,
 };
 
 export class WorkspaceStore {

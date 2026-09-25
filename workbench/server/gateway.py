@@ -15,14 +15,17 @@ import argparse
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
+import sys
 from urllib.parse import urlparse
 
+from mantis import provider_setup
 from mantis.mcp_server import MCPServer
 from mantis.session import SessionManager
 from mantis.tools.registry import get_mcp_tools
 from workbench.server.http_util import HttpResponder
 from workbench.server.logger import SERVER_LOGGER
 from workbench.server.mantis_adapter import MantisSessionStore
+from workbench.server.notifications import Notifier
 from workbench.server.routes import ApiRoutes, classify_exception
 from workbench.server.runner import SequencerRunner
 from workbench.server.site_roots import SiteRootRegistry
@@ -47,7 +50,8 @@ class WorkbenchGateway(ThreadingHTTPServer):
         self.udmi_root = os.path.abspath(udmi_root)
         self.session_mgr = SessionManager(udmi_root=self.udmi_root)
         self.mcp_server = MCPServer(session_mgr=self.session_mgr)
-        self.mantis_store = MantisSessionStore(session_mgr=self.session_mgr)
+        self.notifier = Notifier(config_path=config_path)
+        self.mantis_store = MantisSessionStore(session_mgr=self.session_mgr, notifier=self.notifier)
         self.runner = SequencerRunner(self.udmi_root)
         self.testbed = TestbedManager(self.udmi_root)
         self.site_roots = SiteRootRegistry(self.udmi_root, config_path=config_path)
@@ -163,6 +167,13 @@ def main() -> None:
     parser.add_argument("--port", "-p", type=int, default=8080, help="Bind port (default: 8080)")
     parser.add_argument("--udmi-root", default=None, help="UDMI repository root")
     args = parser.parse_args()
+
+    # The Mantis agent runs in this process: export the saved provider setup
+    # (`bin/mantis setup`) here, refusing to start if it contradicts the environment.
+    problem = provider_setup.apply_to_environment()
+    if problem:
+        print(f"Error: {problem}", file=sys.stderr)
+        sys.exit(1)
 
     gateway = create_gateway(host=args.host, port=args.port, udmi_root=args.udmi_root)
     bound_port = gateway.server_address[1]

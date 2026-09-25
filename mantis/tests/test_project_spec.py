@@ -29,10 +29,10 @@ def test_parse_project_spec_gbos():
 
 
 def test_parse_project_spec_gref_with_user():
-    res = parse_project_spec("//gref/bos-platform-staging+heykhyati")
+    res = parse_project_spec("//gref/bos-platform-staging+dev_user")
     assert res["provider"] == "gref"
     assert res["project"] == "bos-platform-staging"
-    assert res["user"] == "heykhyati"
+    assert res["user"] == "dev_user"
     assert res["is_cloud"] is True
 
 
@@ -147,9 +147,9 @@ def test_resolve_target_spec_precedence(tmp_path, monkeypatch):
     monkeypatch.delenv("TARGET_PROJECT")
 
     # 3. Environment variable PROJECT_SPEC
-    monkeypatch.setenv("PROJECT_SPEC", "//gref/bos-platform-staging+heykhyati")
+    monkeypatch.setenv("PROJECT_SPEC", "//gref/bos-platform-staging+dev_user")
     res = resolve_target_spec()
-    assert res == "//gref/bos-platform-staging+heykhyati"
+    assert res == "//gref/bos-platform-staging+dev_user"
     monkeypatch.delenv("PROJECT_SPEC")
 
     # 4. Environment variables PROJECT_ID + IOT_PROVIDER + UDMI_NAMESPACE

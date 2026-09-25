@@ -134,7 +134,10 @@ def test_diagnose_silent_device_outranks_its_own_timeout(tmp_path):
         assert hypotheses[name]["status"] == ClaimStatus.NOT_ASSESSED.value
 
     joined = " ".join(res["fix"]).lower()
-    assert "physical device" in joined and "pubber" in joined
+    # Covers both deployments without naming an implementation: the device
+    # under test is external and is not necessarily pubber.
+    assert "physical device" in joined and "emulated device" in joined
+    assert "pubber" not in joined
 
 
 def test_evaluate_test_stability(tmp_path):

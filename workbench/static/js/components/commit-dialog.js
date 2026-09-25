@@ -3,14 +3,24 @@
  *
  * Every control in this dialog is built from the response of
  * `GET /api/results/commit/preview`. Nothing about the repository is assumed in
- * the browser: the branch list, the remote list, the file list, the default
- * message, and any blocking reason are all real git state read server-side.
- * A dialog that guessed (offering `origin`, or the branch the operator used
- * last) would let a commit be aimed at a repository that does not have it.
+ * the browser: the branch list, the remote list, the file list, the affected
+ * devices, the default message, and any blocking reason are all real git state
+ * read server-side. A dialog that guessed (offering `origin`, or the branch the
+ * operator used last) would let a commit be aimed at a repository that does not
+ * have it.
  *
- * Scope is deliberately narrow: only `<site>/out/devices/<device>/tests` is
- * committed, which is the pathspec the server restricts `git add`/`git commit`
- * to. The working tree is never swept in.
+ * Scope is the SITE MODEL DIRECTORY, which is the pathspec the server restricts
+ * `git add`/`git commit` to. It is not the repository (a lab repository can
+ * hold the site model in a subdirectory, as `<repo>/udmi` does) and it is no
+ * longer one device's results directory: a run also writes
+ * `out/sequencer_<id>.json` and `devices/<id>/out/**`, which the old per-device
+ * scope silently left behind.
+ *
+ * Because the scope is now wide, the dialog LEADS with which devices' recorded
+ * results are about to be rewritten. That warning is the first thing read and
+ * is built only from `preview.devices`; the flat file list is kept but demoted
+ * behind a disclosure, since 'CGW-2 (14 files)' is the fact an operator can act
+ * on and 400 paths is not.
  */
 
 import { api } from '../core/api.js';
@@ -23,7 +33,9 @@ const FOCUSABLE =
  * Every key `results_commit.preview()` guarantees. They are checked rather than
  * read optimistically because a short response means the contract changed, and
  * silently rendering an empty branch dropdown from a missing `branches` key
- * would look identical to a repository that genuinely has no branches.
+ * would look identical to a repository that genuinely has no branches. The
+ * device keys are checked for the same reason: an absent `devices` array must
+ * not render as "no devices affected" for a commit that touches all of them.
  */
 const PREVIEW_FIELDS = [
   'committable',
@@ -37,7 +49,13 @@ const PREVIEW_FIELDS = [
   'branches',
   'remotes',
   'default_message',
+  'devices',
+  'site_changes',
+  'device_count',
 ];
+
+/** Every key each entry of `preview.devices` guarantees. */
+const DEVICE_FIELDS = ['device_id', 'files', 'file_count', 'known'];
 
 /**
  * Fails with an actionable message naming the absent keys.
@@ -67,7 +85,6 @@ export class CommitDialog {
     document.body.appendChild(this.container);
 
     this.siteModel = null;
-    this.deviceId = null;
     this.preview = null;
     this.committed = null;
     this.previousFocus = null;
@@ -90,10 +107,17 @@ export class CommitDialog {
         </header>
 
         <div class="modal-body commit-body">
-          <p class="empty-note" data-role="loading">Reading git state for this device…</p>
+          <p class="empty-note" data-role="loading">Reading git state for this site model…</p>
 
           <div class="commit-content" data-role="content" hidden>
             <p class="commit-block" data-role="block" hidden></p>
+
+            <section class="commit-impact" data-role="impact" hidden>
+              <h3 class="commit-section-title">What this commit changes</h3>
+              <p class="commit-impact-lead" data-role="impact-lead"></p>
+              <ul class="commit-device-list" data-role="impact-devices"></ul>
+              <p class="commit-impact-site" data-role="impact-site"></p>
+            </section>
 
             <dl class="commit-facts">
               <div><dt>Repository</dt><dd data-role="fact-repo"></dd></div>
@@ -102,10 +126,12 @@ export class CommitDialog {
               <div><dt>Pending changes</dt><dd data-role="fact-count"></dd></div>
             </dl>
 
-            <section class="commit-changes">
-              <h3 class="commit-section-title">Files this commit will contain</h3>
+            <details class="commit-changes">
+              <summary class="commit-section-title" data-role="changes-summary">
+                Every file this commit will contain
+              </summary>
               <ul class="commit-change-list" data-role="changes"></ul>
-            </section>
+            </details>
 
             <form class="commit-form" data-role="form">
               <div class="field">
@@ -113,8 +139,9 @@ export class CommitDialog {
                 <textarea id="commit-message" data-role="message" rows="7"
                           spellcheck="false"></textarea>
                 <p class="field-hint">
-                  Pre-filled with the message the server generated for this device and run.
-                  Replace it with a descriptive message if this run needs one.
+                  Pre-filled with the message the server generated for this site model and
+                  the devices listed above. Replace it with a descriptive message if this
+                  run needs one.
                 </p>
               </div>
 
@@ -164,10 +191,15 @@ export class CommitDialog {
     this.loadingEl = this.container.querySelector('[data-role="loading"]');
     this.contentEl = this.container.querySelector('[data-role="content"]');
     this.blockEl = this.container.querySelector('[data-role="block"]');
+    this.impactEl = this.container.querySelector('[data-role="impact"]');
+    this.impactLeadEl = this.container.querySelector('[data-role="impact-lead"]');
+    this.impactDevicesEl = this.container.querySelector('[data-role="impact-devices"]');
+    this.impactSiteEl = this.container.querySelector('[data-role="impact-site"]');
     this.factRepoEl = this.container.querySelector('[data-role="fact-repo"]');
     this.factPathEl = this.container.querySelector('[data-role="fact-path"]');
     this.factBranchEl = this.container.querySelector('[data-role="fact-branch"]');
     this.factCountEl = this.container.querySelector('[data-role="fact-count"]');
+    this.changesSummaryEl = this.container.querySelector('[data-role="changes-summary"]');
     this.changesEl = this.container.querySelector('[data-role="changes"]');
     this.messageEl = this.container.querySelector('[data-role="message"]');
     this.branchSelectEl = this.container.querySelector('[data-role="branch"]');
@@ -214,31 +246,26 @@ export class CommitDialog {
   }
 
   /**
-   * Opens the dialog for one device and resolves once it is closed.
+   * Opens the dialog for one site model and resolves once it is closed.
    *
    * Resolves with the commit result when a commit was made, and with null when
    * the operator closed without committing, so the caller can refresh only
    * after something actually changed on disk.
    */
-  async open({ siteModel, deviceId }) {
+  async open({ siteModel }) {
     if (!this.container.hidden) {
-      throw new Error('The commit dialog is already open for ' +
-        `${this.deviceId} in ${this.siteModel}.`);
+      throw new Error(`The commit dialog is already open for ${this.siteModel}.`);
     }
     if (!siteModel) {
       throw new Error("CommitDialog.open requires 'siteModel'; no site model was given.");
     }
-    if (!deviceId) {
-      throw new Error("CommitDialog.open requires 'deviceId'; no device was given.");
-    }
 
     this.siteModel = siteModel;
-    this.deviceId = deviceId;
     this.preview = null;
     this.committed = null;
     this.previousFocus = document.activeElement;
 
-    this.subtitleEl.textContent = `${deviceId} · ${siteModel}`;
+    this.subtitleEl.textContent = siteModel;
     this.loadingEl.hidden = false;
     this.contentEl.hidden = true;
     this.commitBtn.hidden = false;
@@ -254,8 +281,11 @@ export class CommitDialog {
     });
 
     try {
-      const preview = await api.commitPreview(siteModel, deviceId);
+      const preview = await api.commitPreview(siteModel);
       requirePayloadFields(preview, PREVIEW_FIELDS, 'Commit preview response');
+      preview.devices.forEach((device, index) =>
+        requirePayloadFields(device, DEVICE_FIELDS, `Commit preview device ${index}`)
+      );
       this.preview = preview;
       this._renderPreview(preview);
     } catch (cause) {
@@ -297,8 +327,9 @@ export class CommitDialog {
     this.factBranchEl.textContent =
       preview.current_branch ||
       'None — HEAD is detached in this repository, so there is no current branch.';
-    this.factCountEl.textContent = `${preview.change_count} file(s) under the results path`;
+    this.factCountEl.textContent = `${preview.change_count} file(s) under the site model`;
 
+    this._renderImpact(preview);
     this._renderChanges(preview.changes);
     this._renderBranches(preview);
     this._renderRemotes(preview);
@@ -310,12 +341,60 @@ export class CommitDialog {
     this._applyControlState();
   }
 
+  /**
+   * The per-device warning, which is the point of the site-level dialog.
+   *
+   * Hidden entirely when the commit is blocked: there is nothing to warn about
+   * for a commit that cannot happen, and the server's blocking reason is the
+   * only thing worth reading in that state.
+   */
+  _renderImpact(preview) {
+    this.impactEl.hidden = preview.committable !== true;
+    this.impactDevicesEl.textContent = '';
+    if (preview.committable !== true) return;
+
+    this.impactLeadEl.textContent =
+      preview.device_count > 0
+        ? `This commit will update recorded results for ${preview.device_count} device(s):`
+        : 'No device result files changed. This commit contains site-level files only.';
+
+    for (const device of preview.devices) {
+      const item = document.createElement('li');
+      item.className = 'commit-device';
+      const name = document.createElement('span');
+      name.className = 'commit-device-name';
+      name.textContent = device.device_id;
+      const count = document.createElement('span');
+      count.className = 'commit-device-count';
+      count.textContent = `${device.file_count} file(s)`;
+      item.append(name, count);
+      // A changed path can name a device the site model no longer contains.
+      // The files are still committed, so the operator is told rather than the
+      // discrepancy being smoothed over.
+      if (device.known !== true) {
+        const unknown = document.createElement('span');
+        unknown.className = 'commit-device-unknown';
+        unknown.textContent = 'not in this site model\u2019s devices/ directory';
+        item.appendChild(unknown);
+      }
+      this.impactDevicesEl.appendChild(item);
+    }
+
+    this.impactSiteEl.textContent =
+      preview.site_changes.length > 0
+        ? `Plus ${preview.site_changes.length} site-level file(s) that belong to no device, ` +
+          'such as the registration summary and site configuration.'
+        : 'No site-level files outside the device directories are affected.';
+  }
+
   _renderChanges(changes) {
+    this.changesSummaryEl.textContent =
+      `Every file this commit will contain (${changes.length}, relative to the site model)`;
     this.changesEl.textContent = '';
     if (changes.length === 0) {
       const empty = document.createElement('li');
       empty.className = 'commit-change is-empty';
-      empty.textContent = 'No pending changes under the results path.';
+      empty.textContent = 'No pending changes under the site model.';
       this.changesEl.appendChild(empty);
       return;
     }
@@ -443,12 +522,15 @@ export class CommitDialog {
     }
 
     this.commitBtn.disabled = true;
-    this._setStatus(`Committing ${this.preview.change_count} file(s) to ${branch}…`, 'busy');
+    this._setStatus(
+      `Committing ${this.preview.change_count} file(s) for ${this.preview.device_count} ` +
+        `device(s) to ${branch}…`,
+      'busy'
+    );
 
     try {
       const result = await api.commitResults({
         siteModel: this.siteModel,
-        deviceId: this.deviceId,
         message,
         branch,
         createBranch,
@@ -466,8 +548,9 @@ export class CommitDialog {
   /** Reports what the server actually did, from the commit response only. */
   _renderCommitted(result) {
     const lines = [
-      `Committed ${result.file_count} file(s) as ${result.short_revision} on branch ` +
-        `${result.branch}${result.branch_created ? ' (created)' : ''}.`,
+      `Committed ${result.file_count} file(s) for ${result.device_count} device(s) as ` +
+        `${result.short_revision} on branch ${result.branch}` +
+        `${result.branch_created ? ' (created)' : ''}.`,
       result.pushed ? `Pushed to ${result.remote}.` : 'Not pushed.',
     ];
     if (result.push_output) lines.push(result.push_output);

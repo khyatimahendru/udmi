@@ -7,9 +7,15 @@
  *
  * Stays presentational — it never fetches. The view supplies a `loadFile`
  * callback so all network access remains in the API layer.
+ *
+ * The one exception is the support bundle action: SupportBundleButton calls
+ * the API layer itself and exports the site model currently selected in the
+ * store (the site model whose results this modal is showing).
  */
 
 import { JSONViewer } from './json-viewer.js';
+import { SupportBundleButton } from './support-bundle-button.js';
+import { store } from '../core/store.js';
 
 const FOCUSABLE =
   'button:not([disabled]), [href], input:not([disabled]), select, textarea, [tabindex]:not([tabindex="-1"])';
@@ -39,6 +45,7 @@ export class ArtifactModal {
           </div>
           <div class="modal-header-actions">
             <button type="button" class="btn btn-diagnose" data-act="diagnose">🔍 Diagnose with Mantis</button>
+            <div data-role="support-bundle"></div>
             <button type="button" class="btn btn-ghost" data-act="close" aria-label="Close artifact viewer">Close</button>
           </div>
         </header>
@@ -53,6 +60,10 @@ export class ArtifactModal {
     this.tabsEl = this.container.querySelector('.modal-tabs');
     this.bodyEl = this.container.querySelector('.modal-body');
     this.diagnoseBtn = this.container.querySelector('[data-act="diagnose"]');
+    this.supportBundle = new SupportBundleButton(
+      this.container.querySelector('[data-role="support-bundle"]'),
+      { getSiteModel: () => store.getState().siteModel }
+    );
 
     this.diagnoseBtn.addEventListener('click', () => {
       const name = this.currentTestName;

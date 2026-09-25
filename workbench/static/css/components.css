@@ -115,6 +115,66 @@ textarea:disabled {
   color: var(--text-muted);
 }
 
+/* DeviceCombobox: editable input + capped listbox popup. */
+.combobox {
+  position: relative;
+}
+
+.combobox input:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+/* In flow, not absolutely positioned: .panel-config scrolls
+   (overflow-y: auto) and would clip a floating popup. */
+.combobox-list {
+  max-height: 240px;
+  overflow-y: auto;
+  margin: 2px 0 0;
+  padding: var(--space-1) 0;
+  list-style: none;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-md);
+}
+
+.combobox-option {
+  padding: var(--space-1) var(--space-2);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-primary);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.combobox-option:hover,
+.combobox-option.is-active {
+  background: var(--bg-surface-raised);
+}
+
+.combobox-option.is-active {
+  outline: 1px solid var(--focus-ring);
+  outline-offset: -1px;
+}
+
+.combobox-option[aria-selected="true"] {
+  font-weight: 600;
+  color: var(--color-primary);
+}
+
+.combobox-status {
+  margin: 0;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.combobox-status:empty {
+  display: none;
+}
+
 .field-row {
   display: flex;
   align-items: center;
@@ -1806,3 +1866,225 @@ textarea:disabled {
 }
 
 
+/* SupportBundleButton: export action with explicit progress/error status. */
+.summary-actions {
+  margin-top: var(--space-2);
+}
+
+.support-bundle {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.support-bundle-status {
+  max-width: 40rem;
+  max-height: 12rem;
+  overflow: auto;
+  font-size: 0.85rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.support-bundle-status.is-info { color: var(--color-info); }
+.support-bundle-status.is-success { color: var(--color-success); }
+.support-bundle-status.is-error { color: var(--color-error); }
+
+/*
+ * Sequence row details (test-list.js). Every stage is listed; the panel spans
+ * the full row under the checkbox/label/actions grid.
+ */
+.test-desc.is-missing {
+  font-style: italic;
+  color: var(--text-muted);
+}
+
+.test-details {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-left: 2px solid var(--border-subtle);
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.test-details-summary {
+  margin: 0;
+  color: var(--text-primary, inherit);
+}
+
+.test-details-meta {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 2px var(--space-3);
+  margin: 0;
+}
+
+.test-details-meta dt {
+  color: var(--text-muted);
+}
+
+.test-details-meta dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+.test-details-steps h4 {
+  margin: 0 0 var(--space-1);
+  font-size: 12px;
+}
+
+.test-details-steps ol {
+  margin: 0;
+  padding-left: 1.6em;
+}
+
+.test-details-steps ul {
+  margin: 2px 0;
+  padding-left: 1.2em;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.test-details-source {
+  margin: var(--space-1) 0 0;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.test-details-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.test-doc-link {
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.catalog-error {
+  margin: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid rgba(179, 38, 30, 0.3);
+  border-radius: var(--radius-sm);
+  background: rgba(179, 38, 30, 0.08);
+  color: var(--color-error);
+}
+
+.catalog-error pre {
+  margin: var(--space-2) 0 0;
+  white-space: pre-wrap;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+/* ------------------------------------------------ email notifications --- */
+.notify-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 13px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+/* The global input rule stretches every input to full width; checkboxes keep their size. */
+.notify-toggle input[type="checkbox"],
+.settings-consent input[type="checkbox"] {
+  width: auto;
+  flex: 0 0 auto;
+  margin: 0;
+}
+
+.chat-composer {
+  flex-wrap: wrap;
+}
+
+.chat-composer textarea {
+  flex: 1 1 0;
+}
+
+.chat-composer .notify-toggle {
+  flex-basis: 100%;
+}
+
+.settings-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  padding: var(--space-4);
+}
+
+.settings-section-title {
+  font-size: 15px;
+  margin: 0 0 var(--space-2);
+}
+
+.settings-help {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin: 0 0 var(--space-3);
+}
+
+.settings-status {
+  font-size: 13px;
+  margin: 0 0 var(--space-3);
+}
+
+.settings-status.is-error,
+.settings-error,
+.settings-delivery-error {
+  color: var(--color-error);
+}
+
+.settings-consent {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.settings-command {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  background: var(--bg-surface-container);
+  padding: var(--space-2);
+  border-radius: var(--radius-sm);
+}
+
+.settings-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.settings-deliveries {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  font-size: 13px;
+}
+
+.settings-delivery {
+  border-left: 3px solid var(--border-strong);
+  padding-left: var(--space-2);
+}
+
+.settings-delivery.is-sent { border-left-color: var(--color-success); }
+.settings-delivery.is-failed { border-left-color: var(--color-error); }
+
+.settings-delivery-head {
+  color: var(--text-muted);
+  font-size: 12px;
+}

@@ -10,7 +10,7 @@ This document defines the architectural rules, UX engineering standards, and wor
    - All frontend and integration code must strictly implement the 5 canonical contracts defined in [`workbench/WORKBENCH_CONTRACTS.md`](./WORKBENCH_CONTRACTS.md).
    - No legacy regressions: **Zero `<iframe>` elements, zero `postMessage` synchronization, and no monolithic process supervisors**.
 2. **MCP-First Determinism**:
-   - All deterministic backend operations (environment control, test execution, schema reading, device queries) must go through standard Model Context Protocol (MCP JSON-RPC 2.0) via `mcp/server.py`.
+   - All deterministic backend operations (environment control, test execution, schema reading, device queries) must go through standard Model Context Protocol (MCP JSON-RPC 2.0) via `mantis/mcp_server.py` (`MCPServer`, served by the gateway at `POST /rpc` and `POST /message`).
 
 ---
 
@@ -26,7 +26,7 @@ All UI development in `workbench/` must follow the atomic component hierarchy:
 * **Atoms**:
   - Buttons (`M3Button`: Filled, Tonal, Outlined, Icon-only).
   - Badges & Chips (`StatusBadge`: `PRIMARY`, `CONTRIBUTING`, `REFUTED`, `UNRESOLVED`, `PASSED`, `FAILED`).
-  - Component Health Badges: `UP` (green), `INITIALIZING` (amber spinner), `DOWN` (grey), `ERROR` (red).
+  - Component Health Badges: `UP` (green), `INITIALIZING` (amber spinner), `DOWN` (grey), `ERROR` (red, overall status only). A physical DUT shows `NOT MONITORED`.
   - Form Inputs (`M3Input`, `M3Select`, `M3Toggle`).
 * **Molecules**:
   - `ToolCallBadge`: Collapsible tool execution chip displaying tool name, input params, duration, and output preview.
@@ -44,13 +44,12 @@ All UI development in `workbench/` must follow the atomic component hierarchy:
   - `SiteRootsModal`: User authorization and allow-listing modal for custom site model directories outside the UDMI root.
   - `ArtifactModal`: Interactive modal inspecting `RESULT.log`, `sequence.md`, `sequence.png`, and trace JSONs with direct Mantis triage trigger.
   - `LogTerminal`: High-performance, virtualized terminal viewer streaming live tmux pane and service log buffers.
-* **Templates & Pages**:
-  - `/sequencer`: Core sequence runner and compliance testing workspace with integrated right-hand `LocalSetupDrawer`, `SequencerFilterBar`, and live logs.
-  - `/devices`: Device metadata, points, and message trace explorer.
-  - `/assistant`: Mantis Shrimp AI reasoning workspace with automated failure triage, tripartite audit, and return breadcrumb.
-  - `/diagnostics`: Real-time structured system logging and diagnostic ring buffer.
-  - `/compliance`: Curated compliance matrix and scorecard.
-  - `/catalog`: Curated menu of approved IoT devices.
+* **Templates & Pages** (routes in `static/js/app.js` `ROUTES`):
+  - `/sequencer`: Core sequence runner and compliance testing workspace with integrated right-hand `LocalSetupDrawer`, `SequencerFilterBar`, and live console output.
+  - `/devices`: Per-device compliance matrix (feature bucket x stage), run targets, report downloads, and the site-level commit dialog.
+  - `/logs`: Not a view. Raises the Workbench Logs drawer (structured browser + server log ring buffers) over whichever view was last mounted.
+  - Mantis is not a route: it is an omnipresent right-edge drawer (`mantis-drawer.js` hosting `mantis-panel.js`) that survives navigation between views.
+  - Settings is a header dialog (`settings-dialog.js`) for email-notification consent.
 
 ### 2.2. Component Cataloging Rule
 * Every new atom, molecule, or organism must have:
@@ -64,19 +63,19 @@ All UI development in `workbench/` must follow the atomic component hierarchy:
 ## 3. Route-Driven Architecture & State Rules
 
 1. **First-Class URLs (No Monolithic Single-Screen Bloat)**:
-   - Every primary view must have a direct, bookmarkable URL (`/sequencer`, `/devices`, `/assistant`, `/diagnostics`, `/compliance`, `/catalog`).
-   - Full support for multi-tab workflows: an operator must be able to open `/sequencer` on Monitor 1 and `/assistant` on Monitor 2 simultaneously.
+   - Every primary view must have a direct, bookmarkable URL (`/sequencer`, `/devices`; `/logs` deep-links the log drawer). The gateway serves `index.html` for these paths (`SPA_ROUTES` in `server/gateway.py`).
+   - Full support for multi-tab workflows: an operator must be able to open `/sequencer` on Monitor 1 and `/devices` on Monitor 2 simultaneously.
 2. **Client-Side Routing & View-Pane Caching (No DOM Destruction)**:
    - View transitions must occur client-side without full-page document reloads.
    - Views are mounted inside dedicated `.view-pane` containers; navigating between views toggles pane visibility rather than tearing down DOM nodes.
    - Long-running SSE streams (Mantis reasoning loops, live sequencer test logs), test execution state, and console logs remain alive and intact in memory when navigating between routes.
 3. **Local Test Setup Drawer (Sequencer Tab Integration)**:
    - The local testbed substrate is integrated directly into `/sequencer` as a right-side collapsible drawer.
-   - Toggled via the `[🖥️ Local Setup]` button in the Sequencer header (with live health indicator dot) or `Cmd+Shift+L`.
-   - Allows operators to start/stop local unprivileged services (`//mqtt/localhost:18833`), launch simulated Pubber devices, and monitor component health without leaving the test runner.
+   - Toggled via the **Start Local Setup** button in the Sequences panel header or `Ctrl/Cmd+Shift+L`.
+   - Allows operators to start/stop local unprivileged services (`//mqtt/localhost:<port>`, entered in the drawer), launch simulated Pubber devices, and monitor component health without leaving the test runner.
 4. **Global Assistant Drawer & Deep Triage Routing**:
-   - Mantis is summonable from any screen via `Cmd+K` / `Ctrl+K`.
-   - Direct failure triage triggers from `/sequencer` navigate to `/assistant` with pre-bound test failure context and provide a `← Back to Sequencer` breadcrumb.
+   - Mantis is summonable from any screen via `Cmd+K` / `Ctrl+K` or the **MANTIS** pull tab.
+   - Direct failure triage triggers (**Diagnose with Mantis**, **Explain this test**) open the drawer with the site model, device, and test pre-bound; the view underneath is not replaced.
 
 ---
 
@@ -86,22 +85,28 @@ All UI development in `workbench/` must follow the atomic component hierarchy:
   - Deterministic tool calls go through standard JSON-RPC 2.0 via `POST /message` or `POST /rpc`.
 * **Local Testbed & Infrastructure Endpoints**:
   - Manage local stack lifecycle via canonical endpoints:
-    - `POST /api/testbed/start`: Starts local infrastructure via `bin/udmi start` using unprivileged user-space ports (`//mqtt/localhost:18833`).
-    - `POST /api/testbed/stop`: Terminates local services via `bin/udmi stop`.
-    - `POST /api/testbed/restart`: Clean-slate restart (`bin/udmi restart`).
-    - `GET /api/testbed/status`: Returns health status and active ports for `mqtt_broker`, `udmis`, `etcd`, `pubber`.
-    - `POST /api/testbed/pubber/start` & `stop`: Runs or terminates background device simulator instances.
+    - Every call below takes `project_spec` (`//mqtt/localhost:<port>`, explicit unprivileged port) from the drawer's own spec input; ports are derived from it per call, and a missing/non-local spec is a 400.
+    - `POST /api/testbed/start`: Starts local infrastructure via `bin/udmi start <site_model> <spec>`.
+    - `POST /api/testbed/stop`: Terminates local services via `bin/udmi stop <spec>` and verifies the spec's ports closed.
+    - `POST /api/testbed/restart`: Clean-slate restart (stop, `clean <spec>`, start).
+    - `GET /api/testbed/status?project_spec=...`: Returns health status and ports for `mqtt_broker`, `udmis`, `etcd`, `pubber`.
+    - `GET /api/testbed/connection?project_spec=...&site_model=...&device_id=...`: Physical-device connection facts derived from broker config and the site model (`unknown` where undeterminable).
+    - `POST /api/testbed/pubber/start` & `stop`: Runs or terminates the tracked background device simulator (Pubber is opt-in; Physical is the default mode).
     - `GET /api/testbed/logs`: Streams or queries recent component logs.
 * **Custom Site Model Roots Endpoints**:
-  - Secure directory allow-listing with user consent: `GET /api/site-roots`, `POST /api/site-roots/register`, `POST /api/site-roots/delete`.
+  - Secure directory allow-listing with user consent: `GET /api/site-roots`, `POST /api/site-roots` (`{"path": ...}`), `DELETE /api/site-roots?path=...`. Roots persist under `site_roots` in `~/.config/udmi/workbench.json`.
   - Supports dual layout conventions: `<site_dir>/cloud_iot_config.json` and `<site_dir>/udmi/cloud_iot_config.json` (canonical display: parent folder name).
 * **Contract 2 (Mantis Streaming Agent)**:
   - Connect to `POST /api/mantis/chat` via Server-Sent Events (`text/event-stream`).
   - Handle all canonical event types: `phase`, `thought`, `token`, `tool_call`, `tool_result`, `hypothesis_matrix`, `diagram`, `done`, `error`.
-  - Support slash commands: `/status`, `/logs <window>`, `/clear`, `/export`, `/help`.
+  - Support slash commands: `/status`, `/logs <window>`, `/clear`, `/help` (`/export` exists only in the `bin/mantis` REPL).
+  - Stop a run with `POST /api/mantis/chat/stop`; reset with `POST /api/mantis/chat/clear`.
+  - `"notify": true` in the chat payload detaches the run from the stream and emails the result (see Email Notifications below).
+* **Email Notifications**:
+  - `GET /api/notifications`, `POST /api/notifications/consent` (`{"consent": bool}`), `POST /api/notifications/test`. Consent lives under `notifications.email` in `~/.config/udmi/workbench.json`, bound to the ADC account's own address (gmail.send scope). Details: `WORKBENCH_CONTRACTS.md` §5.4.1.
 * **Contract 3 (Real-Time Logs)**:
-  - Stream live console output from tmux window buffers via `GET /api/logs/stream?session_id=...&window=...` and sequencer runner streams via `/api/sequencer/run`.
-  - Handle stream reconnection gracefully with exponential backoff.
+  - Start a run with `POST /api/sequencer/run` (optional `"notify": true`), then stream it with `GET /api/sequencer/stream?session_id=...&offset=...` (`log`, `test_event`, `heartbeat`, `complete`, `error` events).
+  - Streams are resumable by byte `offset`; on reload the view reattaches to the running session from `GET /api/sequencer/sessions`.
 * **Contract 4 (Workspace State)**:
   - Maintain a centralized reactive state store conforming to `WorkspaceState` in `WORKBENCH_CONTRACTS.md`.
 * **Contract 5 (Compliance & Reporting)**:
@@ -130,22 +135,22 @@ To prevent tight coupling, tangled state mutations, and unmaintainable "spaghett
 
 ```
 ┌────────────────────────────────────────────────────────────────────────────┐
-│ Layer 1: Pure Presentation (components/)                                   │
+│ Layer 1: Pure Presentation (static/js/components/)                         │
 │ - Stateless Atoms, Molecules, Organisms                                    │
 │ - Driven 100% by typed props & upward semantic event callbacks             │
 │ - FORBIDDEN: fetch(), EventSource, direct store mutation, route awareness  │
 └────────────────────────────────────▲───────────────────────────────────────┘
                                      │ Props down / Events up
 ┌────────────────────────────────────┴───────────────────────────────────────┐
-│ Layer 2: Route Views & Reactive State Store (views/, store/)               │
-│ - Route-level controllers (/assistant, /triage, /testbed, /compliance...)  │
+│ Layer 2: Route Views & Reactive State Store (js/views/, js/core/store.js)  │
+│ - Route-level controllers (/sequencer, /devices) and run-session.js       │
 │ - Central WorkspaceState store (Contract 4)                                │
 │ - Orchestrates Layer 3 service clients and passes state to Layer 1         │
 │ - FORBIDDEN: Raw HTTP/SSE protocol parsing, inline JSON-RPC formatting     │
 └────────────────────────────────────┬───────────────────────────────────────┘
                                      │ Typed Interface Calls
 ┌────────────────────────────────────▼───────────────────────────────────────┐
-│ Layer 3: Contract Service Adapters (services/)                             │
+│ Layer 3: Contract Service Adapters (static/js/core/api.js, logger.js)      │
 │ - IMcpClient (Contract 1), IMantisStreamClient (Contract 2),               │
 │   ILogStreamClient (Contract 3), IComplianceClient (Contract 5)            │
 │ - Encapsulates JSON-RPC 2.0 envelopes, SSE parsing, retries & timeouts     │
@@ -153,8 +158,8 @@ To prevent tight coupling, tangled state mutations, and unmaintainable "spaghett
 └────────────────────────────────────┬───────────────────────────────────────┘
                                      │ HTTP / SSE + X-Correlation-ID
 ┌────────────────────────────────────▼───────────────────────────────────────┐
-│ Layer 4: Backend Gateway & Domain Engines (server/, mcp/, mantis/)         │
-│ - Thin HTTP/SSE transport adapters delegating to mcp/server.py & mantis/   │
+│ Layer 4: Backend Gateway & Domain Engines (workbench/server/, mantis/)     │
+│ - Thin HTTP/SSE adapters delegating to mantis/mcp_server.py & mantis/      │
 │ - Zero UI presentation logic; strict Pydantic/JSON-Schema validation       │
 └────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -206,12 +211,12 @@ export interface LogEntry {
 
 ### 7.2. End-to-End Correlation Propagation (`X-Correlation-ID`)
 1. **Origin Generation**: Every user-initiated action, MCP tool call, or Mantis chat request generates a unique `correlationId` (or uses the JSON-RPC `id`).
-2. **Wire Propagation**: Layer 3 clients attach `X-Correlation-ID: <correlationId>` to all HTTP/SSE requests (`POST /rpc`, `POST /api/mantis/chat`, `GET /api/logs/stream`).
+2. **Wire Propagation**: Layer 3 clients attach `X-Correlation-ID: <correlationId>` to all HTTP/SSE requests (`POST /rpc`, `POST /api/mantis/chat`, `GET /api/sequencer/stream`).
 3. **Backend Echo & Tagging**: The backend gateway reads `X-Correlation-ID`, binds it to the request context logger, logs tool/agent execution duration and status with that ID, and returns `X-Correlation-ID` in the response headers and error payloads.
 
 ### 7.3. Mandatory Instrumentation Points
 * **Contract 1 (MCP JSON-RPC)**: Log `rpc.call.start` (method, tool name, sanitized args) and `rpc.call.complete` / `rpc.call.error` (with `durationMs` and error code).
 * **Contract 2 & 3 (SSE Streams)**: Log stream lifecycle transitions (`sse.connect`, `sse.phase_change`, `sse.reconnect_scheduled`, `sse.closed`, `sse.error`) without flooding the log buffer on individual text tokens.
 * **Contract 4 (Workspace State Store)**: Log state transitions (`store.mutation`) with action name, previous/next summary diff, and triggering source.
-* **Client-Side Diagnostic Ring Buffer**: The frontend `WorkbenchLogger` maintains a bounded in-memory ring buffer (last 1,000 structured entries) accessible via the developer diagnostics console and automatically included when exporting failure bundles (`/export`).
+* **Client-Side Diagnostic Ring Buffer**: The frontend `WorkbenchLogger` maintains a bounded in-memory ring buffer (last 1,000 structured entries) shown, merged with the server's ring buffer (`GET /api/diagnostics/logs`), in the Workbench Logs drawer.
 

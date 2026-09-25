@@ -11,6 +11,10 @@
      200  Mantis drawer (above the log drawer and above .local-setup-drawer,
           which is z-index 100 and shares the right edge)
      300  Mantis diagram modal (must clear both drawers)
+
+   Maximising Mantis changes its geometry, never its z-index: the diagram modal
+   still has to open over it, and the right-edge contract in app.js already
+   guarantees nothing else is on screen beneath it.
    ========================================================================== */
 
 /* ====================================================== mantis drawer === */
@@ -18,13 +22,19 @@
  * The drawer is `position: fixed`, which makes it a containing block for its
  * own fixed-position descendants. Anything that must cover the whole viewport
  * (the diagram modal) is therefore mounted on <body>, not inside here.
+ *
+ * The width is a property rather than a literal so the drag handle can move it
+ * and the persisted value can seed it. The fallback is the default width for a
+ * profile that has never dragged: 520px could not hold the hypothesis matrix or
+ * a sequence diagram without scrolling in both axes, and the 96vw term is why
+ * the default stays here instead of becoming a fixed token in theme.css.
  */
 .mantis-drawer {
   position: fixed;
   top: var(--app-bar-height);
   right: 0;
   bottom: 0;
-  width: min(520px, 96vw);
+  width: var(--mantis-drawer-width, min(760px, 96vw));
   z-index: 200;
   display: flex;
   transform: translateX(100%);
@@ -33,6 +43,54 @@
 
 .mantis-drawer.is-open {
   transform: translateX(0);
+}
+
+/*
+ * Maximised. The drawer spans the viewport width but keeps `top:
+ * var(--app-bar-height)` from the rule above, so the app bar stays visible and
+ * clickable: this is an overlay over the application, not a window of its own.
+ * Nothing here touches --mantis-drawer-width, which is what makes restoring a
+ * matter of dropping one class.
+ */
+.mantis-drawer.is-maximized {
+  width: 100vw;
+}
+
+/* At full width there is no width left to negotiate. `display: none` also takes
+   the separator out of the tab order, so a keyboard operator is never handed a
+   control that cannot do anything. */
+.mantis-drawer.is-maximized .resize-handle-x {
+  display: none;
+}
+
+/* A closed drawer is parked off-screen; the pull tab is the only thing there
+   that is meant to be reachable, so the handle does not linger in the tab order
+   at a position no pointer can find. */
+.mantis-drawer:not(.is-open) .resize-handle-x {
+  display: none;
+}
+
+/* The tab hangs off the drawer's left edge, which is off-screen once the drawer
+   spans the viewport. Hiding it keeps a focusable control from living outside
+   the visible area; the header close button is the way out while maximised. */
+.mantis-drawer.is-maximized .mantis-pull-tab {
+  display: none;
+}
+
+/*
+ * Prose keeps its 76ch measure in the drawer because a long line is harder to
+ * read, not easier. Maximised is asked for when the answer carries something
+ * genuinely wide -- a hypothesis matrix with a column per stage, or a sequence
+ * diagram -- so the bubble cap is lifted only here, and only for the bubble:
+ * the paragraphs and list items inside it keep the measure they had.
+ */
+.mantis-drawer.is-maximized .chat-bubble {
+  max-width: none;
+}
+
+.mantis-drawer.is-maximized .chat-assistant p,
+.mantis-drawer.is-maximized .chat-assistant li {
+  max-width: 76ch;
 }
 
 /* The tab hangs off the drawer's left edge, so it protrudes into the viewport
@@ -232,8 +290,126 @@
   word-break: break-word;
 }
 
-.mantis-activity[open] .mantis-activity-label::after {
-  content: '';
+/* Disclosure affordance: chevron, hover state, and a trailing Show/Hide hint. */
+.mantis-activity-summary {
+  list-style: none;
+  border-radius: var(--radius-md);
+  transition: background 0.15s ease;
+}
+
+.mantis-activity-summary::-webkit-details-marker {
+  display: none;
+}
+
+.mantis-activity-summary:hover {
+  background: var(--bg-surface-raised);
+}
+
+.mantis-activity-summary:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: -2px;
+}
+
+.mantis-activity-chevron {
+  font-size: 18px;
+  color: #6d28d9;
+  transform: rotate(-90deg);
+  transition: transform 0.15s ease;
+}
+
+.mantis-activity[open] .mantis-activity-chevron {
+  transform: rotate(0deg);
+}
+
+.mantis-activity-meta {
+  flex: 1;
+  min-width: 0;
+}
+
+.mantis-activity-hint {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+.mantis-activity-summary:hover .mantis-activity-hint {
+  color: var(--text-primary);
+}
+
+/* ------------------------------------------------------- copy controls --- */
+.mantis-copy-btn {
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+}
+
+.mantis-copy-btn .material-symbols-outlined {
+  font-size: 16px;
+}
+
+.mantis-copy-btn:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
+}
+
+.mantis-copy-btn.is-copied,
+.btn-diagram-action.is-copied,
+.btn-with-icon.is-copied {
+  color: var(--color-success);
+}
+
+.btn-with-icon .material-symbols-outlined,
+.btn-diagram-action .material-symbols-outlined {
+  font-size: 15px;
+}
+
+/* Bubble copy button: revealed on hover or keyboard focus. */
+.chat-bubble {
+  position: relative;
+}
+
+.chat-bubble:has(> .chat-bubble-copy) {
+  padding-right: calc(var(--space-3) + 24px);
+}
+
+.chat-bubble-copy {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.chat-bubble:hover > .chat-bubble-copy,
+.chat-bubble:focus-within > .chat-bubble-copy,
+.chat-bubble-copy.is-copied {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .chat-bubble-copy {
+    opacity: 1;
+  }
+}
+
+/* ------------------------------------------------ diagram export actions --- */
+.mermaid-header {
+  flex-wrap: wrap;
+}
+
+.mermaid-header-actions,
+.diagram-export-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.btn-diagram-action {
+  font-size: 11px;
+  padding: 2px var(--space-2);
+  height: 24px;
+  gap: 4px;
 }
 
 /* ---------------------------------------------------- hypothesis matrix --- */
@@ -244,13 +420,71 @@
   overflow: hidden;
 }
 
-.mantis-matrix figcaption {
+/* Collapsed by default: the answer above is the report; this is its record. */
+.mantis-matrix-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
   padding: var(--space-2) var(--space-3);
   background: var(--bg-surface-container);
-  border-bottom: 1px solid var(--border-subtle);
   font-size: 11px;
   font-weight: 600;
   color: var(--text-secondary);
+  list-style: none;
+  cursor: pointer;
+}
+
+.mantis-matrix-summary::-webkit-details-marker {
+  display: none;
+}
+
+.mantis-matrix-summary:hover {
+  background: var(--bg-surface-raised);
+}
+
+.mantis-matrix-summary:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: -2px;
+}
+
+.mantis-matrix[open] > .mantis-matrix-summary {
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.mantis-matrix-chevron {
+  font-size: 18px;
+  transform: rotate(-90deg);
+  transition: transform 0.15s ease;
+}
+
+.mantis-matrix[open] .mantis-matrix-chevron {
+  transform: rotate(0deg);
+}
+
+.mantis-matrix-meta {
+  flex: 1;
+  min-width: 0;
+  text-align: right;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+.mantis-matrix-audit {
+  padding: var(--space-2) var(--space-3);
+  border-top: 1px solid var(--border-subtle);
+  font-size: 12px;
+}
+
+/* Repository doc citations open the local spec text in a new tab. */
+.mantis-doc-link {
+  color: var(--color-primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.mantis-doc-link:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
 }
 
 /* The provisional matrix arrives at scoping time with every verdict still
@@ -259,7 +493,7 @@
   border-style: dashed;
 }
 
-.mantis-matrix.is-provisional figcaption {
+.mantis-matrix.is-provisional .mantis-matrix-label {
   color: var(--color-warning);
 }
 
@@ -443,4 +677,108 @@
   flex: 1;
   min-height: 0;
   overflow: auto;
+}
+
+/* --- Local Setup drawer: drawer-owned project spec ----------------------- */
+.drawer-spec-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-4) 0;
+}
+
+.drawer-spec-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.drawer-spec-input {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: var(--space-1) var(--space-2);
+  color: var(--text-primary);
+  background: var(--bg-surface-container);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+}
+
+.drawer-spec-input:focus {
+  outline: none;
+  border-color: var(--color-primary);
+}
+
+.drawer-spec-field .field-hint:empty {
+  display: none;
+}
+
+.drawer-spec-mismatch {
+  padding: var(--space-1) var(--space-2);
+  color: var(--color-warning);
+  background: var(--bg-surface-raised);
+  border: 1px solid var(--color-warning);
+  border-radius: var(--radius-sm);
+}
+
+/* --- Local Setup drawer: physical device connection card ----------------- */
+.conn-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-top: var(--space-3);
+  padding: var(--space-3);
+  font-size: 12px;
+  color: var(--text-primary);
+  background: var(--bg-surface-container);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+
+.conn-card.conn-empty {
+  color: var(--text-muted);
+}
+
+.conn-card.conn-error {
+  color: var(--color-error);
+  border-color: var(--color-error);
+}
+
+.conn-title {
+  font-weight: 600;
+  margin-bottom: var(--space-1);
+}
+
+.conn-subtitle {
+  margin-top: var(--space-2);
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.conn-row {
+  display: grid;
+  grid-template-columns: minmax(110px, 38%) 1fr;
+  gap: var(--space-2);
+  align-items: start;
+}
+
+.conn-label {
+  color: var(--text-secondary);
+}
+
+.conn-value {
+  font-family: var(--font-mono);
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--text-primary);
+}
+
+.conn-unknowns,
+.conn-docs {
+  margin: 0;
+  padding-left: var(--space-4);
+  color: var(--text-secondary);
+}
+
+.conn-docs a {
+  color: var(--color-primary);
 }

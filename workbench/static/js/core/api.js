@@ -44,7 +44,9 @@ async function request(path, { method = 'GET', body = null, module = 'ApiClient'
       details: { path, method, status: response.status },
       error: { code: `HTTP_${response.status}`, message },
     });
-    throw new Error(message);
+    const error = new Error(message);
+    error.status = response.status;
+    throw error;
   }
 
   logger.info(module, 'request.complete', {
@@ -74,6 +76,10 @@ export const api = {
 
   listDevices: (siteModel) =>
     request(`/api/devices?site_model=${encodeURIComponent(siteModel)}`),
+
+  /** Picker-sized device list: {device_id, is_gateway, gateway_id} only. */
+  listDeviceSummaries: (siteModel) =>
+    request(`/api/devices/summary?site_model=${encodeURIComponent(siteModel)}`),
 
   getDevice: (siteModel, deviceId) =>
     request(
@@ -121,26 +127,29 @@ export const api = {
     `&device_id=${encodeURIComponent(deviceId)}&kind=${encodeURIComponent(kind)}`,
 
   /**
-   * Describes what committing this device's results would do, without touching
-   * the repository. The dialog is built entirely from this response so the
-   * branch list, remote list, and any blocking reason all come from real git
-   * state rather than from assumptions made in the browser.
+   * Describes what committing this site model's results would do, without
+   * touching the repository. The dialog is built entirely from this response so
+   * the branch list, remote list, the devices whose results are affected, and
+   * any blocking reason all come from real git state rather than from
+   * assumptions made in the browser.
+   *
+   * There is no device parameter: a sequencer run writes results for a device
+   * into three separate places under the site model, and committing only one
+   * device's results directory left the rest of the run uncommitted.
    */
-  commitPreview: (siteModel, deviceId) =>
+  commitPreview: (siteModel) =>
     request(
-      `/api/results/commit/preview?site_model=${encodeURIComponent(siteModel)}` +
-      `&device_id=${encodeURIComponent(deviceId)}`,
+      `/api/results/commit/preview?site_model=${encodeURIComponent(siteModel)}`,
       { module: 'CommitClient' }
     ),
 
-  commitResults: ({ siteModel, deviceId, message, branch, createBranch = false,
+  commitResults: ({ siteModel, message, branch, createBranch = false,
                     push = false, remote = null }) =>
     request('/api/results/commit', {
       method: 'POST',
       module: 'CommitClient',
       body: {
         site_model: siteModel,
-        device_id: deviceId,
         message,
         branch,
         create_branch: createBranch,
@@ -151,40 +160,80 @@ export const api = {
 
   diagnosticsLogs: (limit = 200) => request(`/api/diagnostics/logs?limit=${limit}`),
 
-  getTestbedStatus: () => request('/api/testbed/status', { module: 'TestbedClient' }),
+  /**
+   * Packages the site model, out/ and cached tool configs (private keys
+   * excluded). The server fails explicitly rather than return a partial bundle.
+   */
+  createSupportBundle: (siteModel) =>
+    request('/api/support-bundle', {
+      method: 'POST',
+      body: { site_model: siteModel },
+      module: 'SupportBundleClient',
+    }),
 
-  startTestbed: ({ siteModel, projectSpec = '//mqtt/localhost:18833', clean = false } = {}) =>
+  /** Attachment URL for a created bundle; the browser handles the download. */
+  supportBundleUrl: (bundleId) =>
+    `/api/support-bundle/download?bundle_id=${encodeURIComponent(bundleId)}`,
+
+  /** Email notification consent, readiness, and recent deliveries. */
+  getNotifications: () => request('/api/notifications', { module: 'NotificationsClient' }),
+
+  setNotificationConsent: (consent) =>
+    request('/api/notifications/consent', {
+      method: 'POST',
+      body: { consent },
+      module: 'NotificationsClient',
+    }),
+
+  sendTestNotification: () =>
+    request('/api/notifications/test', { method: 'POST', body: {}, module: 'NotificationsClient' }),
+
+  // Every testbed call names the drawer's project spec; the backend derives all
+  // ports from it and rejects a missing or non-local spec with 400.
+  getTestbedStatus: (projectSpec) =>
+    request(`/api/testbed/status?project_spec=${encodeURIComponent(projectSpec ?? '')}`, {
+      module: 'TestbedClient',
+    }),
+
+  getTestbedConnection: ({ projectSpec, siteModel, deviceId }) =>
+    request(
+      `/api/testbed/connection?project_spec=${encodeURIComponent(projectSpec ?? '')}` +
+        `&site_model=${encodeURIComponent(siteModel ?? '')}&device_id=${encodeURIComponent(deviceId ?? '')}`,
+      { module: 'TestbedClient' }
+    ),
+
+  startTestbed: ({ siteModel, projectSpec, clean = false }) =>
     request('/api/testbed/start', {
       method: 'POST',
       body: { site_model: siteModel, project_spec: projectSpec, clean },
       module: 'TestbedClient',
     }),
 
-  stopTestbed: () =>
+  stopTestbed: (projectSpec) =>
     request('/api/testbed/stop', {
       method: 'POST',
-      body: {},
+      body: { project_spec: projectSpec },
       module: 'TestbedClient',
     }),
 
-  restartTestbed: ({ siteModel, projectSpec = '//mqtt/localhost:18833' } = {}) =>
+  restartTestbed: ({ siteModel, projectSpec }) =>
     request('/api/testbed/restart', {
       method: 'POST',
       body: { site_model: siteModel, project_spec: projectSpec },
       module: 'TestbedClient',
     }),
 
-  startPubber: ({ siteModel, deviceId, projectSpec = '//mqtt/localhost:18833', serialNo = '1234' }) =>
+  startPubber: ({ siteModel, deviceId, projectSpec, serialNo = '1234' }) =>
     request('/api/testbed/pubber/start', {
       method: 'POST',
       body: { site_model: siteModel, device_id: deviceId, project_spec: projectSpec, serial_no: serialNo },
       module: 'TestbedClient',
     }),
 
-  stopPubber: (deviceId) =>
+  stopPubber: ({ deviceId, projectSpec }) =>
     request('/api/testbed/pubber/stop', {
       method: 'POST',
-      body: { device_id: deviceId },
+      body: { device_id: deviceId, project_spec: projectSpec },
       module: 'TestbedClient',
     }),
 

@@ -4,13 +4,14 @@
  * Provides a collapsible slide-out drawer on the right side of the Sequencer tab.
  * Allows test operators to:
  *   1. Start / stop / restart the local test substrate (Mosquitto, UDMIS, etcd)
- *      in unprivileged isolated user-space mode (//mqtt/localhost:18833).
+ *      in unprivileged isolated user-space mode (//mqtt/localhost:<port>, entered in the drawer).
  *   2. View an interactive topology graph with real-time component health.
  *   3. Launch / stop simulated Pubber instances for the active device.
  *   4. Inspect live component logs (Setup, UDMIS, Mosquitto, Pubber).
  */
 
 import { attachResizer, clampSize } from './resizer.js';
+import { renderConnectionCard } from './device-connection-card.js';
 
 /** Below this the topology cards and the four log tabs start wrapping illegibly. */
 const DRAWER_MIN_WIDTH_PX = 320;
@@ -19,11 +20,90 @@ const DRAWER_MAX_WIDTH_PX = 900;
 /** Workspace width the drawer must always leave behind, so it can never cover the app. */
 const WORKSPACE_FLOOR_PX = 360;
 /**
- * Spec used only when the operator has not entered one. Matches the unprivileged
- * user-space default documented in `etc/shell_common.sh`. An operator-supplied
- * spec is never overridden by this.
+ * Hard stop for the substrate to report `overall === 'UP'` after a start or
+ * restart, matching the 90 s `bin/udmi start` readiness rule in GEMINI.md.
  */
-const DEFAULT_PROJECT_SPEC = '//mqtt/localhost:18833';
+export const SUBSTRATE_READY_TIMEOUT_MS = 90000;
+/** Interval between readiness polls of `/api/testbed/status`. */
+export const SUBSTRATE_READY_POLL_MS = 2000;
+
+/**
+ * Resolves with the status once the substrate reports `overall === 'UP'`.
+ *
+ * Rejects with an explicit error when the backend reports ERROR (quoting its
+ * `last_error`) or when `timeoutMs` elapses first. Nothing downstream --
+ * notably Pubber -- may launch until this resolves. Timing is injected so the
+ * behaviour can be exercised without a browser.
+ */
+export async function waitForSubstrateUp({
+  getStatus,
+  timeoutMs = SUBSTRATE_READY_TIMEOUT_MS,
+  intervalMs = SUBSTRATE_READY_POLL_MS,
+  sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  now = () => Date.now(),
+}) {
+  const deadline = now() + timeoutMs;
+  let last = 'no status received';
+  for (;;) {
+    const status = await getStatus();
+    const overall = status?.overall || 'UNKNOWN';
+    if (overall === 'UP') return status;
+    if (overall === 'ERROR') {
+      throw new Error(`Local substrate failed to start: ${status.last_error || 'no error detail reported'}`);
+    }
+    last = overall;
+    if (now() >= deadline) {
+      throw new Error(
+        `Local substrate not UP after ${Math.round(timeoutMs / 1000)}s (last status: ${last}). ` +
+        'Check the Setup log; Pubber was not launched.'
+      );
+    }
+    await sleep(intervalMs);
+  }
+}
+
+/** localStorage key holding the drawer's own local project spec. */
+export const LOCAL_SPEC_STORAGE_KEY = 'udmi_testbed_project_spec';
+/** Shape of a spec the local substrate accepts (explicit unprivileged port). */
+const LOCAL_SPEC_SHAPE = /^\/\/mqtt\/localhost:\d+$/;
+
+/**
+ * Warning text when the Sequencer targets a *different* local broker than the
+ * drawer manages, or '' when there is nothing to warn about. A cloud or blank
+ * Sequencer spec is not a mismatch: it is deliberately a different target.
+ */
+export function specMismatch(sequencerSpec, localSpec) {
+  const seq = (sequencerSpec || '').trim();
+  if (!LOCAL_SPEC_SHAPE.test(seq) || !localSpec || seq === localSpec) return '';
+  return `Sequencer targets ${seq}, but this local setup manages ${localSpec}.`;
+}
+
+/** Health badge markup for a component status. */
+export function healthBadge(status) {
+  const s = (status || 'DOWN').toUpperCase();
+  const cls = s === 'UP' ? 'badge-up' : s === 'INITIALIZING' ? 'badge-init' : s === 'ERROR' ? 'badge-error' : 'badge-down';
+  return `<span class="health-badge ${cls}">${s === 'INITIALIZING' ? '<span class="spinner-inline"></span>' : ''}${s}</span>`;
+}
+
+/**
+ * Subtitle and badge for the device-under-test card. A physical device is
+ * never probed by the Workbench, so it is labelled as unmonitored rather than
+ * being shown with a health state nobody measured.
+ */
+export function describeDut({ isPubber, pubberComp = {} }) {
+  if (!isPubber) {
+    return {
+      subtitle: 'Physical Hardware — external device, not monitored',
+      badge: '<span class="health-badge badge-neutral">NOT MONITORED</span>',
+    };
+  }
+  return {
+    subtitle: pubberComp.status === 'UP'
+      ? `Pubber Emulator (PID: ${pubberComp.pid || 'Active'})`
+      : 'Pubber Emulator (starts once substrate is UP)',
+    badge: healthBadge(pubberComp.status),
+  };
+}
 
 export class LocalSetupDrawer {
   constructor(container, { store, api, onNotify }) {
@@ -36,6 +116,10 @@ export class LocalSetupDrawer {
     this.pollInterval = null;
     this.logInterval = null;
     this.isOpen = false;
+    // The drawer's own spec: the single source of every port it shows or
+    // probes. Independent of the Sequencer's projectSpec, never defaulted.
+    this.localSpec = (localStorage.getItem(LOCAL_SPEC_STORAGE_KEY) || '').trim();
+    this.connection = { key: '', data: null, error: null, loading: false };
 
     this._build();
     this._bindEvents();
@@ -82,6 +166,15 @@ export class LocalSetupDrawer {
           </button>
         </div>
 
+        <!-- Local project spec (drawer-owned) -->
+        <div class="drawer-spec-field">
+          <label for="drawer-spec-input" class="drawer-spec-label">Local project spec</label>
+          <input id="drawer-spec-input" class="drawer-spec-input" type="text" spellcheck="false"
+                 placeholder="//mqtt/localhost:&lt;port&gt;" autocomplete="off" />
+          <p class="field-hint" id="drawer-spec-hint"></p>
+          <p class="field-hint drawer-spec-mismatch" id="drawer-spec-mismatch" role="status" hidden></p>
+        </div>
+
         <!-- Notification Banner -->
         <div class="drawer-alert" id="drawer-alert" hidden>
           <span class="material-symbols-outlined alert-icon">info</span>
@@ -97,12 +190,13 @@ export class LocalSetupDrawer {
                 <span class="material-symbols-outlined section-icon">schema</span>
                 <span class="section-title">Substrate Topology</span>
               </div>
-              <span class="target-spec-tag" id="drawer-spec-tag">//mqtt/localhost:18833</span>
+              <span class="target-spec-tag" id="drawer-spec-tag">No local spec set</span>
             </div>
 
             <div class="topology-canvas" id="topology-canvas">
               <!-- Rendered Nodes & Flow Connections -->
             </div>
+            <div id="drawer-connection-card"></div>
           </div>
 
           <!-- Component Logs Console -->
@@ -136,6 +230,18 @@ export class LocalSetupDrawer {
       this.close();
     });
 
+    // Drawer-owned spec input
+    const specInput = el('#drawer-spec-input');
+    if (specInput) {
+      specInput.value = this.localSpec;
+      specInput.addEventListener('input', () => {
+        this.localSpec = specInput.value.trim();
+        localStorage.setItem(LOCAL_SPEC_STORAGE_KEY, this.localSpec);
+        this.render();
+        this.pollStatus();
+      });
+    }
+
     // Start setup
     el('#btn-testbed-start')?.addEventListener('click', () => this.handleStart());
 
@@ -159,7 +265,7 @@ export class LocalSetupDrawer {
               await this.api.startPubber({
                 siteModel: state.siteModel,
                 deviceId: state.deviceId,
-                projectSpec: (state.projectSpec || '').trim() || DEFAULT_PROJECT_SPEC,
+                projectSpec: this.localSpec,
                 serialNo: state.serialNo || '1234',
               });
               this.setAlert(`Pubber emulator running for ${state.deviceId}`);
@@ -170,7 +276,7 @@ export class LocalSetupDrawer {
             }
           } else if (!isPubber && state.deviceId) {
             try {
-              await this.api.stopPubber(state.deviceId);
+              await this.api.stopPubber({ deviceId: state.deviceId, projectSpec: this.localSpec });
               this.setAlert('Switched to Physical Hardware mode. Pubber stopped.');
               this.pollStatus();
               setTimeout(() => this.setAlert(''), 3000);
@@ -267,14 +373,24 @@ export class LocalSetupDrawer {
     this.detachResizer?.();
   }
 
+  /**
+   * Probes the substrate named by the drawer's spec. Without a valid spec
+   * nothing is probed and the state is UNKNOWN, never a borrowed default.
+   */
   async pollStatus() {
-    try {
-      const status = await this.api.getTestbedStatus();
-      this.store.update('SET_TESTBED_STATUS', { testbedStatus: status }, { silent: true });
-      this.render();
-    } catch {
-      // Server might be temporarily reloading or unreachable
+    let status;
+    if (!this.localSpec) {
+      status = { overall: 'UNKNOWN', components: {}, spec_error: 'Enter a local project spec (//mqtt/localhost:<port>).' };
+    } else {
+      try {
+        status = await this.api.getTestbedStatus(this.localSpec);
+      } catch (e) {
+        if (e.status !== 400) return; // Gateway reloading or unreachable; keep last state.
+        status = { overall: 'UNKNOWN', components: {}, spec_error: e.message };
+      }
     }
+    this.store.update('SET_TESTBED_STATUS', { testbedStatus: status }, { silent: true });
+    this.render();
   }
 
   async fetchLogs() {
@@ -329,63 +445,17 @@ export class LocalSetupDrawer {
   }
 
   async handleStart() {
-    const state = this.store.getState();
-    if (!state.siteModel) {
-      this.setAlert('Please select a Site Model in the Sequencer controls first.', true);
-      return;
-    }
-    this.setAlert('Launching local testbed substrate (Mosquitto, UDMIS, etcd)...');
-
-    // An explicitly entered spec is the operator's choice of port and must be
-    // honoured verbatim -- unprivileged labs deliberately run on ports other
-    // than the default. Only a blank field is filled in, and the resolved spec
-    // is what gets sent, so the panel and the backend cannot disagree.
-    const projectSpec = (state.projectSpec || '').trim() || DEFAULT_PROJECT_SPEC;
-    if (projectSpec !== state.projectSpec) {
-      this.store.update('SET_PROJECT_SPEC', { projectSpec });
-    }
-
-    try {
-      await this.api.startTestbed({
-        siteModel: state.siteModel,
-        projectSpec,
-        clean: false,
-      });
-
-      // Automatically launch Pubber if in Pubber mode and device is selected
-      const isPubberMode = state.pubberMode !== false;
-      if (isPubberMode && state.deviceId) {
-        this.setAlert(`Substrate started. Launching Pubber for device ${state.deviceId}...`);
-        try {
-          await this.api.startPubber({
-            siteModel: state.siteModel,
-            deviceId: state.deviceId,
-            projectSpec,
-            serialNo: state.serialNo || '1234',
-          });
-          this.setAlert(`Local substrate and Pubber emulator (${state.deviceId}) started!`);
-        } catch (pubErr) {
-          this.setAlert(`Substrate started, but Pubber launch failed: ${pubErr.message}`, true);
-        }
-      } else if (isPubberMode && !state.deviceId) {
-        this.setAlert('Local substrate running. Select a device in Sequencer to launch Pubber.');
-      } else {
-        this.setAlert('Local substrate running (Physical Device mode).');
-      }
-
-      this.activeLogComponent = 'setup';
-      this.fetchLogs();
-      this.pollStatus();
-      setTimeout(() => this.setAlert(''), 5000);
-    } catch (e) {
-      this.setAlert(`Startup failed: ${e.message}`, true);
-    }
+    await this._bringUpSubstrate({
+      verb: 'start',
+      launch: (siteModel, projectSpec) =>
+        this.api.startTestbed({ siteModel, projectSpec, clean: false }),
+    });
   }
 
   async handleStop() {
     this.setAlert('Stopping local services and Pubber...');
     try {
-      await this.api.stopTestbed();
+      await this.api.stopTestbed(this.localSpec);
       this.pollStatus();
       setTimeout(() => this.setAlert(''), 3000);
     } catch (e) {
@@ -394,40 +464,82 @@ export class LocalSetupDrawer {
   }
 
   async handleRestart() {
+    await this._bringUpSubstrate({
+      verb: 'restart',
+      launch: (siteModel, projectSpec) => this.api.restartTestbed({ siteModel, projectSpec }),
+    });
+  }
+
+  /**
+   * Starts (or restarts) the substrate, waits for `overall === 'UP'`, and only
+   * then launches Pubber. The spec is sent exactly as entered: the backend
+   * requires an explicit `//mqtt/localhost:<port>` and rejects anything else
+   * with an actionable message, so no default is substituted here.
+   */
+  async _bringUpSubstrate({ verb, launch }) {
     const state = this.store.getState();
     if (!state.siteModel) {
       this.setAlert('Please select a Site Model in the Sequencer controls first.', true);
       return;
     }
-    this.setAlert('Executing clean restart of local testbed substrate...');
-    const projectSpec = (state.projectSpec || '').trim() || DEFAULT_PROJECT_SPEC;
-    try {
-      await this.api.restartTestbed({
-        siteModel: state.siteModel,
-        projectSpec,
-      });
-
-      const isPubberMode = state.pubberMode !== false;
-      if (isPubberMode && state.deviceId) {
-        this.setAlert(`Substrate restarted. Launching Pubber for ${state.deviceId}...`);
-        try {
-          await this.api.startPubber({
-            siteModel: state.siteModel,
-            deviceId: state.deviceId,
-            projectSpec,
-            serialNo: state.serialNo || '1234',
-          });
-          this.setAlert(`Local substrate and Pubber (${state.deviceId}) restarted!`);
-        } catch (pubErr) {
-          this.setAlert(`Substrate restarted, but Pubber launch failed: ${pubErr.message}`, true);
-        }
-      }
-
-      this.pollStatus();
-      setTimeout(() => this.setAlert(''), 5000);
-    } catch (e) {
-      this.setAlert(`Restart failed: ${e.message}`, true);
+    const projectSpec = this.localSpec;
+    const label = verb === 'restart' ? 'Restart' : 'Startup';
+    if (!projectSpec) {
+      this.setAlert(`${label} needs a local project spec: enter //mqtt/localhost:<port> above.`, true);
+      return;
     }
+    this.setAlert(`Local substrate ${verb} requested (Mosquitto, UDMIS, etcd)...`);
+    this.activeLogComponent = 'setup';
+
+    try {
+      await launch(state.siteModel, projectSpec);
+    } catch (e) {
+      this.setAlert(`${label} failed: ${e.message}`, true);
+      return;
+    }
+
+    this.fetchLogs();
+    this.setAlert(`Waiting up to ${SUBSTRATE_READY_TIMEOUT_MS / 1000}s for the local substrate to report UP...`);
+    try {
+      const status = await waitForSubstrateUp({
+        getStatus: async () => {
+          const s = await this.api.getTestbedStatus(projectSpec);
+          this.store.update('SET_TESTBED_STATUS', { testbedStatus: s }, { silent: true });
+          this.render();
+          return s;
+        },
+      });
+      this.store.update('SET_TESTBED_STATUS', { testbedStatus: status }, { silent: true });
+    } catch (e) {
+      this.fetchLogs();
+      this.setAlert(`${label} failed: ${e.message}`, true);
+      return;
+    }
+
+    const isPubberMode = state.pubberMode === true;
+    if (isPubberMode && state.deviceId) {
+      this.setAlert(`Substrate UP. Launching Pubber for device ${state.deviceId}...`);
+      try {
+        await this.api.startPubber({
+          siteModel: state.siteModel,
+          deviceId: state.deviceId,
+          projectSpec,
+          serialNo: state.serialNo || '1234',
+        });
+        this.setAlert(`Local substrate UP and Pubber emulator (${state.deviceId}) launched.`);
+      } catch (pubErr) {
+        this.setAlert(`Substrate UP, but Pubber launch failed: ${pubErr.message}`, true);
+        return;
+      }
+    } else if (isPubberMode) {
+      this.setAlert('Local substrate UP. Select a device in Sequencer to launch Pubber.');
+    } else {
+      this.setAlert('Local substrate UP (Physical Device mode; the device itself is not monitored).');
+    }
+
+    this.fetchLogs();
+    this.pollStatus();
+    setTimeout(() => this.setAlert(''), 5000);
   }
 
   render() {
@@ -444,14 +556,29 @@ export class LocalSetupDrawer {
       statusText.textContent = overall;
     }
 
-    // Spec tag
+    // Spec tag, input hint, and actions all follow the drawer's own spec.
     const specTag = this.container.querySelector('#drawer-spec-tag');
-    if (specTag) {
-      specTag.textContent = state.projectSpec || testbed.project_spec || DEFAULT_PROJECT_SPEC;
+    if (specTag) specTag.textContent = this.localSpec || 'No local spec set';
+    const hint = this.container.querySelector('#drawer-spec-hint');
+    if (hint) {
+      hint.textContent = !this.localSpec
+        ? 'Required: //mqtt/localhost:<port> (explicit unprivileged port).'
+        : testbed.spec_error || '';
+    }
+    const mismatch = this.container.querySelector('#drawer-spec-mismatch');
+    if (mismatch) {
+      const text = specMismatch(state.projectSpec, this.localSpec);
+      mismatch.textContent = text;
+      mismatch.hidden = !text;
+    }
+    for (const id of ['#btn-testbed-start', '#btn-testbed-stop', '#btn-testbed-restart']) {
+      const btn = this.container.querySelector(id);
+      if (btn) btn.disabled = !this.localSpec;
     }
 
     // Render Topology Canvas
     this.renderTopology(state, components);
+    this.renderConnection(state);
   }
 
   renderTopology(state, components) {
@@ -459,25 +586,15 @@ export class LocalSetupDrawer {
     if (!canvas) return;
 
     const dutDev = state.deviceId || '(No Device)';
-    const isPubber = state.pubberMode !== false;
+    const isPubber = state.pubberMode === true;
     const pubberComp = components.pubber || {};
-    const mqttComp = components.mqtt_broker || { status: 'DOWN', port: 18833 };
-    const udmisComp = components.udmis || { status: 'DOWN' };
-    const etcdComp = components.etcd || { status: 'DOWN', port: 2379 };
+    // Ports come only from the status of the drawer's spec; absent means unknown.
+    const mqttComp = components.mqtt_broker || { status: 'UNKNOWN' };
+    const udmisComp = components.udmis || { status: 'UNKNOWN' };
+    const etcdComp = components.etcd || { status: 'UNKNOWN' };
 
-    const getBadge = (status) => {
-      const s = (status || 'DOWN').toUpperCase();
-      const cls = s === 'UP' ? 'badge-up' : s === 'INITIALIZING' ? 'badge-init' : s === 'ERROR' ? 'badge-error' : 'badge-down';
-      return `<span class="health-badge ${cls}">${s === 'INITIALIZING' ? '<span class="spinner-inline"></span>' : ''}${s}</span>`;
-    };
-
-    const dutSubtitle = isPubber
-      ? (pubberComp.status === 'UP' ? `Pubber Emulator (PID: ${pubberComp.pid || 'Active'})` : 'Pubber Emulator (Auto-start)')
-      : 'Physical Hardware (External Target)';
-
-    const dutBadge = isPubber
-      ? getBadge(pubberComp.status)
-      : '<span class="health-badge badge-up">CONNECTED</span>';
+    const getBadge = healthBadge;
+    const { subtitle: dutSubtitle, badge: dutBadge } = describeDut({ isPubber, pubberComp });
 
     canvas.innerHTML = `
       <div class="topology-stack">
@@ -509,7 +626,7 @@ export class LocalSetupDrawer {
         <!-- Connection 1 -->
         <div class="topology-flow-edge">
           <div class="flow-line"></div>
-          <span class="flow-pill">MQTT :${mqttComp.port || 18833} (Telemetry & State)</span>
+          <span class="flow-pill">MQTT :${mqttComp.port ?? '—'} (Telemetry & State)</span>
           <span class="flow-arrow">▼</span>
         </div>
 
@@ -520,7 +637,7 @@ export class LocalSetupDrawer {
           </div>
           <div class="node-info">
             <div class="node-title">Local Mosquitto</div>
-            <div class="node-subtitle">Port ${mqttComp.port || 18833} (Isolated User Mode)</div>
+            <div class="node-subtitle">Port ${mqttComp.port ?? '—'} (Isolated User Mode)</div>
           </div>
           <div class="node-status">
             ${getBadge(mqttComp.status)}
@@ -562,7 +679,7 @@ export class LocalSetupDrawer {
           </div>
           <div class="node-info">
             <div class="node-title">etcd State Store</div>
-            <div class="node-subtitle">Port ${etcdComp.port || 2379}</div>
+            <div class="node-subtitle">Port ${etcdComp.port ?? '—'}</div>
           </div>
           <div class="node-status">
             ${getBadge(etcdComp.status)}
@@ -570,5 +687,36 @@ export class LocalSetupDrawer {
         </div>
       </div>
     `;
+  }
+
+  /**
+   * Physical mode only: what an external device needs to reach this broker.
+   * Fetched once per (spec, site, device) and rendered from the backend's
+   * derived facts; nothing here is filled in client-side.
+   */
+  renderConnection(state) {
+    const host = this.container.querySelector('#drawer-connection-card');
+    if (!host) return;
+    if (state.pubberMode === true) {
+      host.innerHTML = '';
+      return;
+    }
+    let reason = '';
+    if (!this.localSpec) reason = 'Enter a local project spec to see how an external device connects.';
+    else if (!state.siteModel || !state.deviceId) reason = 'Select a site model and device to see its connection details.';
+    if (reason) {
+      host.innerHTML = renderConnectionCard({ reason });
+      return;
+    }
+    const key = `${this.localSpec}|${state.siteModel}|${state.deviceId}`;
+    if (this.connection.key !== key) {
+      this.connection = { key, data: null, error: null, loading: true };
+      this.api
+        .getTestbedConnection({ projectSpec: this.localSpec, siteModel: state.siteModel, deviceId: state.deviceId })
+        .then((data) => { if (this.connection.key === key) this.connection = { key, data, error: null, loading: false }; })
+        .catch((e) => { if (this.connection.key === key) this.connection = { key, data: null, error: e.message, loading: false }; })
+        .finally(() => this.renderConnection(this.store.getState()));
+    }
+    host.innerHTML = renderConnectionCard(this.connection);
   }
 }

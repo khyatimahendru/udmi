@@ -234,3 +234,64 @@ def test_ingest_support_bundle_tar_slip(tmp_path):
     assert res["status"] == "ERROR"
     assert "Security violation" in res["error"]
     assert not (tmp_path / "evil_tar.txt").exists()
+
+
+def _write_seq(dir_path, marker):
+    dir_path.mkdir(parents=True, exist_ok=True)
+    (dir_path / "sequence.log").write_text(
+        f"2026-08-26T12:05:00Z Starting test {marker}\n", encoding="utf-8"
+    )
+
+
+def test_extract_timeline_does_not_fall_back_to_repo_out_or_instances(tmp_path):
+    """With no run_dir, logs from the repository's out/ or an arbitrary
+    var/instances/* session belong to some other run. They must not be harvested;
+    the miss is reported with every path that was searched."""
+    import pytest
+    _write_seq(tmp_path / "out", "unrelated_repo_out")
+    _write_seq(tmp_path / "var" / "instances" / "udmi_test_other", "unrelated_instance")
+    _write_seq(tmp_path / "var" / "instances" / "udmi_test_other" / "out", "unrelated_instance_out")
+
+    with pytest.raises(FileNotFoundError) as excinfo:
+        extract_timeline(test_id="pointset_publish", device_id="AHU-1", udmi_root=str(tmp_path))
+    message = str(excinfo.value)
+    assert str(tmp_path / "out" / "runs" / "AHU-1_pointset_publish") in message
+    assert str(tmp_path / "out" / "runs" / "pointset_publish") in message
+    assert "instances" not in message
+
+
+def test_extract_timeline_finds_site_model_test_dir(tmp_path):
+    site = tmp_path / "sites" / "lab"
+    run = site / "out" / "devices" / "AHU-1" / "tests" / "pointset_publish"
+    _write_seq(run, "pointset_publish")
+    _write_seq(tmp_path / "out", "unrelated_repo_out")
+
+    timeline = extract_timeline(
+        test_id="pointset_publish", device_id="AHU-1",
+        udmi_root=str(tmp_path), site_model="sites/lab",
+    )
+    assert timeline["run_dir"] == str(run)
+
+
+def test_extract_timeline_prefers_device_specific_run(tmp_path):
+    run = tmp_path / "out" / "runs" / "AHU-1_pointset_publish"
+    _write_seq(run, "pointset_publish")
+    timeline = extract_timeline(test_id="pointset_publish", device_id="AHU-1", udmi_root=str(tmp_path))
+    assert timeline["run_dir"] == str(run)
+
+
+def test_diagnose_test_failure_searches_the_site_model_run_dir(tmp_path):
+    """diagnose_test_failure must hand its site_model to the timeline lookup so a
+    triage without run_dir reads this device's recorded run, not repo out/."""
+    from mantis.tools.diagnostics import diagnose_test_failure
+    site = tmp_path / "sites" / "lab"
+    (site / "devices" / "AHU-1").mkdir(parents=True)
+    (site / "devices" / "AHU-1" / "metadata.json").write_text("{}", encoding="utf-8")
+    run = site / "out" / "devices" / "AHU-1" / "tests" / "pointset_publish"
+    _write_seq(run, "pointset_publish")
+
+    res = diagnose_test_failure(
+        test_id="pointset_publish", device_id="AHU-1",
+        site_model="sites/lab", udmi_root=str(tmp_path),
+    )
+    assert str(run) in json.dumps(res, default=str)

@@ -8,8 +8,10 @@
  */
 
 import { api } from '../core/api.js';
+import { desktopNotify } from '../core/desktop-notify.js';
 import { DiscoveryLoader } from '../core/discovery-loader.js';
 import { RunSession } from '../core/run-session.js';
+import { runVerdict } from '../core/run-verdict.js';
 import { StageGate } from '../core/stage-gate.js';
 import { store } from '../core/store.js';
 import { ArtifactModal } from '../components/artifact-modal.js';
@@ -99,6 +101,7 @@ export class SequencerView {
       onToggle: (name, checked) => this.toggleTest(name, checked),
       onOpenArtifacts: (name) => this.openArtifacts(name),
       onDiagnose: (name) => this.diagnoseTest(name),
+      onExplain: (name) => this.explainTest(name),
     });
     this.logs = new LogViewer(mount('logs'), {
       initialLines: store.getState().consoleLogs || [],
@@ -208,12 +211,16 @@ export class SequencerView {
   // ------------------------------------------------------------ bootstrap ---
   async init() {
     try {
-      const { siteModels, sequences, options } = await this.discovery.loadCatalog();
+      const { siteModels, sequences, sequencesError, options } = await this.discovery.loadCatalog();
       this.stageGate.setOptions(options.min_stages);
       this.controls.setSiteModels(siteModels);
       this.controls.setRunOptions(options);
       this.setStageOptions(options.min_stages);
       this.setSequences(sequences);
+      if (sequencesError) {
+        this.testList.setError(sequencesError);
+        this.logs.appendNotice(`Sequence catalog unavailable: ${sequencesError}`, 'error');
+      }
       this.stageGate.apply(store.getState().minStage);
 
       const { siteModel } = store.getState();
@@ -304,7 +311,10 @@ export class SequencerView {
   handleChange(key, value) {
     store.update(`control.${key}`, { [key]: value });
     if (key === 'siteModel') {
-      store.update('site.change', { deviceId: '', results: {}, testStatus: {} });
+      // The spec targeted the previous site's provider/project; carrying it
+      // over would silently run the new site against the old destination.
+      // loadDevices() re-populates the suggestions for the new site.
+      store.update('site.change', { deviceId: '', projectSpec: '', results: {}, testStatus: {} });
       this.loadDevices(value);
     } else if (key === 'deviceId') {
       this.loadResults();
@@ -332,10 +342,8 @@ export class SequencerView {
   }
 
   refreshProjectSuggestions() {
-    const { siteModel, results } = store.getState();
-    this.controls.setProjectSpecSuggestions(
-      this.discovery.projectSpecSuggestions(siteModel, results)
-    );
+    const { siteModel } = store.getState();
+    this.controls.setProjectSpecSuggestions(this.discovery.projectSpecSuggestions(siteModel));
   }
 
   toggleTest(name, checked) {
@@ -346,9 +354,13 @@ export class SequencerView {
     this.applyFilters();
   }
 
-  /** Bulk actions operate only on rows passing the active filters. */
+  /**
+   * Bulk actions operate only on rows passing the active filters, and never
+   * pick up a sequence the minimum stage would stop from running.
+   */
   bulkSelect(mode) {
-    const visible = this.testList.visibleTestNames();
+    const visible = this.testList.visibleTestNames()
+      .filter((name) => !this.testList.isStageExcluded(name));
     if (mode === 'none') {
       store.update('tests.clear', { selectedTests: [] });
       this.applyFilters();
@@ -369,8 +381,8 @@ export class SequencerView {
   }
 
   applyFilters() {
-    const { searchQuery, bucketFilter, stagesAdmitted, selectedTests } = store.getState();
-    this.testList.applyFilters(searchQuery, bucketFilter, stagesAdmitted, selectedTests);
+    const { searchQuery, bucketFilter } = store.getState();
+    this.testList.applyFilters(searchQuery, bucketFilter);
     const visible = this.testList.visibleTestNames().length;
     this.countEl.textContent = `${visible} of ${this.sequences?.length ?? 0}`;
   }
@@ -383,6 +395,8 @@ export class SequencerView {
       this.logs.appendNotice(problem, 'error');
       return;
     }
+    // Still inside the Run click, the only moment a browser shows the prompt.
+    desktopNotify.requestFromGesture();
 
     store.resetRun(state.selectedTests);
     if (this.runTimer) clearInterval(this.runTimer);
@@ -396,8 +410,9 @@ export class SequencerView {
       }
     }, 1000);
 
+    const notify = this.controls.takeNotifyRequest();
     try {
-      const started = await this.session.start(state);
+      const started = await this.session.start(state, { notify });
       store.update('run.started', {
         sessionId: started.session_id,
         commandLine: started.command_line,
@@ -406,13 +421,27 @@ export class SequencerView {
       });
       this.logs.clear();
       this.logs.appendNotice(`$ ${started.command_line}`, 'notice');
+      if (started.notify) {
+        this.logs.appendNotice(
+          'You will get an email when this run finishes, even if you close this tab. ' +
+          'Stopping the run sends nothing.',
+          'notice'
+        );
+      }
     } catch (cause) {
       if (this.runTimer) {
         clearInterval(this.runTimer);
         this.runTimer = null;
       }
-      store.update('run.failed', { running: false, statusLabel: 'Failed' });
-      this.logs.appendNotice(cause.message, 'error');
+      // 409: the server refused because another session is still running
+      // (bin/sequencer's shared files make concurrent runs unsafe). Nothing
+      // was launched, so this is 'Blocked', not a failed run.
+      const blocked = cause.status === 409;
+      store.update('run.failed', { running: false, statusLabel: blocked ? 'Blocked' : 'Failed' });
+      this.logs.appendNotice(
+        blocked ? `Run not started — ${cause.message}` : cause.message,
+        'error'
+      );
     }
   }
 
@@ -446,7 +475,7 @@ export class SequencerView {
     }
 
     const metrics = store.computeMetrics();
-    const label = aborted ? 'Aborted' : metrics.fail > 0 ? 'Failed' : 'Compliant';
+    const label = runVerdict({ exitCode, aborted, metrics });
 
     store.update('run.finished', {
       running: false,
@@ -459,8 +488,15 @@ export class SequencerView {
       `Run ${label.toLowerCase()} — exit code ${exitCode ?? 'n/a'}; ` +
         `${metrics.pass} passed, ${metrics.fail} failed, ${metrics.skip} skipped, ` +
         `${metrics.pending} never reported (${finalDuration} elapsed).`,
-      aborted ? 'warn' : 'notice'
+      ['Aborted', 'Incomplete', 'Error'].includes(label) ? 'warn' : 'notice'
     );
+    desktopNotify.notify({
+      title: `Sequencer run ${label.toLowerCase()}`,
+      body:
+        `${s.deviceId || 'Device'}: ${metrics.pass} passed, ${metrics.fail} failed, ` +
+        `${metrics.skip} skipped, ${metrics.pending} never reported (${finalDuration}).`,
+      tag: 'workbench-sequencer-run',
+    });
     // Refresh the on-disk artifacts this run just produced, but keep the
     // verdict above: relabelling here would replace it with 'Historical runs'
     // the instant the run finished.
@@ -513,6 +549,16 @@ export class SequencerView {
       deviceId: store.state.deviceId,
       testId: testName,
     });
+  }
+
+  /** Informational Mantis question about any test, failed or not. */
+  explainTest(testName) {
+    const mantis = window.workbenchApp?.mantis;
+    if (!mantis) {
+      this.appendNotice('Cannot explain test: the Mantis drawer is not mounted.', 'error');
+      return;
+    }
+    mantis.explainTest(testName);
   }
 
   // ----------------------------------------------------------- reconcile ---

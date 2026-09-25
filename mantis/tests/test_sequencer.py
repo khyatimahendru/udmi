@@ -53,13 +53,13 @@ def test_run_sequencer_test_gref_with_plus_suffix():
         session_mgr=mgr,
         test_name="pointset_publish",
         device_id="AHU-1",
-        target_spec="//gref/bos-platform-staging+heykhyati",
+        target_spec="//gref/bos-platform-staging+dev_user",
         site_model="sites/udmi_site_model",
     )
     assert res["status"] == "LAUNCHED"
     assert res["is_cloud"] is True
-    assert res["target_spec"] == "//gref/bos-platform-staging+heykhyati"
-    assert "//gref/bos-platform-staging+heykhyati" in res["command"]
+    assert res["target_spec"] == "//gref/bos-platform-staging+dev_user"
+    assert "//gref/bos-platform-staging+dev_user" in res["command"]
     mgr.start_session_process.assert_called_once()
 
 

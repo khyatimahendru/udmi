@@ -32,6 +32,20 @@
     >
       <span class="material-symbols-outlined" aria-hidden="true">terminal</span>
     </button>
+    <button
+      type="button"
+      class="app-bar-icon"
+      data-role="settings-toggle"
+      aria-label="Settings"
+      aria-haspopup="dialog"
+      title="Settings (email notifications)"
+    >
+      <span class="material-symbols-outlined" aria-hidden="true">settings</span>
+    </button>
+    <span class="desktop-notify-notice" data-role="desktop-notify-notice" role="status" hidden>
+      <span class="material-symbols-outlined" aria-hidden="true">notifications_off</span>
+      <span data-role="desktop-notify-text"></span>
+    </span>
     <span class="server-status" data-role="server-status">Connecting…</span>
   </header>
 
@@ -44,6 +58,7 @@
   -->
   <div data-role="mantis-mount"></div>
   <div data-role="logs-mount"></div>
+  <div data-role="settings-mount"></div>
 
   <noscript>
     <p class="empty-note is-error">

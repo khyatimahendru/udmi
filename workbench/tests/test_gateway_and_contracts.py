@@ -245,7 +245,7 @@ def test_options_endpoint_mirrors_runner_whitelists(server_url):
     assert {o["value"] for o in body["min_stages"]} == set(VALID_STAGES)
 
 
-# --- b/543296100: alpha sequences (discovery) silently skipped by the gate ---
+# --- alpha sequences (discovery) silently skipped by the gate ---
 def test_stage_ordering_matches_the_java_enum():
     """FeatureStage ordinals: DISABLED < ALPHA < PREVIEW < BETA < STABLE."""
     assert FEATURE_STAGE_ORDER == ("DISABLED", "ALPHA", "PREVIEW", "BETA", "STABLE")
@@ -553,7 +553,7 @@ def test_site_roots_start_empty_and_report_their_config_file(server_url):
 
 
 def test_registering_a_path_makes_its_models_discoverable(server_url, external_site_model):
-    """b/532035434: a site model outside the checkout must become selectable."""
+    """A site model outside the checkout must become selectable."""
     before = get_json(f"{server_url}/api/site-models")[2]["site_models"]
     assert not any(model["external"] for model in before)
 
@@ -695,15 +695,15 @@ def test_registered_root_cannot_be_used_to_browse_upward(tmp_path, external_site
 
 
 def test_nested_udmi_subfolder_layout_naming_and_discovery(tmp_path):
-    """Real site models frequently nest UDMI files in a udmi/ subfolder (e.g. UK-LON-GLAB/udmi)."""
+    """Real site models frequently nest UDMI files in a udmi/ subfolder (e.g. ZZ-TEST-SITE/udmi)."""
     holder = tmp_path / "staging"
-    site_model_dir = holder / "UK-LON-GLAB"
+    site_model_dir = holder / "ZZ-TEST-SITE"
     udmi_dir = site_model_dir / "udmi"
     (udmi_dir / "devices" / "DDC-10").mkdir(parents=True)
     (udmi_dir / "cloud_iot_config.json").write_text(
         json.dumps({
-            "site_name": "UK-LON-GLAB",
-            "registry_id": "UK-LON-GLAB",
+            "site_name": "ZZ-TEST-SITE",
+            "registry_id": "ZZ-TEST-SITE",
             "iot_provider": "gbos",
             "project_id": "bos-platform-staging",
         }),
@@ -719,13 +719,13 @@ def test_nested_udmi_subfolder_layout_naming_and_discovery(tmp_path):
     # 1. Direct scan of the site model folder itself
     found_direct = discovery.scan_for_site_models(str(site_model_dir), udmi_root)
     assert len(found_direct) == 1
-    assert found_direct[0]["name"] == "UK-LON-GLAB", "Must display site name UK-LON-GLAB, NOT udmi"
+    assert found_direct[0]["name"] == "ZZ-TEST-SITE", "Must display site name ZZ-TEST-SITE, NOT udmi"
     assert found_direct[0]["device_count"] == 1
 
     # 2. Scan of the parent container directory (staging/)
     found_container = discovery.scan_for_site_models(str(holder), udmi_root)
     assert len(found_container) == 1
-    assert found_container[0]["name"] == "UK-LON-GLAB"
+    assert found_container[0]["name"] == "ZZ-TEST-SITE"
 
     # 3. Resolution of both paths
     resolved_parent = discovery.resolve_site_model(udmi_root, str(site_model_dir))
@@ -888,8 +888,9 @@ def test_mantis_translate_emits_final_audit_with_real_verdicts(gateway):
     assert [h["verdict"] for h in data["hypotheses"]] == [
         "REFUTED", "PRIMARY", "UNRESOLVED",
     ]
-    assert data["hypotheses"][2]["rationale"]
-    assert data["hypotheses"][2]["evidence_tier"] == "NONE"
+    # The agent supplied no rationale or evidence tier; none may be invented.
+    assert data["hypotheses"][2]["rationale"] is None
+    assert data["hypotheses"][2]["evidence_tier"] is None
 
 
 def test_mantis_translate_diverts_metrics_into_the_done_payload(gateway):
@@ -913,7 +914,9 @@ def test_mantis_translate_diverts_metrics_into_the_done_payload(gateway):
 
 def test_testbed_status_endpoint(server_url):
     """Asserts that /api/testbed/status returns structured health and components."""
-    status, headers, body = get_json(f"{server_url}/api/testbed/status")
+    status, headers, body = get_json(
+        f"{server_url}/api/testbed/status?project_spec=%2F%2Fmqtt%2Flocalhost%3A18833"
+    )
     assert status == 200
     assert "overall" in body
     assert body["overall"] in ("UP", "INITIALIZING", "DOWN", "ERROR")
@@ -949,13 +952,11 @@ def test_etcd_not_reported_up_when_probe_port_is_closed(tmp_path, monkeypatch):
     from workbench.server import testbed as testbed_mod
 
     manager = testbed_mod.TestbedManager(str(tmp_path))
-    manager.mqtt_port = 46432
-    manager.etcd_port = testbed_mod.derive_etcd_port(46432)
 
     monkeypatch.setattr(testbed_mod, "check_tcp_port", lambda *a, **k: False)
     monkeypatch.setattr(testbed_mod, "is_process_running", lambda pattern: pattern == "etcd")
 
-    etcd = manager.get_status()["components"]["etcd"]
+    etcd = manager.get_status("//mqtt/localhost:46432")["components"]["etcd"]
     assert etcd["port"] == 46433
     assert etcd["probe"] == "tcp://localhost:46433"
     assert etcd["status"] == "DOWN"
@@ -975,8 +976,9 @@ def test_a_process_merely_naming_pubber_does_not_forge_an_emulator(tmp_path):
     from workbench.server import testbed as testbed_mod
 
     manager = testbed_mod.TestbedManager(str(tmp_path))
-    assert manager.get_status()["components"]["pubber"]["status"] == "DOWN"
-    assert manager.get_status()["components"]["pubber"]["probe"] == "no matching process"
+    status = manager.get_status("//mqtt/localhost:46432")
+    assert status["components"]["pubber"]["status"] == "DOWN"
+    assert status["components"]["pubber"]["probe"] == "no matching process"
 
     rx = re.compile(testbed_mod.PUBBER_PROCESS_PATTERN)
     # Shapes that used to be treated as a running emulator:
@@ -1015,7 +1017,7 @@ def test_testbed_status_verdict_matches_advertised_probe(server_url):
     """
     import socket
 
-    _, _, body = get_json(f"{server_url}/api/testbed/status")
+    _, _, body = get_json(f"{server_url}/api/testbed/status?project_spec=%2F%2Fmqtt%2Flocalhost%3A18833")
     for name, comp in body["components"].items():
         probe = comp.get("probe")
         if not probe or not probe.startswith("tcp://"):

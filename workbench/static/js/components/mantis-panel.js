@@ -11,8 +11,20 @@
  */
 
 import { streamEvents } from '../core/api.js';
+import { desktopNotify } from '../core/desktop-notify.js';
 import { store } from '../core/store.js';
 import { JSONViewer } from './json-viewer.js';
+import {
+  DIAGRAM_ACTIONS_HTML,
+  copyText,
+  flashSuccess,
+  icon,
+  makeCopyButton,
+  reasoningText,
+  transcriptText,
+  wireDiagramActions,
+} from './mantis-export.js';
+import { escapeHtml, formatInlineMarkdown } from './mantis-markdown.js';
 
 const SESSION_ID = 'workbench-assistant';
 
@@ -54,6 +66,16 @@ export class MantisPanel {
     this.turnStartedAt = null;
     this.elapsedTimer = null;
 
+    // Recorded chat entries in DOM order; the source for "Copy transcript".
+    // Kinds: user, reasoning, matrix, answer, note, error.
+    this.transcript = [];
+    this.reasoningItems = null;
+    this.thoughtItem = null;
+    this.answerEntry = null;
+    this.matrixEntry = null;
+    // Raw markdown behind each assistant bubble, kept before rendering.
+    this.rawAnswers = new WeakMap();
+
     this.render();
   }
 
@@ -64,9 +86,11 @@ export class MantisPanel {
           <span class="chat-context" data-role="context"></span>
           <div class="mantis-panel-actions">
             <span class="mantis-elapsed" data-role="elapsed" hidden aria-live="off"></span>
-            <button type="button" class="btn btn-ghost" data-act="stop" hidden
-                    title="Abort the running analysis">Stop</button>
             <select data-role="test-select" class="btn btn-ghost" title="Select test to diagnose" hidden></select>
+            <button type="button" class="btn btn-ghost btn-with-icon" data-act="copy-transcript"
+                    title="Copy the entire chat as markdown">
+              <span class="material-symbols-outlined" aria-hidden="true">content_copy</span> Copy transcript
+            </button>
             <button type="button" class="btn btn-ghost" data-act="clear" title="Clear chat history">Clear</button>
           </div>
         </div>
@@ -76,6 +100,13 @@ export class MantisPanel {
           <textarea id="mantis-composer-input" data-role="input" rows="2"
                     placeholder="Ask Mantis to diagnose a failure, or type /help"></textarea>
           <button type="submit" class="btn btn-primary" data-role="send">Send</button>
+          <button type="button" class="btn btn-danger btn-with-icon mantis-stop" data-act="stop" hidden
+                  title="Stop the running Mantis analysis">
+            <span class="material-symbols-outlined" aria-hidden="true">stop_circle</span> Stop
+          </button>
+          <label class="notify-toggle" title="Email me the answer when it is ready. Closing this tab will not stop the run. Enable email in Settings first.">
+            <input type="checkbox" data-role="notify" /> Email me when done
+          </label>
         </form>
       </div>
     `;
@@ -88,11 +119,22 @@ export class MantisPanel {
     this.elapsedEl = this.container.querySelector('[data-role="elapsed"]');
     this.inputEl = this.container.querySelector('[data-role="input"]');
     this.sendBtn = this.container.querySelector('[data-role="send"]');
+    this.notifyInput = this.container.querySelector('[data-role="notify"]');
 
     this._buildDiagramModal();
 
     this.clearBtn.addEventListener('click', () => {
       this.clearChat();
+    });
+
+    const transcriptBtn = this.container.querySelector('[data-act="copy-transcript"]');
+    transcriptBtn.addEventListener('click', async () => {
+      try {
+        await copyText(transcriptText(this.transcript, this.contextEl.textContent));
+        flashSuccess(transcriptBtn);
+      } catch (cause) {
+        this.appendError(`Copy transcript failed: ${cause.message}`);
+      }
     });
 
     this.stopBtn.addEventListener('click', () => {
@@ -124,7 +166,7 @@ export class MantisPanel {
    * The diagram viewer is mounted on <body>, not inside the panel. The drawer
    * that hosts this panel is a transformed element, which would make a
    * `position: fixed` overlay resolve against the drawer instead of the
-   * viewport and clip the diagram to a 520px column.
+   * viewport and clip the diagram to the drawer's column.
    */
   _buildDiagramModal() {
     const modal = document.createElement('div');
@@ -134,10 +176,11 @@ export class MantisPanel {
       <div class="modal modal-diagram-fullscreen" role="dialog" aria-modal="true" aria-labelledby="diagram-modal-title">
         <header class="modal-header">
           <div>
-            <h2 class="modal-title" id="diagram-modal-title">Failure Sequence Diagram</h2>
+            <h2 class="modal-title" id="diagram-modal-title">Diagram</h2>
             <p class="modal-subtitle">Interactive full-screen sequence viewer with zoom &amp; pan</p>
           </div>
-          <div class="modal-header-actions" style="display:flex;align-items:center;gap:8px;">
+          <div class="modal-header-actions" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+            <div class="diagram-export-actions">${DIAGRAM_ACTIONS_HTML}</div>
             <div class="diagram-zoom-controls">
               <button type="button" class="btn btn-ghost btn-sm" data-zoom="out" title="Zoom Out">−</button>
               <span class="diagram-zoom-level" data-role="zoom-level">100%</span>
@@ -161,6 +204,12 @@ export class MantisPanel {
     this.diagramZoom = 1.0;
 
     const signal = this.listeners.signal;
+
+    wireDiagramActions(
+      modal.querySelector('.diagram-export-actions'),
+      () => this.diagramCanvas.querySelector('svg'),
+      (message) => this.appendError(`Diagram export failed: ${message}`),
+    );
 
     modal.querySelector('[data-act="close-diagram"]')
       .addEventListener('click', () => this.closeDiagramModal());
@@ -308,16 +357,29 @@ export class MantisPanel {
   send(overrides = {}) {
     const message = this.inputEl.value.trim();
     if (!message || this.sendBtn.disabled) return;
+    // Still inside the Send/Diagnose click, the only moment a browser shows the prompt.
+    desktopNotify.requestFromGesture();
+    this.turnFailed = false;
 
     const state = store.getState();
     const siteModel = overrides.siteModel ?? state.siteModel;
     const deviceId = overrides.deviceId ?? state.deviceId;
     const testId = overrides.testId ?? state.activeTestId ?? null;
 
+    // Per message and off by default: the toggle applies to this send only.
+    const notify = this.notifyInput.checked;
+    this.notifyInput.checked = false;
+
     this.appendBubble('user', message);
     this.inputEl.value = '';
     this._beginTurn();
     this.setBusy(true);
+    if (notify) {
+      this.appendNote(
+        'You will get an email when Mantis finishes. Closing this tab will not stop the run; ' +
+        'Stop still cancels it and sends nothing.'
+      );
+    }
 
     this.stream = streamEvents('/api/mantis/chat', {
       method: 'POST',
@@ -325,6 +387,7 @@ export class MantisPanel {
       body: {
         session_id: SESSION_ID,
         message,
+        notify,
         context: {
           site_model: siteModel,
           device_id: deviceId,
@@ -336,19 +399,52 @@ export class MantisPanel {
 
     this.stream.done
       .catch((cause) => {
-        if (cause.name !== 'AbortError') this.appendError(cause.message);
+        if (cause.name !== 'AbortError') {
+          this.turnFailed = true;
+          this.appendError(cause.message);
+        }
       })
       .finally(() => {
         this.finalizeAssistantBubble();
         this.setBusy(false);
+        desktopNotify.notify({
+          title: this.turnFailed ? 'Mantis stopped with an error' : 'Mantis has answered',
+          body: message.length > 120 ? `${message.slice(0, 117)}...` : message,
+          tag: 'workbench-mantis',
+        });
       });
   }
 
-  /** Aborts the in-flight run. Wired to the Stop control. */
-  stop() {
-    if (!this.stream) return;
-    this.stream.abort();
-    this.appendNote(`Analysis stopped after ${this._elapsedLabel()} by operator request.`);
+  /**
+   * Stops the in-flight run on the server, then closes the stream. Aborting only
+   * the fetch would leave the agent calling the model and running tools. If the
+   * server refuses the stop, the stream stays open so the run remains visible.
+   */
+  async stop() {
+    if (!this.stream || this.stopBtn.disabled) return;
+    this.stopBtn.disabled = true;
+    let result;
+    try {
+      const response = await fetch('/api/mantis/chat/stop', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: SESSION_ID }),
+      });
+      if (!response.ok) {
+        throw new Error(`${response.status} ${response.statusText}`);
+      }
+      result = await response.json();
+    } catch (cause) {
+      this.stopBtn.disabled = false;
+      this.appendError(
+        `Mantis was NOT stopped: POST /api/mantis/chat/stop failed with ${cause.message}. ` +
+        'The analysis is still running.'
+      );
+      return;
+    }
+    const elapsed = this._elapsedLabel();
+    this.stream?.abort();
+    this.appendNote(`Stopped by operator after ${elapsed}. ${result.message}`);
   }
 
   handleEvent(name, data) {
@@ -365,6 +461,7 @@ export class MantisPanel {
     } else if (name === 'token') {
       this.appendToken(data.text);
     } else if (name === 'error') {
+      this.turnFailed = true;
       this.appendError(data.message);
     } else if (name === 'done') {
       this.finalizeAssistantBubble();
@@ -384,6 +481,10 @@ export class MantisPanel {
     this.currentPhase = null;
     this.assistantBubble = null;
     this.assistantRawText = '';
+    this.reasoningItems = null;
+    this.thoughtItem = null;
+    this.answerEntry = null;
+    this.matrixEntry = null;
     this.turnStartedAt = Date.now();
   }
 
@@ -402,15 +503,37 @@ export class MantisPanel {
     const summary = document.createElement('summary');
     summary.className = 'mantis-activity-summary';
 
+    const chevron = icon('expand_more');
+    chevron.classList.add('mantis-activity-chevron');
+
     const label = document.createElement('span');
     label.className = 'mantis-activity-label';
-    label.textContent = 'Live reasoning';
+    label.textContent = 'Agent Reasoning';
 
     const meta = document.createElement('span');
     meta.className = 'mantis-activity-meta';
     meta.textContent = 'starting…';
 
-    summary.append(label, meta);
+    const entry = { kind: 'reasoning', items: [] };
+    this.transcript.push(entry);
+    this.reasoningItems = entry.items;
+
+    const copyBtn = makeCopyButton({
+      label: 'Copy agent reasoning',
+      getText: () => reasoningText(entry.items),
+      onError: (message) => this.appendError(`Copy reasoning failed: ${message}`),
+    });
+
+    // Visual only: the native <details> already exposes expanded state.
+    const hint = document.createElement('span');
+    hint.className = 'mantis-activity-hint';
+    hint.setAttribute('aria-hidden', 'true');
+    hint.textContent = 'Hide';
+    details.addEventListener('toggle', () => {
+      hint.textContent = details.open ? 'Hide' : 'Show';
+    });
+
+    summary.append(chevron, label, meta, copyBtn, hint);
     details.appendChild(summary);
 
     const body = document.createElement('div');
@@ -464,9 +587,12 @@ export class MantisPanel {
   }
 
   setBusy(busy) {
+    // While a run is active, Stop takes Send's place in the composer. Send stays
+    // disabled as well: other components read it to detect a busy panel.
     this.sendBtn.disabled = busy;
-    this.sendBtn.textContent = busy ? 'Working…' : 'Send';
+    this.sendBtn.hidden = busy;
     this.stopBtn.hidden = !busy;
+    this.stopBtn.disabled = false;
 
     if (busy) {
       this._startElapsedTimer();
@@ -484,10 +610,34 @@ export class MantisPanel {
   }
 
   // ---------------------------------------------------------- rendering ---
+  /**
+   * Bubble text lives in a `.chat-bubble-content` child so streaming and the
+   * markdown render can replace it without removing the copy button.
+   */
   appendBubble(role, text) {
     const bubble = document.createElement('div');
     bubble.className = `chat-bubble chat-${role}`;
-    bubble.textContent = text;
+    const content = document.createElement('div');
+    content.className = 'chat-bubble-content';
+    content.textContent = text;
+
+    let getText;
+    if (role === 'user') {
+      this.transcript.push({ kind: 'user', text });
+      getText = () => text;
+    } else if (role === 'assistant') {
+      getText = () => this.rawAnswers.get(bubble) ?? '';
+    } else {
+      throw new Error(`appendBubble: unsupported role '${role}'.`);
+    }
+    const copyBtn = makeCopyButton({
+      label: 'Copy message',
+      getText,
+      onError: (message) => this.appendError(`Copy message failed: ${message}`),
+      className: 'chat-bubble-copy',
+    });
+
+    bubble.append(content, copyBtn);
     this.logEl.appendChild(bubble);
     this.scroll();
     return bubble;
@@ -505,8 +655,11 @@ export class MantisPanel {
       this.thoughtEl = document.createElement('pre');
       this.thoughtEl.className = 'mantis-thought';
       body.appendChild(this.thoughtEl);
+      this.thoughtItem = { type: 'thought', text: '' };
+      this.reasoningItems.push(this.thoughtItem);
     }
     this.thoughtEl.textContent += text;
+    this.thoughtItem.text += text;
     this._scrollActivity();
   }
 
@@ -514,11 +667,15 @@ export class MantisPanel {
     if (!this.assistantBubble) {
       this.assistantBubble = this.appendBubble('assistant', '');
       this.assistantRawText = '';
+      this.answerEntry = { kind: 'answer', raw: '' };
+      this.transcript.push(this.answerEntry);
       // The answer has started; the reasoning trail steps back out of the way.
       if (this.activityEl) this.activityEl.open = false;
     }
     this.assistantRawText += text;
-    this.assistantBubble.textContent = this.assistantRawText;
+    this.answerEntry.raw = this.assistantRawText;
+    this.rawAnswers.set(this.assistantBubble, this.assistantRawText);
+    this.assistantBubble.querySelector('.chat-bubble-content').textContent = this.assistantRawText;
     this.scroll();
   }
 
@@ -528,34 +685,17 @@ export class MantisPanel {
     const raw = this.assistantRawText;
     this.assistantBubble = null;
     this.assistantRawText = '';
-    await this.renderMarkdownAndDiagrams(bubble, raw);
+    await this.renderMarkdownAndDiagrams(bubble.querySelector('.chat-bubble-content'), raw);
     this.scroll();
   }
 
   escapeHtml(str) {
-    if (!str) return '';
-    return String(str)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#039;');
+    return escapeHtml(str);
   }
 
+  /** Repo doc citations (docs/*.md, schema/*.json) become links; see mantis-markdown.js. */
   formatInlineMarkdown(str) {
-    if (!str) return '';
-    const codeFragments = [];
-    let text = str.replace(/`([^`]+)`/g, (_, code) => {
-      const idx = codeFragments.length;
-      codeFragments.push(`<code>${this.escapeHtml(code)}</code>`);
-      return `__INLINE_CODE_${idx}__`;
-    });
-
-    text = this.escapeHtml(text);
-    text = text.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-    text = text.replace(/\*([^*]+)\*/g, '<em>$1</em>');
-    text = text.replace(/__INLINE_CODE_(\d+)__/g, (_, idx) => codeFragments[Number(idx)] || '');
-    return text;
+    return formatInlineMarkdown(str);
   }
 
   async renderMarkdownAndDiagrams(container, markdown) {
@@ -577,9 +717,10 @@ export class MantisPanel {
               <div class="mermaid-header">
                 <div class="mermaid-header-left">
                   <span class="material-symbols-outlined mermaid-icon">schema</span>
-                  <span class="mermaid-title">Failure Sequence Diagram</span>
+                  <span class="mermaid-title">Diagram</span>
                 </div>
                 <div class="mermaid-header-actions">
+                  ${DIAGRAM_ACTIONS_HTML}
                   <button type="button" class="btn btn-ghost btn-sm btn-diagram-fullscreen" data-diag-id="${diagId}" title="View full-screen with zoom & pan">
                     <span class="material-symbols-outlined" style="font-size: 15px; vertical-align: middle;">fullscreen</span> Fullscreen
                   </button>
@@ -676,6 +817,10 @@ export class MantisPanel {
             startOnLoad: false,
             theme: 'default',
             securityLevel: 'loose',
+            // SVG <text> labels instead of <foreignObject> HTML: foreignObject
+            // taints the canvas and breaks PNG copy/download.
+            htmlLabels: false,
+            flowchart: { htmlLabels: false },
             fontFamily: 'Google Sans, Roboto, system-ui, sans-serif',
             themeVariables: {
               darkMode: false,
@@ -710,6 +855,11 @@ export class MantisPanel {
             const svgId = block.id + '-svg';
             const res = await window.mermaid.render(svgId, block.code);
             bodyEl.innerHTML = `<div class="mermaid-svg-wrapper">${res.svg}</div>`;
+            wireDiagramActions(
+              cardEl.querySelector('.mermaid-header-actions'),
+              () => bodyEl.querySelector('svg'),
+              (message) => this.appendError(`Diagram export failed: ${message}`),
+            );
             const fsBtn = cardEl?.querySelector('.btn-diagram-fullscreen');
             if (fsBtn) {
               fsBtn.addEventListener('click', () => {
@@ -722,6 +872,8 @@ export class MantisPanel {
           } catch (err) {
             console.warn('Failed to render Mermaid diagram:', err);
             bodyEl.innerHTML = `<pre class="mermaid-fallback"><code class="language-mermaid">${this.escapeHtml(block.code)}</code></pre>`;
+            // No SVG exists to export; the source above is the diagram.
+            for (const btn of cardEl.querySelectorAll('[data-diagram-act]')) btn.hidden = true;
           }
         }
       }
@@ -752,6 +904,7 @@ export class MantisPanel {
       return;
     }
     this.logEl.innerHTML = '';
+    this.transcript = [];
     this._beginTurn();
     this.elapsedEl.hidden = true;
     this.appendNote('Conversation history cleared. Workspace context preserved.');
@@ -813,9 +966,11 @@ export class MantisPanel {
     el.textContent = phase;
     body.appendChild(el);
 
+    this.reasoningItems.push({ type: 'phase', text: phase });
     this.currentPhase = phase;
     // A new heading starts a new prose block, so the trail stays chronological.
     this.thoughtEl = null;
+    this.thoughtItem = null;
     this._paintActivityMeta();
     this._scrollActivity();
   }
@@ -833,8 +988,10 @@ export class MantisPanel {
     new JSONViewer(mount).render(data.args ?? {});
 
     body.appendChild(el);
+    this.reasoningItems.push({ type: 'tool_call', tool: data.tool, args: data.args ?? {} });
     this.toolCallCount += 1;
     this.thoughtEl = null;
+    this.thoughtItem = null;
     this._paintActivityMeta();
     this._scrollActivity();
   }
@@ -852,25 +1009,43 @@ export class MantisPanel {
     new JSONViewer(mount).render(data.output ?? {});
 
     body.appendChild(el);
+    this.reasoningItems.push({
+      type: 'tool_result', tool: data.tool, summary: data.summary, output: data.output ?? {},
+    });
     this.thoughtEl = null;
+    this.thoughtItem = null;
     this._scrollActivity();
   }
 
   /**
    * The matrix arrives twice: a provisional one at scoping time with every
-   * verdict UNRESOLVED, then the audited one. The second replaces the first in
-   * place — two tables in the transcript read as two sets of conclusions.
+   * verdict UNRESOLVED, then the audited one. The second replaces the first —
+   * two tables in the transcript read as two sets of conclusions. The audited
+   * one is placed below the answer and collapsed: the answer is the device-facing
+   * report, and the audit is its supporting record, not its headline. It carries
+   * the answer's trailing "Hypothesis Resolution Audit" section, which the
+   * adapter split off the answer, rendered inside the same disclosure.
    */
   appendMatrix(data) {
     const isFinal = data.final === true;
-    const figure = document.createElement('figure');
-    figure.className = `mantis-matrix ${isFinal ? 'is-final' : 'is-provisional'}`;
+    const details = document.createElement('details');
+    details.className = `mantis-matrix ${isFinal ? 'is-final' : 'is-provisional'}`;
+    details.open = false;
 
-    const caption = document.createElement('figcaption');
-    caption.textContent = isFinal
-      ? 'Hypothesis audit — final verdicts'
+    const summary = document.createElement('summary');
+    summary.className = 'mantis-matrix-summary';
+    const chevron = icon('expand_more');
+    chevron.classList.add('mantis-matrix-chevron');
+    const label = document.createElement('span');
+    label.className = 'mantis-matrix-label';
+    label.textContent = isFinal
+      ? 'Hypothesis Resolution Audit'
       : 'Hypotheses under investigation — no verdicts reached yet';
-    figure.appendChild(caption);
+    const meta = document.createElement('span');
+    meta.className = 'mantis-matrix-meta';
+    meta.textContent = this._matrixMeta(data.hypotheses || [], isFinal);
+    summary.append(chevron, label, meta);
+    details.appendChild(summary);
 
     const table = document.createElement('table');
     table.className = 'hypothesis-matrix';
@@ -882,15 +1057,35 @@ export class MantisPanel {
       body.appendChild(this._matrixRow(item));
     }
     table.appendChild(body);
-    figure.appendChild(table);
+    details.appendChild(table);
+
+    if (isFinal && data.audit_markdown) {
+      const audit = document.createElement('div');
+      audit.className = 'mantis-matrix-audit chat-bubble-content';
+      details.appendChild(audit);
+      this.renderMarkdownAndDiagrams(audit, data.audit_markdown);
+    }
 
     if (this.matrixEl) {
-      this.matrixEl.replaceWith(figure);
+      this.matrixEl.remove();
+      this.matrixEntry.data = data;
+      // Re-queue the entry so the transcript order matches the DOM order.
+      this.transcript.splice(this.transcript.indexOf(this.matrixEntry), 1);
+      this.transcript.push(this.matrixEntry);
     } else {
-      this.logEl.appendChild(figure);
+      this.matrixEntry = { kind: 'matrix', data };
+      this.transcript.push(this.matrixEntry);
     }
-    this.matrixEl = figure;
+    this.logEl.appendChild(details);
+    this.matrixEl = details;
     this.scroll();
+  }
+
+  _matrixMeta(hypotheses, isFinal) {
+    const count = `${hypotheses.length} hypothes${hypotheses.length === 1 ? 'is' : 'es'}`;
+    if (!isFinal) return count;
+    const primary = hypotheses.filter((h) => h.verdict === 'PRIMARY').length;
+    return `${count} · ${primary} PRIMARY`;
   }
 
   _matrixRow(item) {
@@ -922,11 +1117,16 @@ export class MantisPanel {
     verdictCell.appendChild(badge);
 
     const rationale = document.createElement('td');
-    rationale.textContent = item.rationale || '—';
+    if (item.rationale) {
+      // formatInlineMarkdown escapes everything; doc citations become links.
+      rationale.innerHTML = formatInlineMarkdown(item.rationale);
+    } else {
+      rationale.textContent = '—';
+    }
 
     const evidence = document.createElement('td');
     evidence.className = 'mantis-evidence-tier';
-    evidence.textContent = item.evidence_tier || 'not reported';
+    evidence.textContent = item.evidence_tier || '—';
 
     row.append(statement, verdictCell, rationale, evidence);
     return row;
@@ -959,6 +1159,7 @@ export class MantisPanel {
 
     box.append(head, body);
     this.logEl.appendChild(box);
+    this.transcript.push({ kind: 'error', text: body.textContent });
     this.scroll();
   }
 
@@ -967,6 +1168,7 @@ export class MantisPanel {
     el.className = 'empty-note';
     el.textContent = text;
     this.logEl.appendChild(el);
+    this.transcript.push({ kind: 'note', text });
     this.scroll();
   }
 
