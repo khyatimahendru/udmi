@@ -36,6 +36,8 @@ spec:
             configMapKeyRef:
               name: config
               key: IOT_PROVIDER
+        - name: REDIS_HOST
+          value: "redis"
         command: ["/bin/sh", "-c"]
         args:
         - |
