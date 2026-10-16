@@ -2,12 +2,13 @@
 
 import concurrent.futures
 import dataclasses
+import ipaddress
 import logging
 import os
 import subprocess
 import threading
 import time
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional
 import xml.etree.ElementTree as ET
 
 from udmi.core.managers.providers.family_provider import FamilyProvider
@@ -40,6 +41,58 @@ class HostInfo:
   ip: str
   mac: Optional[str] = None
   ports: List[PortInfo] = dataclasses.field(default_factory=list)
+
+
+def expand_ip_targets(
+    addrs: Optional[Iterable[str]] = None,
+    networks: Optional[Iterable[str]] = None,
+) -> List[str]:
+  """Expands individual IPs, CIDR subnets, and IP ranges into host IP strings."""
+  raw_specs: List[str] = []
+  if addrs:
+    raw_specs.extend(str(a).strip() for a in addrs if str(a).strip())
+  if networks:
+    raw_specs.extend(str(n).strip() for n in networks if str(n).strip())
+
+  expanded: List[str] = []
+  seen = set()
+
+  def _add(ip_str: str) -> None:
+    if ip_str not in seen:
+      seen.add(ip_str)
+      expanded.append(ip_str)
+
+  for spec in raw_specs:
+    if "/" in spec:
+      try:
+        net = ipaddress.ip_network(spec, strict=False)
+        for host in net.hosts():
+          _add(str(host))
+        continue
+      except ValueError:
+        pass
+    if "-" in spec:
+      parts = spec.split("-", maxsplit=1)
+      left, right = parts[0].strip(), parts[1].strip()
+      try:
+        start_ip = ipaddress.IPv4Address(left)
+        if "." in right:
+          end_ip = ipaddress.IPv4Address(right)
+        else:
+          octets = left.split(".")
+          octets[-1] = right
+          end_ip = ipaddress.IPv4Address(".".join(octets))
+        cur = int(start_ip)
+        end = int(end_ip)
+        if cur <= end and (end - cur) <= 65536:
+          for val in range(cur, end + 1):
+            _add(str(ipaddress.IPv4Address(val)))
+          continue
+      except ValueError:
+        pass
+    _add(spec)
+
+  return expanded
 
 
 def parse_nmap_xml(xml_content: str) -> List[HostInfo]:
@@ -152,10 +205,19 @@ class EtherFamilyProvider(FamilyProvider):
       self._event_count = 0
 
     generation = getattr(discovery_config, "generation", None)
-    raw_depth = getattr(discovery_config, "depth", "entries")
-    depth_val = getattr(raw_depth, "value", raw_depth)
-    depth = str(depth_val).lower() if depth_val else "entries"
-    addrs = getattr(discovery_config, "addrs", None) or []
+    raw_addrs = getattr(discovery_config, "addrs", None) or []
+    raw_networks = getattr(discovery_config, "networks", None) or []
+    addrs = expand_ip_targets(raw_addrs, raw_networks)
+    raw_depth = getattr(discovery_config, "depth", None)
+    depth_val = (
+        getattr(raw_depth, "value", raw_depth)
+        if raw_depth is not None
+        else None
+    )
+    if depth_val:
+      depth = str(depth_val).lower()
+    else:
+      depth = "details" if addrs else "entries"
     scan_duration_sec = getattr(discovery_config, "scan_duration_sec", None)
     deadline = (
         (time.time() + float(scan_duration_sec))
@@ -165,10 +227,10 @@ class EtherFamilyProvider(FamilyProvider):
 
     LOGGER.info(
         "Starting Ether discovery scan (depth: %s, generation: %s,"
-        " targets: %s, duration: %s)...",
+        " targets: %d, duration: %s)...",
         depth,
         generation,
-        addrs,
+        len(addrs),
         scan_duration_sec,
     )
 
@@ -182,6 +244,33 @@ class EtherFamilyProvider(FamilyProvider):
         ),
     )
 
+    if depth == "buckets":
+      buckets = list(dict.fromkeys(list(raw_networks) + list(raw_addrs)))
+      for net in buckets:
+        with self._event_lock:
+          self._event_count += 1
+          event_no = self._event_count
+        publish_func(
+            f"network-{net}",
+            DiscoveryEvents(
+                generation=generation,
+                family="ether",
+                network=str(net),
+                event_no=event_no,
+            ),
+        )
+      with self._event_lock:
+        count = self._event_count
+      publish_func(
+          "self",
+          DiscoveryEvents(
+              generation=generation,
+              family="ether",
+              event_no=-(count + 1),
+          ),
+      )
+      return
+
     if not addrs:
       LOGGER.warning("No target addresses provided for ether scan.")
       publish_func(
@@ -194,9 +283,9 @@ class EtherFamilyProvider(FamilyProvider):
       )
       return
 
-    if depth in ("entries", "ping"):
+    if depth in ("entries", "ping", "host"):
       self._run_ping_scan(addrs, generation, publish_func, deadline=deadline)
-    elif depth in ("details", "ports", "services", "parts"):
+    elif depth in ("details", "ports", "services", "parts", "system", "refs"):
       self._run_nmap_scan(
           addrs, depth, generation, publish_func, deadline=deadline
       )
@@ -324,7 +413,7 @@ class EtherFamilyProvider(FamilyProvider):
       raise RuntimeError("nmap binary not found at /usr/bin/nmap")
 
     cmd = ["/usr/bin/nmap"]
-    if depth in ("services", "parts"):
+    if depth in ("services", "details"):
       cmd.extend(["--script", "banner", "-sV"])
     cmd.extend(["-p-", "-T3", "-oX", "-"])
     cmd.extend(targets)
@@ -405,7 +494,15 @@ class EtherFamilyProvider(FamilyProvider):
                 family="ether",
                 addr=mac,
                 families={"ipv4": FamilyDiscovery(addr=host.ip)},
-                refs=refs if refs else None,
+                refs=(
+                    refs
+                    if (
+                        refs
+                        and depth
+                        in ("refs", "details", "ports", "services", "trace")
+                    )
+                    else None
+                ),
                 event_no=event_no,
             )
             publish_func(host.ip, event)

@@ -89,15 +89,21 @@ def load_events_from_file(filepath: str) -> List[Dict[str, Any]]:
 def extract_summary(events: List[Dict[str, Any]]) -> Dict[str, Any]:
   """Extracts high-level summary metrics from a sequence of discovery events."""
   start_events = [e for e in events if e.get("event_no") == 0]
-  stop_events = [e for e in events if e.get("event_no") == -1]
+  stop_events = [
+      e
+      for e in events
+      if isinstance(e.get("event_no"), int) and e.get("event_no") < 0
+  ]
   discovered_devices = {}
 
   for e in events:
     event_no = e.get("event_no")
-    if event_no not in (0, -1):
-      # Identification key: addr, id, or device hash
+    if event_no is None or event_no > 0:
+      # Identification key: primary family:addr, fallback to nested families
       dev_key = str(event_no)
-      if "families" in e and isinstance(e["families"], dict):
+      if e.get("family") and e.get("addr"):
+        dev_key = f"{e['family']}:{e['addr']}"
+      elif "families" in e and isinstance(e["families"], dict):
         for fam, f_data in e["families"].items():
           if isinstance(f_data, dict) and "addr" in f_data:
             addr_val = f_data["addr"]

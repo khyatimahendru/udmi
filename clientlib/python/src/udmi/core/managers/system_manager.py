@@ -439,8 +439,9 @@ class SystemManager(BaseManager):
         if error_message:
             status_entry = Entry(
                 message=error_message,
+                category="blobset.blob.apply",
                 level=500,
-                timestamp=datetime.now(timezone.utc).isoformat()
+                timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
             )
 
         self._blob_states[key] = BlobBlobsetState(
@@ -511,7 +512,11 @@ class SystemManager(BaseManager):
             self._system_state.operation = StateSystemOperation()
         self._system_state.operation.operational = True
         self._system_state.operation.restart_count = self._restart_count
-        self._system_state.operation.last_start = str(self._start_time)
+        self._system_state.operation.last_start = (
+            self._start_time.astimezone(timezone.utc).strftime(
+                "%Y-%m-%dT%H:%M:%SZ"
+            )
+        )
 
         state.system = self._system_state
 
@@ -523,11 +528,12 @@ class SystemManager(BaseManager):
         try:
             log_entry = Entry(
                 message="Device has started",
+                category="system.base.start",
                 level=200,
-                timestamp=datetime.now(timezone.utc).isoformat()
+                timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
             )
             startup_event = SystemEvents(
-                timestamp=datetime.now(timezone.utc).isoformat(),
+                timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                 version=UDMI_VERSION,
                 logentries=[log_entry]
             )
@@ -539,8 +545,9 @@ class SystemManager(BaseManager):
         """Updates the system status entry."""
         self._system_state.status = Entry(
             message=message,
+            category="system.config.apply",
             level=level,
-            timestamp=datetime.now(timezone.utc).isoformat()
+            timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         )
 
     def publish_metrics(self) -> None:

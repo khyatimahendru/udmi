@@ -10,10 +10,12 @@ def get_discovered_family_addr(payload: Dict[str, Any], family: str) -> Optional
     """Returns the discovered address for a given family."""
     try:
         if family == payload.get("family"):
-            return str(payload.get("addr"))
+            addr = payload.get("addr")
+            return str(addr) if addr is not None else None
         families = payload.get("families", {})
-        if isinstance(families, dict) and family in families:
-            return str(families[family].get("addr"))
+        if isinstance(families, dict) and family in families and isinstance(families[family], dict):
+            addr = families[family].get("addr")
+            return str(addr) if addr is not None else None
     except Exception:
         pass
     return None
@@ -64,7 +66,7 @@ class DiscoveryHandler(BaseHandler):
             "fqdn": get_discovered_family_addr(payload, "fqdn"),
             "hardware_make": hardware.get("make"),
             "hardware_model": hardware.get("model"),
-            "firmware_version": ancillary.get("firmware"),
+            "firmware_version": ancillary.get("firmware-revision") or ancillary.get("firmware"),
             "serial_no": system.get("serial_no"),
             "status_level": status.get("level"),
             "status_category": status.get("category"),

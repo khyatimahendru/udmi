@@ -213,10 +213,10 @@ class TestAgentConfig(unittest.TestCase):
         normalized["discovery"]["families"]["ether"]["depth"], "entries"
     )
     self.assertEqual(
-        normalized["discovery"]["families"]["nmap"]["depth"], "details"
+        normalized["discovery"]["families"]["nmap"]["depth"], "parts"
     )
     self.assertEqual(
-        normalized["discovery"]["families"]["services_scan"]["depth"], "parts"
+        normalized["discovery"]["families"]["services_scan"]["depth"], "details"
     )
     self.assertEqual(
         normalized["discovery"]["families"]["bacnet"]["depth"], "system"
@@ -227,10 +227,10 @@ class TestAgentConfig(unittest.TestCase):
         normalized["discovery"]["enumerations"]["families"], "entries"
     )
     self.assertEqual(
-        normalized["discovery"]["enumerations"]["devices"], "details"
+        normalized["discovery"]["enumerations"]["devices"], "parts"
     )
     self.assertEqual(
-        normalized["discovery"]["enumerations"]["points"], "parts"
+        normalized["discovery"]["enumerations"]["points"], "details"
     )
 
     # Verifies that Config.from_dict() parses cleanly without ValueError
@@ -239,10 +239,10 @@ class TestAgentConfig(unittest.TestCase):
         parsed.discovery.families["ether"].depth, Depth.entries
     )
     self.assertEqual(
-        parsed.discovery.families["nmap"].depth, Depth.details
+        parsed.discovery.families["nmap"].depth, Depth.parts
     )
     self.assertEqual(
-        parsed.discovery.families["services_scan"].depth, Depth.parts
+        parsed.discovery.families["services_scan"].depth, Depth.details
     )
     self.assertEqual(
         parsed.discovery.families["bacnet"].depth, Depth.system
@@ -269,7 +269,7 @@ class TestAgentConfig(unittest.TestCase):
         normalized["discovery"]["families"]["ether"]["depth"], "entries"
     )
     self.assertEqual(
-        normalized["discovery"]["families"]["nmap"]["depth"], "details"
+        normalized["discovery"]["families"]["nmap"]["depth"], "parts"
     )
     self.assertEqual(
         normalized["discovery"]["families"]["custom"]["depth"], "custom_depth"
@@ -562,8 +562,11 @@ class TestSpotterDiscoveryManager(unittest.TestCase):
 
   def test_handle_config_marks_new_generation_as_pending(self):
     """Verifies new generation in discovery config marks phase as pending."""
+    upcoming = (datetime.now(timezone.utc) + timedelta(minutes=5)).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
     fam_cfg = FamilyDiscoveryConfig(
-        generation="2026-09-14T13:00:00Z",
+        generation=upcoming,
         depth=Depth.system,
     )
     config = Config(discovery=DiscoveryConfig(families={"bacnet": fam_cfg}))
@@ -573,8 +576,100 @@ class TestSpotterDiscoveryManager(unittest.TestCase):
     f_state = self.manager._discovery_state.families.get("bacnet")
     self.assertIsNotNone(f_state)
     self.assertEqual(f_state.phase, DiscoveryPhase.pending)
-    self.assertEqual(f_state.generation, "2026-09-14T13:00:00Z")
+    self.assertEqual(f_state.generation, upcoming)
     self.mock_device.trigger_state_update.assert_called()
+
+  def test_stale_past_generation_rejected_as_stopped(self):
+    """Verifies stale past generation is immediately stopped without scanning."""
+    stale_past = (datetime.now(timezone.utc) - timedelta(hours=2)).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
+    fam_cfg = FamilyDiscoveryConfig(
+        generation=stale_past,
+        depth=Depth.system,
+    )
+    config = Config(discovery=DiscoveryConfig(families={"bacnet": fam_cfg}))
+
+    self.manager.handle_config(config)
+
+    f_state = self.manager._discovery_state.families.get("bacnet")
+    self.assertIsNotNone(f_state)
+    self.assertEqual(f_state.phase, DiscoveryPhase.stopped)
+    self.assertEqual(f_state.generation, stale_past)
+    self.assertFalse(self.manager._should_scan("bacnet", fam_cfg))
+
+  def test_unconfigured_families_removed_from_state(self):
+    """Verifies removed families are cleared from state.discovery.families."""
+    now_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    cfg1 = Config(
+        discovery=DiscoveryConfig(
+            families={
+                "bacnet": FamilyDiscoveryConfig(generation=now_str),
+                "ether": FamilyDiscoveryConfig(generation=now_str),
+            }
+        )
+    )
+    self.manager.handle_config(cfg1)
+    self.assertIn("bacnet", self.manager._discovery_state.families)
+    self.assertIn("ether", self.manager._discovery_state.families)
+
+    cfg2 = Config(
+        discovery=DiscoveryConfig(
+            families={"bacnet": FamilyDiscoveryConfig(generation=now_str)}
+        )
+    )
+    self.manager.handle_config(cfg2)
+    self.assertIn("bacnet", self.manager._discovery_state.families)
+    self.assertNotIn("ether", self.manager._discovery_state.families)
+
+  def test_quantized_generation_propagated_to_provider_events(self):
+    """Verifies periodic scan passes quantized generation to provider events."""
+    anchor = "2025-01-01T13:00:00Z"
+    fam_cfg = FamilyDiscoveryConfig(
+        generation=anchor,
+        scan_interval_sec=600,
+        depth=Depth.entries,
+    )
+    config = Config(discovery=DiscoveryConfig(families={"bacnet": fam_cfg}))
+    self.manager.handle_config(config)
+
+    f_state = self.manager._discovery_state.families["bacnet"]
+    quantized_gen = f_state.generation
+    self.assertNotEqual(quantized_gen, anchor)
+
+    received_generations = []
+
+    def fake_start_scan(scan_cfg, publish_cb):
+      received_generations.append(scan_cfg.generation)
+      publish_cb(
+          "self",
+          DiscoveryEvents(
+              generation=scan_cfg.generation, family="bacnet", event_no=0
+          ),
+      )
+
+    mock_provider = MagicMock()
+    mock_provider.start_scan.side_effect = fake_start_scan
+    self.manager._run_scan("bacnet", mock_provider)
+
+    self.assertEqual(received_generations, [quantized_gen])
+
+  def test_datamodel_to_json_strips_none_fields(self):
+    """Verifies DataModel.to_json() omits None fields cleanly."""
+    evt = DiscoveryEvents(
+        generation="2026-10-10T12:00:00Z",
+        family="bacnet",
+        event_no=0,
+    )
+    raw = json.loads(evt.to_json())
+    self.assertEqual(
+        raw,
+        {
+            "generation": "2026-10-10T12:00:00Z",
+            "family": "bacnet",
+            "event_no": 0,
+        },
+    )
 
   def test_update_family_state_transitions_active_and_stopped(self):
     """Verifies that _update_family_state transitions active/stopped phases."""
@@ -703,12 +798,13 @@ class TestSpotterDiscoveryManager(unittest.TestCase):
     self.assertEqual(f_state.phase, DiscoveryPhase.stopped)
     self.assertIsNotNone(f_state.status)
     self.assertEqual(f_state.status.level, 500)
-    self.assertEqual(f_state.status.category, "discovery.error")
+    self.assertEqual(f_state.status.category, "discovery.family.scan")
     self.assertIn("BACnet socket failure", f_state.status.message)
 
 
 if __name__ == "__main__":
   unittest.main()
+
 
 
 

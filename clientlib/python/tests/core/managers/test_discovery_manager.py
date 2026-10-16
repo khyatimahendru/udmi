@@ -65,13 +65,18 @@ def mock_provider():
 def test_handle_config_triggers_enumeration(manager, mock_dispatcher,
     mock_localnet):
     """
-    Verifies that if config.discovery.enumerations is present, the manager
-    publishes a discovery event with capabilities.
+    Verifies that if config.discovery.enumerations and generation are present,
+    the manager publishes a discovery event with capabilities.
     """
+    from udmi.schema import Depth
+
     mock_localnet.get_registered_families.return_value = ["bacnet", "ethernet"]
 
     config = Config(
-        discovery=DiscoveryConfig(enumerations=Enumerations())
+        discovery=DiscoveryConfig(
+            generation="2026-04-10T12:00:00Z",
+            enumerations=Enumerations(families=Depth.entries),
+        )
     )
 
     manager.handle_config(config)
@@ -199,3 +204,45 @@ def test_stop_cancels_providers(manager, mock_provider):
 
     mock_provider.stop_scan.assert_called_once()
     assert len(manager._active_providers) == 0
+
+
+def test_self_enumeration_generation_and_depths(
+    manager, mock_dispatcher, mock_localnet
+):
+    """
+    Verifies that config.discovery.generation updates state.discovery.generation,
+    clears it when None, and respects Enumerations depth thresholds.
+    """
+    from udmi.schema import Depth
+
+    mock_localnet.get_registered_families.return_value = ["bacnet", "ipv4"]
+    gen_ts = "2026-04-10T12:00:00Z"
+    config = Config(
+        discovery=DiscoveryConfig(
+            generation=gen_ts,
+            enumerations=Enumerations(
+                families=Depth.entries,
+                features=Depth.parts,
+            ),
+        )
+    )
+    manager.handle_config(config)
+
+    state = State()
+    manager.update_state(state)
+    assert state.discovery.generation == gen_ts
+
+    mock_dispatcher.publish_event.assert_called_once()
+    event = mock_dispatcher.publish_event.call_args[0][1]
+    assert event.generation == gen_ts
+    assert "bacnet" in event.families
+    assert event.features is not None
+    assert "discovery.scan" in event.features
+    assert "enumeration" in event.features
+
+    # Clearing generation in config clears state.discovery.generation
+    manager.handle_config(Config(discovery=DiscoveryConfig(generation=None)))
+    state_cleared = State()
+    manager.update_state(state_cleared)
+    assert state_cleared.discovery.generation is None
+

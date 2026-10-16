@@ -44,6 +44,23 @@ class PassiveScanRecord:
   addr: str
   mac: Optional[str] = None
   hostname: Optional[str] = None
+  bacnet_addr: Optional[str] = None
+
+
+def extract_bacnet_device_id(raw_bytes: bytes) -> Optional[str]:
+  """Extracts BACnet Device Instance ID from a raw BACnet/IP I-Am packet."""
+  if not raw_bytes or not raw_bytes.startswith(BACNET_BVLC_MARKER):
+    return None
+  idx = raw_bytes.find(BACNET_APDU_I_AM_START)
+  if idx == -1 or len(raw_bytes) < idx + 7:
+    return None
+  obj_bytes = raw_bytes[idx + 3 : idx + 7]
+  obj_val = int.from_bytes(obj_bytes, byteorder="big")
+  obj_type = (obj_val >> 22) & 0x3FF
+  if obj_type != 8:  # BACnet Device Object Type == 8
+    return None
+  instance_id = obj_val & 0x3FFFFF
+  return str(instance_id)
 
 
 class PassiveFamilyProvider(FamilyProvider):
@@ -229,10 +246,17 @@ class PassiveFamilyProvider(FamilyProvider):
             mac = None
             if scapy.layers.inet.Ether in packet:
               mac = packet[scapy.layers.inet.Ether].src
+            bacnet_id = None
+            if scapy.layers.inet.UDP in packet:
+              udp_layer = packet[scapy.layers.inet.UDP]
+              raw_load = bytes(udp_layer.payload)
+              bacnet_id = extract_bacnet_device_id(raw_load)
             with self._records_lock:
               self._addresses_seen.add(src_ip)
               self._device_records.add(
-                  PassiveScanRecord(addr=src_ip, mac=mac)
+                  PassiveScanRecord(
+                      addr=src_ip, mac=mac, bacnet_addr=bacnet_id
+                  )
               )
       except queue.Empty:
         continue
@@ -250,15 +274,18 @@ class PassiveFamilyProvider(FamilyProvider):
         with self._event_lock:
           self._event_count += 1
           event_no = self._event_count
+        families_map: Dict[str, FamilyDiscovery] = {}
+        if record.mac:
+          families_map["ether"] = FamilyDiscovery(addr=record.mac)
+        if record.hostname:
+          families_map["hostname"] = FamilyDiscovery(addr=record.hostname)
+        if record.bacnet_addr:
+          families_map["bacnet"] = FamilyDiscovery(addr=record.bacnet_addr)
         event = DiscoveryEvents(
             generation=generation,
             family="ipv4",
             addr=record.addr,
-            families=(
-                {"ether": FamilyDiscovery(addr=record.mac)}
-                if record.mac
-                else None
-            ),
+            families=families_map if families_map else None,
             event_no=event_no,
         )
         publish_func(record.addr, event)
@@ -270,3 +297,4 @@ class PassiveFamilyProvider(FamilyProvider):
   def enumerate_refs(self, addr: str) -> Dict[str, RefDiscovery]:
     del addr  # Unused
     return {}
+

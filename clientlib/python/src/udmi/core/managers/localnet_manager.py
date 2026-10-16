@@ -169,7 +169,13 @@ class LocalnetManager(BaseManager):
             A FamilyLocalnetState object containing the status (Active, Error, Warning).
         """
         family_state = FamilyLocalnetState()
-        family_state.addr = getattr(family_config, 'addr', None)
+        existing_addr = (
+            self._localnet_state.families[family].addr
+            if self._localnet_state.families
+            and family in self._localnet_state.families
+            else None
+        )
+        family_state.addr = getattr(family_config, 'addr', None) or existing_addr
 
         # Provider Verification
         provider = self.get_provider(family)
@@ -178,8 +184,9 @@ class LocalnetManager(BaseManager):
                          family)
             family_state.status = Entry(
                 message=f"No provider registered for family '{family}'",
+                category="localnet.network",
                 level=500,  # 500 = Failure/Error
-                timestamp=datetime.now(timezone.utc).isoformat()
+                timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
             )
             return family_state
 
@@ -198,8 +205,9 @@ class LocalnetManager(BaseManager):
                                        family, phys_addr)
                         family_state.status = Entry(
                             message=f"Invalid address format detected: {phys_addr}",
+                            category="localnet.network",
                             level=300,  # 300 = Warning
-                            timestamp=datetime.now(timezone.utc).isoformat()
+                            timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
                         )
 
                 self._routing_table[family][device_id] = phys_addr
@@ -208,8 +216,9 @@ class LocalnetManager(BaseManager):
         if not family_state.status:
             family_state.status = Entry(
                 message="Active",
+                category="localnet.network",
                 level=200,  # 200 = Info/OK
-                timestamp=datetime.now(timezone.utc).isoformat()
+                timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
             )
 
         return family_state

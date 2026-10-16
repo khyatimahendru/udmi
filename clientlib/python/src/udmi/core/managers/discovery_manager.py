@@ -80,16 +80,35 @@ class DiscoveryManager(BaseManager):
         Handles 'discovery' config block.
         Updates internal config and triggers enumeration if requested.
         """
-        if not config.discovery:
+        if not config or not config.discovery:
+            self._config = None
+            if self._discovery_state.generation is not None:
+                self._discovery_state.generation = None
+                self.trigger_state_update()
             return
 
         self._config = config.discovery
 
-        if self._config.enumerations:
-            self._enumerate_capabilities()
+        if self._config.generation is None:
+            if self._discovery_state.generation is not None:
+                self._discovery_state.generation = None
+                self.trigger_state_update()
+        elif self._config.generation != self._discovery_state.generation:
+            self._discovery_state.generation = self._config.generation
+            if self._config.enumerations is not None:
+                self._enumerate_capabilities()
+            self.trigger_state_update()
 
         if self._scan_wake_event:
             self._scan_wake_event.set()
+
+    @staticmethod
+    def _should_enumerate(depth: Optional[object]) -> bool:
+        """Returns True if the given enumeration depth is entries or deeper."""
+        if depth is None:
+            return False
+        depth_str = getattr(depth, "value", str(depth)).lower()
+        return depth_str in ("entries", "parts", "system", "refs", "details")
 
     def _enumerate_capabilities(self) -> None:
         """
@@ -97,16 +116,71 @@ class DiscoveryManager(BaseManager):
         """
         # pylint: disable=import-outside-toplevel
         from udmi.core.managers.localnet_manager import LocalnetManager
+        from udmi.core.managers.pointset_manager import PointsetManager
+        from udmi.schema import FeatureDiscovery, PointPointsetModel
+        from udmi.schema.common import Stage
+
         localnet: Optional[LocalnetManager] = None
+        pointset: Optional[PointsetManager] = None
         if self._device:
             localnet = self._device.get_manager(LocalnetManager)
+            pointset = self._device.get_manager(PointsetManager)
 
         families = localnet.get_registered_families() if localnet else []
+        enums = self._config.enumerations if self._config else None
+        gen = self._config.generation if self._config else None
+
+        enum_families = None
+        if enums and self._should_enumerate(enums.families):
+            enum_families = {f: FamilyDiscovery() for f in families}
+
+        enum_features = None
+        if enums and self._should_enumerate(enums.features):
+            if (
+                self.model
+                and hasattr(self.model, "features")
+                and self.model.features
+            ):
+                enum_features = {
+                    k: FeatureDiscovery(stage=v.stage)
+                    for k, v in self.model.features.items()
+                }
+            else:
+                enum_features = {
+                    "enumeration": FeatureDiscovery(stage=Stage.stable),
+                    "enumeration.families": FeatureDiscovery(
+                        stage=Stage.stable
+                    ),
+                    "enumeration.features": FeatureDiscovery(
+                        stage=Stage.stable
+                    ),
+                    "discovery.scan": FeatureDiscovery(stage=Stage.stable),
+                }
+
+        enum_points = None
+        if enums and self._should_enumerate(enums.points):
+            if (
+                self.model
+                and hasattr(self.model, "pointset")
+                and self.model.pointset
+                and self.model.pointset.points
+            ):
+                enum_points = dict(self.model.pointset.points)
+            elif pointset and pointset.all_points:
+                enum_points = {
+                    name: PointPointsetModel()
+                    for name in pointset.all_points
+                }
+            else:
+                enum_points = {}
 
         event = DiscoveryEvents(
-            timestamp=datetime.now(timezone.utc).isoformat(),
+            timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             version=UDMI_VERSION,
-            families={f: FamilyDiscovery() for f in families}
+            generation=gen,
+            families=enum_families,
+            features=enum_features,
+            points=enum_points,
         )
         LOGGER.info("Publishing discovery enumeration: %s", families)
         self.publish_event(event, "discovery")

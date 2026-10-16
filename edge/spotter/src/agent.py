@@ -113,8 +113,9 @@ def load_config(config_file: str) -> Dict[str, Any]:
 
 LEGACY_DEPTH_MAP: Dict[str, str] = {
     "ping": "entries",
-    "ports": "details",
-    "services": "parts",
+    "host": "entries",
+    "ports": "parts",
+    "services": "details",
 }
 
 
@@ -430,10 +431,23 @@ def main():
   hw_probed = get_host_hardware_info()
   make = hw_config.get("make") or hw_probed.get("make") or "UDMI"
   model = hw_config.get("model") or hw_probed.get("model") or "Spotter"
+  sw_version = (
+      config.get("system", {}).get("software", {}).get("version") or "1.0.0"
+  )
+  serial_no = (
+      config.get("system", {}).get("serial_no")
+      or config.get("serial_no")
+      or f"spotter-{device_id}"
+  )
 
   initial_system_state = SystemState(
+      serial_no=str(serial_no),
       hardware=StateSystemHardware(make=make, model=model),
-      software={"os": os_name, "os_version": os_version},
+      software={
+          "os": os_name,
+          "os_version": os_version,
+          "version": str(sw_version),
+      },
   )
 
   system_manager = SpotterSystemManager(
@@ -462,9 +476,14 @@ def main():
     bacnet_cfg = config.get("bacnet", {})
     bacnet_ip = bacnet_cfg.get("ip")
     bacnet_port = bacnet_cfg.get("port")
+    bacnet_network = bacnet_cfg.get("network")
     localnet_manager.register_provider(
         "bacnet",
-        BacnetFamilyProvider(bacnet_ip=bacnet_ip, bacnet_port=bacnet_port),
+        BacnetFamilyProvider(
+            bacnet_ip=bacnet_ip,
+            bacnet_port=bacnet_port,
+            local_network=str(bacnet_network) if bacnet_network else None,
+        ),
     )
 
   if ether_enabled:

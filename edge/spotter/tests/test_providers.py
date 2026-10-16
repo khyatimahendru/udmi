@@ -76,11 +76,150 @@ class TestBacnetFamilyProvider(unittest.TestCase):
     provider = BacnetFamilyProvider()
     refs = provider.enumerate_refs("192.168.1.50 1234")
 
-    self.assertIn("AV:1", refs)
-    self.assertEqual(refs["AV:1"].name, "zone_temp")
-    self.assertEqual(refs["AV:1"].units, "degC")
-    self.assertIsNotNone(refs["AV:1"].ancillary)
-    self.assertEqual(refs["AV:1"].ancillary["present_value"], "22.5")
+    self.assertIn("AV/1", refs)
+    self.assertEqual(refs["AV/1"].name, "zone_temp")
+    self.assertEqual(refs["AV/1"].units, "degC")
+    self.assertEqual(refs["AV/1"].type, "analog-value")
+    self.assertTrue(refs["AV/1"].writable)
+    self.assertIsNotNone(refs["AV/1"].ancillary)
+    self.assertEqual(refs["AV/1"].ancillary["present_value"], "22.5")
+    self.assertEqual(refs["AV/1"].ancillary["present-value"], "22.5")
+
+  @patch("edge.spotter.src.providers.bacnet.BAC0")
+  def test_routed_mstp_address_parsing_and_details_depth(self, mock_bac0):
+    """Verifies routed MS/TP (<DNET>:<DMAC>) sets network & mstp family without corrupting ipv4."""
+    mock_client = MagicMock()
+    mock_bac0.lite.return_value = mock_client
+    mock_client.readMultiple.return_value = (
+        "RHVAV-1403",
+        "JCI",
+        "M4-CVM03050-0",
+        "9.0.1.68",
+        "SN-1403",
+        "VAV Box",
+        "Floor 14",
+        "10.5",
+    )
+    mock_dev = MagicMock()
+    mock_point = MagicMock()
+    mock_point.properties.name = "ZN-T"
+    mock_point.properties.description = "Zone Temp"
+    mock_point.properties.type = "analogInput"
+    mock_point.properties.address = "2"
+    mock_point.properties.units_state = "degC"
+    mock_point.lastValue = 21.0
+    mock_dev.points = [mock_point]
+    mock_bac0.device.return_value = mock_dev
+
+    provider = BacnetFamilyProvider()
+    config = FamilyDiscoveryConfig(
+        generation="2026-09-01T12:00:00Z", depth="details"
+    )
+    event = provider.discover_device("6100:10", 210010, config)
+
+    self.assertEqual(event.addr, "210010")
+    self.assertEqual(event.network, "6100")
+    self.assertNotIn("ipv4", event.families)
+    self.assertNotIn("bacnet", event.families)
+    self.assertIn("mstp", event.families)
+    self.assertEqual(event.families["mstp"].addr, "10")
+    self.assertIsNotNone(event.refs)
+    self.assertIn("AI/2", event.refs)
+    self.assertEqual(event.refs["AI/2"].type, "analog-input")
+    self.assertFalse(event.refs["AI/2"].writable)
+
+  @patch("edge.spotter.src.providers.bacnet.BAC0")
+  def test_read_multiple_fallback_to_single_reads(self, mock_bac0):
+    """Verifies fallback to per-property read() when readMultiple raises."""
+    mock_client = MagicMock()
+    mock_bac0.lite.return_value = mock_client
+    mock_client.readMultiple.side_effect = IndexError("list index out of range")
+    mock_client.read.side_effect = [
+        "Dev-8114",
+        "Trane",
+        "FW-1.0",
+        "Tracer",
+        RuntimeError("Unsupported property serialNumber"),
+        "Controller",
+        "Mech Room",
+        "SW-2.0",
+    ]
+
+    provider = BacnetFamilyProvider()
+    config = FamilyDiscoveryConfig(
+        generation="2026-09-01T12:00:00Z", depth="system"
+    )
+    event = provider.discover_device("192.168.1.80:47808", 8114, config)
+
+    self.assertIsNone(event.status)
+    self.assertIsNotNone(event.system)
+    self.assertEqual(event.system.name, "Dev-8114")
+    self.assertEqual(event.system.hardware.make, "Trane")
+    self.assertEqual(event.system.hardware.model, "Tracer")
+    self.assertIsNone(event.system.serial_no)
+    self.assertEqual(event.system.ancillary["firmware-revision"], "FW-1.0")
+
+  @patch("edge.spotter.src.providers.bacnet.BAC0")
+  def test_bacnet_buckets_and_entries_depths(self, mock_bac0):
+    """Verifies buckets and entries cumulative depth semantics."""
+    mock_client = MagicMock()
+    mock_bac0.lite.return_value = mock_client
+    mock_client.discoveredDevices = {
+        ("6100:10", 210010): "Device",
+        ("6100:11", 210011): "Device",
+        ("11300:18", 211318): "Device",
+    }
+
+    provider = BacnetFamilyProvider(unchanged_threshold_sec=1)
+    buckets_cfg = FamilyDiscoveryConfig(
+        generation="2026-09-01T12:00:00Z", depth="buckets", scan_duration_sec=1
+    )
+    buckets_events = []
+    provider.start_scan(buckets_cfg, lambda d, e: buckets_events.append(e))
+    # Start (0), 2 unique networks (6100, 11300), Stop (-3)
+    self.assertEqual(len(buckets_events), 4)
+    self.assertEqual(buckets_events[0].event_no, 0)
+    self.assertIsNone(buckets_events[1].addr)
+    self.assertEqual(buckets_events[1].network, "11300")
+    self.assertEqual(buckets_events[1].families["ipv4"].port, 47808)
+    self.assertEqual(buckets_events[2].network, "6100")
+    self.assertEqual(buckets_events[3].event_no, -3)
+
+    # Entries depth: no system or refs
+    entries_cfg = FamilyDiscoveryConfig(
+        generation="2026-09-01T12:00:00Z", depth="entries"
+    )
+    evt = provider.discover_device("6100:10", 210010, entries_cfg)
+    self.assertEqual(evt.addr, "210010")
+    self.assertEqual(evt.network, "6100")
+    self.assertIsNone(evt.system)
+    self.assertIsNone(evt.refs)
+
+  @patch("edge.spotter.src.providers.bacnet.BAC0")
+  def test_bacnet_targeted_instance_range_and_network_filter(self, mock_bac0):
+    """Verifies addrs instance ranges and networks filtering."""
+    mock_client = MagicMock()
+    mock_bac0.lite.return_value = mock_client
+    mock_client.discoveredDevices = {
+        ("6100:10", 1005): "Device",
+        ("6100:11", 2005): "Device",
+        ("11300:18", 1010): "Device",
+    }
+
+    provider = BacnetFamilyProvider(unchanged_threshold_sec=1)
+    cfg = FamilyDiscoveryConfig(
+        generation="2026-09-01T12:00:00Z",
+        depth="entries",
+        addrs=["1000-1999"],
+        networks=["6100"],
+    )
+    published = []
+    provider.start_scan(cfg, lambda d, e: published.append(e))
+    # Only device 1005 on network 6100 matches both 1000-1999 and network 6100
+    self.assertEqual(len(published), 3)
+    self.assertEqual(published[1].addr, "1005")
+    self.assertEqual(published[1].network, "6100")
+    self.assertEqual(published[2].event_no, -2)
 
   @patch("edge.spotter.src.providers.bacnet.BAC0")
   def test_bacnet_scan_unchanged_threshold(self, mock_bac0):
@@ -286,9 +425,37 @@ class TestEtherFamilyProvider(unittest.TestCase):
       provider.start_scan(config, MagicMock())
     self.assertIn("nmap binary not found", str(ctx.exception))
 
+  def test_expand_ip_targets_cidr_and_ranges(self):
+    """Verifies CIDR subnet and IP range expansion in EtherFamilyProvider."""
+    from edge.spotter.src.providers.ether import expand_ip_targets
+
+    targets = expand_ip_targets(
+        addrs=["192.168.1.10-12"], networks=["10.0.0.0/30"]
+    )
+    self.assertEqual(
+        targets,
+        [
+            "192.168.1.10",
+            "192.168.1.11",
+            "192.168.1.12",
+            "10.0.0.1",
+            "10.0.0.2",
+        ],
+    )
+
 
 class TestPassiveFamilyProvider(unittest.TestCase):
   """Unit tests for PassiveFamilyProvider."""
+
+  def test_extract_bacnet_device_id_from_iam(self):
+    """Verifies passive BACnet/IP I-Am packet Device Instance ID extraction."""
+    from edge.spotter.src.providers.passive import extract_bacnet_device_id
+
+    # BVLC (0x81 0x0b 0x00 0x0c) + NPDU (0x01 0x20 ...) + APDU I-Am (0x10 0x00 0xc4)
+    # Device Object (type 8 -> 8 << 22 = 0x02000000) + Instance 1234 (0x0004d2)
+    raw_iam = b"\x81\x0b\x00\x0c\x01\x20\xff\xff\x00\xff\x10\x00\xc4\x02\x00\x04\xd2"
+    self.assertEqual(extract_bacnet_device_id(raw_iam), "1234")
+    self.assertIsNone(extract_bacnet_device_id(b"not-a-bacnet-packet"))
 
   def test_passive_record_deduplication(self):
     """Verifies that PassiveScanRecord instances deduplicate in sets."""

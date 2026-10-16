@@ -6,6 +6,7 @@ events/streams.
 """
 
 import base64
+import copy
 from datetime import datetime, timedelta, timezone
 import logging
 import time
@@ -32,6 +33,8 @@ except ImportError:
   from edge.spotter.src.pcap import capture_packets
 
 LOGGER = logging.getLogger("spotter_agent")
+
+PAST_GENERATION_THRESHOLD_SEC = 15.0
 
 
 def _parse_generation(gen_str: Optional[str]) -> Optional[datetime]:
@@ -69,23 +72,57 @@ class SpotterDiscoveryManager(DiscoveryManager):
     super().__init__()
     self.max_mem_pct = max_mem_pct
     self._active_event_counts: Dict[str, int] = {}
+    self._has_received_config: bool = False
+
+  def _stop_family_provider(self, family: str) -> None:
+    """Stops active scan on the provider for a specific family if present."""
+    # pylint: disable=import-outside-toplevel
+    from udmi.core.managers.localnet_manager import LocalnetManager
+
+    if self._device:
+      localnet = self._device.get_manager(LocalnetManager)
+      if localnet:
+        provider = localnet.get_provider(family)
+        if provider:
+          try:
+            provider.stop_scan()
+          except Exception:  # pylint: disable=broad-exception-caught
+            pass
 
   def handle_config(self, config: Config) -> None:
     """Handles discovery config and marks upcoming generations as pending."""
+    self._has_received_config = True
     super().handle_config(config)
     if not self._config or not self._config.families:
+      for provider in list(self._active_providers):
+        try:
+          provider.stop_scan()
+        except Exception:  # pylint: disable=broad-exception-caught
+          pass
+      self._active_providers.clear()
+      if self._discovery_state.families:
+        self._discovery_state.families.clear()
+        self.trigger_state_update(immediate=True)
       return
 
     now_dt = datetime.now(timezone.utc)
     state_updated = False
+
+    # Remove family states for families removed from config or without generation
+    for existing_fam in list(self._discovery_state.families.keys()):
+      fam_cfg = self._config.families.get(existing_fam)
+      if not fam_cfg or not fam_cfg.generation:
+        self._stop_family_provider(existing_fam)
+        del self._discovery_state.families[existing_fam]
+        state_updated = True
+
     for family, fam_config in self._config.families.items():
+      if not fam_config or not fam_config.generation:
+        self._stop_family_provider(family)
+        continue
       f_state = self._discovery_state.families.get(family)
       state_gen = f_state.generation if f_state else None
-      if (
-          fam_config
-          and fam_config.generation
-          and fam_config.generation != state_gen
-      ):
+      if fam_config.generation != state_gen:
         if not f_state:
           f_state = FamilyDiscoveryState()
           self._discovery_state.families[family] = f_state
@@ -98,23 +135,44 @@ class SpotterDiscoveryManager(DiscoveryManager):
           if gen_dt and gen_dt > now_dt:
             f_state.phase = DiscoveryPhase.pending
             f_state.generation = fam_config.generation
+            f_state.active_count = None
             state_updated = True
           elif interval_sec and interval_sec > 0 and gen_dt:
             elapsed = (now_dt - gen_dt).total_seconds()
             cycles = int(elapsed // interval_sec)
             target_dt = gen_dt + timedelta(seconds=interval_sec * cycles)
-            if (now_dt - target_dt).total_seconds() > 10.0:
+            if (
+                now_dt - target_dt
+            ).total_seconds() > PAST_GENERATION_THRESHOLD_SEC:
               target_dt += timedelta(seconds=interval_sec)
             f_state.generation = _format_generation(target_dt)
             f_state.phase = DiscoveryPhase.pending
+            f_state.active_count = None
+            state_updated = True
+          elif (
+              gen_dt
+              and (now_dt - gen_dt).total_seconds()
+              > PAST_GENERATION_THRESHOLD_SEC
+          ):
+            LOGGER.warning(
+                "Skipping past discovery generation %s for family '%s'",
+                fam_config.generation,
+                family,
+            )
+            f_state.generation = fam_config.generation
+            f_state.phase = DiscoveryPhase.stopped
+            f_state.active_count = None
             state_updated = True
           else:
             f_state.phase = DiscoveryPhase.pending
             f_state.generation = fam_config.generation
+            f_state.active_count = None
             state_updated = True
 
     if state_updated:
-      self.trigger_state_update()
+      self.trigger_state_update(immediate=True)
+    if self._scan_wake_event:
+      self._scan_wake_event.set()
 
   def _get_check_interval(self) -> float:
     """Calculates check interval from pending generations and intervals."""
@@ -145,6 +203,16 @@ class SpotterDiscoveryManager(DiscoveryManager):
 
   def _update_family_state(self, family: str, active: bool) -> None:
     """Updates family active flag and sets UDMI discovery phase."""
+    if not active and self._has_received_config:
+      fam_cfg = (
+          self._config.families.get(family)
+          if (self._config and self._config.families)
+          else None
+      )
+      if not fam_cfg or not fam_cfg.generation:
+        self._discovery_state.families.pop(family, None)
+        return
+
     if family not in self._discovery_state.families:
       self._discovery_state.families[family] = FamilyDiscoveryState()
 
@@ -194,17 +262,19 @@ class SpotterDiscoveryManager(DiscoveryManager):
         "Discovery event received for device: %s", event.addr or "unknown"
     )
     if not event.timestamp:
-      event.timestamp = datetime.now(timezone.utc).isoformat()
+      event.timestamp = _format_generation(datetime.now(timezone.utc))
     if not event.version:
       event.version = UDMI_VERSION
 
     # Track active count per family (ignoring boundary markers: event_no <= 0)
     fam = event.family
     if fam:
+      f_state = self._discovery_state.families.get(fam)
+      if f_state and f_state.generation and not event.generation:
+        event.generation = f_state.generation
       if event.event_no is not None:
         if event.event_no > 0:
           self._active_event_counts[fam] = event.event_no
-          f_state = self._discovery_state.families.get(fam)
           if f_state:
             f_state.active_count = self._active_event_counts[fam]
             self.trigger_state_update()
@@ -212,7 +282,6 @@ class SpotterDiscoveryManager(DiscoveryManager):
         self._active_event_counts[fam] = (
             self._active_event_counts.get(fam, 0) + 1
         )
-        f_state = self._discovery_state.families.get(fam)
         if f_state:
           f_state.active_count = self._active_event_counts[fam]
           self.trigger_state_update()
@@ -254,7 +323,9 @@ class SpotterDiscoveryManager(DiscoveryManager):
           elapsed = (now_dt - gen_dt).total_seconds()
           cycles = int(elapsed // interval_sec)
           target_dt = gen_dt + timedelta(seconds=interval_sec * cycles)
-          if (now_dt - target_dt).total_seconds() > 10.0:
+          if (
+              now_dt - target_dt
+          ).total_seconds() > PAST_GENERATION_THRESHOLD_SEC:
             target_dt += timedelta(seconds=interval_sec)
           if f_state:
             f_state.generation = _format_generation(target_dt)
@@ -281,6 +352,15 @@ class SpotterDiscoveryManager(DiscoveryManager):
         f_state.phase = DiscoveryPhase.pending
         f_state.generation = gen_str
       return False
+    if (
+        gen_dt
+        and (now_dt - gen_dt).total_seconds() > PAST_GENERATION_THRESHOLD_SEC
+    ):
+      if f_state:
+        f_state.phase = DiscoveryPhase.stopped
+        f_state.generation = gen_str
+        f_state.active_count = None
+      return False
     return True
 
   def _run_scan(self, family: str, provider: Any) -> None:
@@ -304,17 +384,18 @@ class SpotterDiscoveryManager(DiscoveryManager):
       f_state.active = False
       f_state.phase = DiscoveryPhase.stopped
       f_state.status = Entry(
-          category="discovery.family",
+          category="discovery.family.scan",
           level=400,
           message=(
               f"Scan throttled by safety circuit breaker (memory usage exceeds"
               f" {self.max_mem_pct}%)"
           ),
+          timestamp=_format_generation(datetime.now(timezone.utc)),
       )
       if provider in self._active_providers:
         self._active_providers.remove(provider)
       self._update_family_state(family, False)
-      self.trigger_state_update()
+      self.trigger_state_update(immediate=True)
       return
 
     fam_config = None
@@ -329,7 +410,7 @@ class SpotterDiscoveryManager(DiscoveryManager):
         if provider in self._active_providers:
           self._active_providers.remove(provider)
         self._update_family_state(family, False)
-        self.trigger_state_update()
+        self.trigger_state_update(immediate=True)
       return
 
     # Standard Protocol Scan
@@ -338,30 +419,40 @@ class SpotterDiscoveryManager(DiscoveryManager):
       f_state = FamilyDiscoveryState()
       self._discovery_state.families[family] = f_state
 
+    if not f_state.generation and fam_config and fam_config.generation:
+      f_state.generation = fam_config.generation
+
+    scan_config = copy.copy(fam_config) if fam_config else None
+    if scan_config and f_state.generation:
+      scan_config.generation = f_state.generation
+
     f_state.active = True
     f_state.phase = DiscoveryPhase.active
     f_state.active_count = 0
     self._active_event_counts[family] = 0
-    self.trigger_state_update()
+    self.trigger_state_update(immediate=True)
 
     LOGGER.info("Scanning family '%s'...", family)
     try:
-      provider.start_scan(fam_config, self._handle_scan_result)
+      provider.start_scan(scan_config, self._handle_scan_result)
       LOGGER.info("Scan finished for '%s'.", family)
       f_state.status = None
     except Exception as e:  # pylint: disable=broad-exception-caught
       LOGGER.error("Scan failed for '%s': %s", family, e, exc_info=True)
       err_msg = str(e).strip() or type(e).__name__
       f_state.status = Entry(
-          category="discovery.error",
+          category="discovery.family.scan",
           level=500,
           message=err_msg,
+          timestamp=_format_generation(datetime.now(timezone.utc)),
       )
     finally:
       if provider in self._active_providers:
         self._active_providers.remove(provider)
       self._update_family_state(family, False)
-      self.trigger_state_update()
+      self.trigger_state_update(immediate=True)
+      if self._scan_wake_event:
+        self._scan_wake_event.set()
 
   def _run_trace_capture(self, family: str, fam_config: Any) -> None:
     """Executes PCAP capture and streams chunks over events/streams."""
@@ -378,9 +469,10 @@ class SpotterDiscoveryManager(DiscoveryManager):
       f_state.active = False
       f_state.phase = DiscoveryPhase.stopped
       f_state.status = Entry(
-          category="discovery.family",
+          category="discovery.family.scan",
           level=400,
           message="Trace capture throttled by safety circuit breaker",
+          timestamp=_format_generation(datetime.now(timezone.utc)),
       )
       return
 
@@ -395,11 +487,12 @@ class SpotterDiscoveryManager(DiscoveryManager):
     f_state.active = True
     f_state.phase = DiscoveryPhase.active
     f_state.status = Entry(
-        category="discovery.family",
+        category="discovery.family.scan",
         level=200,
         message=f"Starting trace capture for family '{family}'...",
+        timestamp=_format_generation(datetime.now(timezone.utc)),
     )
-    self.trigger_state_update()
+    self.trigger_state_update(immediate=True)
 
     try:
       trace_cfg = getattr(fam_config, "trace", None)
@@ -500,7 +593,7 @@ class SpotterDiscoveryManager(DiscoveryManager):
         b64_data = base64.b64encode(chunk_data).decode()
 
         chunk_event = StreamsEvents(
-            timestamp=datetime.now(timezone.utc).isoformat(),
+            timestamp=_format_generation(datetime.now(timezone.utc)),
             version=UDMI_VERSION,
             session_id=session_id,
             event_no=idx,
@@ -520,11 +613,12 @@ class SpotterDiscoveryManager(DiscoveryManager):
       f_state.phase = DiscoveryPhase.stopped
       f_state.active_count = total_chunks
       f_state.status = Entry(
-          category="discovery.family",
+          category="discovery.family.scan",
           level=200,
           message=(
               f"Trace capture complete. {total_chunks} stream chunks emitted."
           ),
+          timestamp=_format_generation(datetime.now(timezone.utc)),
       )
 
     except Exception as e:  # pylint: disable=broad-exception-caught
@@ -533,11 +627,12 @@ class SpotterDiscoveryManager(DiscoveryManager):
       )
       f_state.phase = DiscoveryPhase.stopped
       f_state.status = Entry(
-          category="discovery.family",
+          category="discovery.family.scan",
           level=500,
           message=str(e),
+          timestamp=_format_generation(datetime.now(timezone.utc)),
       )
     finally:
       f_state.active = False
-      self.trigger_state_update()
+      self.trigger_state_update(immediate=True)
 

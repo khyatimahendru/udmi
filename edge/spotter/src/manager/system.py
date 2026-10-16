@@ -43,6 +43,8 @@ class SpotterSystemManager(SystemManager):
       metrics_rate_sec: int = 300,
   ) -> None:
     super().__init__(system_state=system_state)
+    if not self._system_state.serial_no:
+      self._system_state.serial_no = "spotter-default"
     self.max_mem_pct = max_mem_pct
     self._metrics_rate_sec = metrics_rate_sec
 
@@ -67,7 +69,10 @@ class SpotterSystemManager(SystemManager):
     self._system_state = val
 
   def set_software_info(
-      self, os_name: Optional[str] = None, os_version: Optional[str] = None
+      self,
+      os_name: Optional[str] = None,
+      os_version: Optional[str] = None,
+      version: Optional[str] = None,
   ) -> None:
     """Sets host operating system software details in system state."""
     if self._system_state.software is None:
@@ -76,6 +81,8 @@ class SpotterSystemManager(SystemManager):
       self._system_state.software["os"] = os_name
     if os_version:
       self._system_state.software["os_version"] = os_version
+    if version:
+      self._system_state.software["version"] = version
 
   def set_hardware_info(
       self, make: Optional[str] = None, model: Optional[str] = None
@@ -120,7 +127,7 @@ class SpotterSystemManager(SystemManager):
       )
 
       system_event = SystemEvents(
-          timestamp=datetime.now(timezone.utc).isoformat(),
+          timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
           version=UDMI_VERSION,
           metrics=metrics,
       )
